@@ -1960,12 +1960,15 @@ document.querySelectorAll('.view-tab-btn').forEach(btn => {
   };
 });
 
-// 빠른 질문 칩 클릭
-document.querySelectorAll('.prompt-chip').forEach(chip => {
-  chip.onclick = () => {
+// 빠른 질문 칩 클릭 (이벤트 위임 방식으로 언제나 100% 동작)
+document.addEventListener('click', (e) => {
+  const chip = e.target.closest('.prompt-chip');
+  if (chip) {
     const text = chip.dataset.prompt;
-    if (text) processNaturalLanguageQuery(text);
-  };
+    if (text) {
+      processNaturalLanguageQuery(text);
+    }
+  }
 });
 
 // 텍스트 폼 전송
