@@ -8,3 +8,16 @@ __pycache__/
 .env
 .DS_Store
 Thumbs.db
+
+# 비밀키 / 자격증명 (절대 커밋 금지)
+*.pem
+gemini_key.txt
+
+# 런타임 생성 데이터
+push_subscriptions.json
+data/
+
+# AI 생성 스크래치 출력물
+gemini_output.txt
+gpt_120b_reply.txt
+reply_*.txt

@@ -16,10 +16,11 @@ if sys.stdout.encoding != 'utf-8':
     except Exception:
         pass
 
-PORT = 8000
-TARGET_BASE = "https://miracle-beautifully-onto-ser.trycloudflare.com"
+# Render 등 PaaS 는 실행 포트를 PORT 로 지정해준다. 없으면 로컬 기본값.
+PORT = int(os.environ.get('PORT') or 8000)
+TARGET_BASE = os.environ.get('TARGET_BASE') or "https://miracle-beautifully-onto-ser.trycloudflare.com"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SUBS_FILE = os.path.join(BASE_DIR, 'push_subscriptions.json')
+SUBS_FILE = os.environ.get('SUBS_FILE') or os.path.join(BASE_DIR, 'push_subscriptions.json')
 
 try:
     from py_vapid import Vapid
@@ -33,6 +34,17 @@ except Exception as e:
 VAPID_PRIV_PATH = os.path.join(BASE_DIR, 'vapid_private.pem')
 VAPID_PUB_PATH = os.path.join(BASE_DIR, 'vapid_public.pem')
 VAPID_PUBLIC_KEY_B64 = ""
+
+# 환경변수로 VAPID 개인키를 주면 그것을 쓴다.
+# (Render 는 파일시스템이 재시작마다 초기화되므로, 파일에만 두면 키가 바뀌어
+#  이미 등록된 구독이 전부 무효가 된다. 환경변수로 고정해야 알림이 계속 간다.)
+_env_vapid = os.environ.get('VAPID_PRIVATE_KEY_PEM')
+if HAS_WEBPUSH and _env_vapid:
+    try:
+        with open(VAPID_PRIV_PATH, 'w', encoding='utf-8') as f:
+            f.write(_env_vapid.replace('\\n', '\n'))
+    except Exception as e:
+        print(f"[Warn] VAPID env write failed: {e}")
 
 if HAS_WEBPUSH:
     v = Vapid()
@@ -167,6 +179,18 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         req_path = self.path.split('?')[0]
+        # UptimeRobot 등이 주기적으로 두드려 서비스가 잠들지 않게 하는 용도
+        if req_path == '/api/health':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "ok": True,
+                "webpush": HAS_WEBPUSH,
+                "alarms": len(load_subscriptions())
+            }).encode('utf-8'))
+            return
+
         if req_path == '/api/vapid-public-key':
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')

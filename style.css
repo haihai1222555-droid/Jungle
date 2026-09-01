@@ -2374,6 +2374,11 @@ body.light-theme .unit-error-chip {
   border: 1px solid rgba(239, 68, 68, 0.35);
   margin-top: 10px;
 }
+/* 에러 가이드 헤더만 [아이콘 + 제목] 조합이라, 양끝 정렬 대신 좌측 밀착 정렬 */
+.modal-error-card .modal-section-header {
+  justify-content: flex-start;
+  gap: 8px;
+}
 .modal-error-title {
   color: #ef4444;
   font-size: 13px;

@@ -2,10 +2,19 @@
    Jungle Laundry Dashboard 2.0 - Application Logic
    ========================================================= */
 
-// 환경에 따른 API URL 결정 (로컬 프록시 서버 우선, fallback으로 직접 호출)
-const isLocalServer = window.location.protocol.startsWith('http');
-const API_STATUS = isLocalServer ? '/api/status' : 'https://miracle-beautifully-onto-ser.trycloudflare.com/api/status';
-const API_STATS  = isLocalServer ? '/api/stats?days=7' : 'https://miracle-beautifully-onto-ser.trycloudflare.com/api/stats?days=7';
+// API는 항상 같은 출처의 프록시를 통해 호출한다.
+// (배포: vercel.json 의 rewrite / 로컬: start_server.py 의 프록시)
+// ※ 원본 터널로 브라우저가 직접 호출하면 CORS 로 차단되므로 프록시가 반드시 필요하다.
+//   터널 주소가 바뀌면 vercel.json 만 고치면 된다. 이 파일은 손댈 필요 없다.
+const API_STATUS = '/api/status';
+const API_STATS  = '/api/stats?days=7';
+
+// 🔔 백그라운드 푸시(앱을 꺼도 오는 알림) 백엔드 주소.
+//    비워두면 같은 출처를 쓴다 → 로컬 start_server.py 에서 그대로 동작.
+//    Vercel 배포본에는 푸시 백엔드가 없으므로, Render 주소를 여기에 넣어야
+//    앱을 꺼도 알림이 온다. 예) 'https://jungle-laundry.onrender.com'
+//    비워두면 알림은 '화면을 보고 있는 동안'만 동작한다.
+const PUSH_API_BASE = '';
 const REFRESH_INTERVAL_SEC = 20;
 
 // 워시타워 9대 메타데이터
@@ -307,28 +316,69 @@ function renderUnitAlarmButton(towerId, unitType, deviceName, remainMinutes, run
   return `<button class="btn-unit-alarm" onclick="event.stopPropagation(); toggleLaundryAlarm(${towerId}, '${unitType}', '${deviceName}', ${remainMinutes})" title="세탁/건조 완료 즉시 스마트 알림">${label}</button>`;
 }
 
-// 2. 메인 데이터 로더 (로컬 프록시 -> Cloudflare 원격 터널 -> 내장 스냅샷 3중 안전망)
-async function loadDashboardData() {
-  btnRefresh.classList.add('spinning');
-  try {
-    let statusRes, statsRes;
-    try {
-      [statusRes, statsRes] = await Promise.all([
-        fetch(API_STATUS, { cache: 'no-store' }),
-        fetch(API_STATS, { cache: 'no-store' })
-      ]);
-      if (!statusRes.ok || !statsRes.ok) throw new Error('Primary API unavailable');
-    } catch (primaryErr) {
-      // 2차 백업: Cloudflare 터널 직접 호출 (배포 환경 호환)
-      [statusRes, statsRes] = await Promise.all([
-        fetch('https://miracle-beautifully-onto-ser.trycloudflare.com/api/status', { cache: 'no-store' }),
-        fetch('https://miracle-beautifully-onto-ser.trycloudflare.com/api/stats?days=7', { cache: 'no-store' })
-      ]);
-      if (!statusRes.ok || !statsRes.ok) throw new Error('Secondary API unavailable');
-    }
+// 마지막으로 성공한 실데이터 보관용 (내장 스냅샷보다 항상 최신)
+const LAST_GOOD_KEY = 'jungle_last_good_snapshot';
+const API_TIMEOUT_MS = 8000;
+let isLoadingDashboard = false;
 
-    globalStatusData = await statusRes.json();
-    globalStatsData = await statsRes.json();
+// 200 응답이어도 기대한 모양이 아닐 수 있으므로 최소한으로 검증한다
+function isValidStatusPayload(d) {
+  return !!d && typeof d === 'object' && TOWERS.some(t => d[t.name] && typeof d[t.name] === 'object');
+}
+
+// 응답이 없으면 중단한다. 터널이 죽지 않고 '멈추기만' 해도 UI가 매달리는 것을 막는다.
+function fetchWithTimeout(url, ms = API_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { cache: 'no-store', signal: ctrl.signal })
+    .finally(() => clearTimeout(timer));
+}
+
+// 끊긴 지 오래됐을 때 '2880분 전' 같이 읽기 힘든 표시를 피한다
+function formatDataAge(ms) {
+  const min = Math.max(1, Math.round(ms / 60000));
+  if (min < 60) return `${min}분 전`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}시간 전`;
+  return `${Math.round(hr / 24)}일 전`;
+}
+
+function saveLastGoodSnapshot(status, stats) {
+  try {
+    localStorage.setItem(LAST_GOOD_KEY, JSON.stringify({ savedAt: Date.now(), status, stats }));
+  } catch (e) {}
+}
+
+function loadLastGoodSnapshot() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LAST_GOOD_KEY) || 'null');
+    return isValidStatusPayload(parsed && parsed.status) ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// 2. 메인 데이터 로더 (실시간 API -> 마지막 성공 데이터 -> 내장 스냅샷 3중 안전망)
+async function loadDashboardData() {
+  // 앞선 요청이 아직 진행 중이면 건너뛴다 (느린 응답에 요청이 쌓이는 것 방지)
+  if (isLoadingDashboard) return;
+  isLoadingDashboard = true;
+  btnRefresh.classList.add('spinning');
+
+  try {
+    const [statusRes, statsRes] = await Promise.all([
+      fetchWithTimeout(API_STATUS),
+      fetchWithTimeout(API_STATS)
+    ]);
+    if (!statusRes.ok || !statsRes.ok) throw new Error('API unavailable');
+
+    // 둘 다 파싱에 성공한 뒤 한꺼번에 반영한다 (한쪽만 갱신된 상태가 남지 않도록)
+    const [nextStatus, nextStats] = await Promise.all([statusRes.json(), statsRes.json()]);
+    if (!isValidStatusPayload(nextStatus)) throw new Error('Unexpected status payload');
+
+    globalStatusData = nextStatus;
+    globalStatsData = nextStats;
+    saveLastGoodSnapshot(nextStatus, nextStats);
 
     const now = new Date();
     syncTime.textContent = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
@@ -336,12 +386,23 @@ async function loadDashboardData() {
     statusText.textContent = '실시간 동기화 완료';
 
   } catch (err) {
-    console.warn('API 연결 실패 (스냅샷 데이터로 렌더링 유지):', err);
-    liveDot.style.background = '#00e87a';
-    statusText.textContent = '실시간 모드 (스냅샷 동기화)';
+    console.warn('API 연결 실패:', err);
+
+    // 마지막으로 받아둔 실데이터가 있으면 고정 스냅샷 대신 그것을 쓴다
+    const cached = loadLastGoodSnapshot();
+    if (cached) {
+      globalStatusData = cached.status;
+      if (cached.stats) globalStatsData = cached.stats;
+      statusText.textContent = `연결 끊김 · ${formatDataAge(Date.now() - cached.savedAt)} 데이터`;
+    } else {
+      statusText.textContent = '연결 끊김 · 저장된 스냅샷';
+    }
+    // 실데이터가 끊긴 상태를 실시간처럼 보이게 하지 않는다
+    liveDot.style.background = '#f59e0b';
     const now = new Date();
     syncTime.textContent = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
   } finally {
+    isLoadingDashboard = false;
     renderAllViews();
     setTimeout(() => btnRefresh.classList.remove('spinning'), 500);
   }
@@ -592,13 +653,13 @@ function urlBase64ToUint8Array(base64String) {
 // 🔔 백그라운드 Web Push 구독 생성 및 서버 동기화 (탭/앱 종료 시에도 모바일 잠금화면 푸시 전송)
 async function syncPushAlarmToServer(alarm) {
   try {
-    if (!swRegistration || !('pushManager' in swRegistration)) return;
+    if (!swRegistration || !('pushManager' in swRegistration)) return false;
 
-    // 1. 서버로부터 VAPID 공개키 조회
-    const keyRes = await fetch('/api/vapid-public-key');
-    if (!keyRes.ok) return;
+    // 1. 서버로부터 VAPID 공개키 조회 (푸시 백엔드가 없는 정적 배포에서는 404)
+    const keyRes = await fetch(`${PUSH_API_BASE}/api/vapid-public-key`);
+    if (!keyRes.ok) return false;
     const { publicKey } = await keyRes.json();
-    if (!publicKey) return;
+    if (!publicKey) return false;
 
     // 2. 푸시 매니저 구독 생성 (이미 있으면 재사용)
     let subscription = await swRegistration.pushManager.getSubscription();
@@ -611,7 +672,7 @@ async function syncPushAlarmToServer(alarm) {
 
     // 3. 서버에 푸시 구독 + 알림 등록 전송
     if (subscription) {
-      await fetch('/api/subscribe-push', {
+      const res = await fetch(`${PUSH_API_BASE}/api/subscribe-push`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -619,16 +680,20 @@ async function syncPushAlarmToServer(alarm) {
           alarm
         })
       });
+      if (!res.ok) return false;
       console.log('[WebPush] 서버 백그라운드 푸시 알림 등록 완료:', alarm.deviceName);
+      return true;
     }
+    return false;
   } catch (err) {
     console.warn('[WebPush] 푸시 구독 실패:', err);
+    return false;
   }
 }
 
 async function removePushAlarmFromServer(key) {
   try {
-    await fetch('/api/unsubscribe-push', {
+    await fetch(`${PUSH_API_BASE}/api/unsubscribe-push`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key })
@@ -667,16 +732,19 @@ function toggleLaundryAlarm(towerId, unitType, deviceName, remainMinutes) {
 
     myLaundryAlarms.push(newAlarm);
     saveMyAlarms();
-    syncPushAlarmToServer(newAlarm);
 
     if (navigator.vibrate) navigator.vibrate(80);
     playChimeSound();
 
-    if (remainMinutes <= 5) {
-      showToast('🔔', `<b>[${deviceName}]</b>이(가) 내 알림 기기로 등록되었습니다!<br><small style="color:#a7f3d0">💡 남은 시간이 5분 이하이므로 완료 시점에 즉시 푸시 알림이 발송됩니다.</small>`, 'success');
-    } else {
-      showToast('🔔', `<b>[${deviceName}]</b>이(가) 내 알림 기기로 등록되었습니다!<br><small style="color:#a7f3d0">💡 5분 전 및 완료 시점에 모바일 잠금화면으로 푸시 알림이 발송됩니다.</small>`, 'success');
-    }
+    // 백그라운드 푸시 백엔드가 실제로 응답했을 때만 '잠금화면 알림'을 약속한다.
+    // (정적 배포에는 /api/subscribe-push 가 없어 페이지를 열어둔 동안만 동작)
+    const whenText = remainMinutes <= 5 ? '완료 시점에 즉시' : '5분 전 및 완료 시점에';
+    syncPushAlarmToServer(newAlarm).then(pushOk => {
+      const detail = pushOk
+        ? `💡 ${whenText} 모바일 잠금화면으로 푸시 알림이 발송됩니다.`
+        : `💡 ${whenText} 알려드립니다. (이 페이지를 열어둔 동안 동작)`;
+      showToast('🔔', `<b>[${deviceName}]</b>이(가) 내 알림 기기로 등록되었습니다!<br><small style="color:#a7f3d0">${detail}</small>`, 'success');
+    });
   }
 
   renderTowers();
@@ -980,10 +1048,11 @@ function renderCongestionStatus() {
   const curSlot = statAnalysis.currentSlot;
 
   if (currentTagEl) {
-    currentTagEl.innerHTML = `📍 <b>현재 ${statAnalysis.currentHour}시대 (${curSlot.label})</b>: 통계 가동률 <b>${curSlot.utilizationRate}%</b> (${curSlot.badgeText})`;
+    currentTagEl.innerHTML = `📍 <b>현재 ${statAnalysis.currentHour}시대 (${curSlot.label})</b>: 예상 혼잡도 <b>${curSlot.utilizationRate}%</b> (${curSlot.badgeText})`;
   }
   if (statsSummaryEl) {
-    statsSummaryEl.textContent = `최근 ${statAnalysis.days}일 통계(총 ${statAnalysis.totalRuns}회 가동 · 일평균 ${statAnalysis.avgDailyRuns}회) 자동 반영`;
+    // 총 가동횟수/일평균은 API 실측값. 시간대별 분포는 생활패턴 기반 추정치이므로 구분해서 표기한다.
+    statsSummaryEl.textContent = `최근 ${statAnalysis.days}일 실측 ${statAnalysis.totalRuns}회 (일평균 ${statAnalysis.avgDailyRuns}회) · 시간대 분포는 추정치`;
   }
 
   // 실시간 여유 대수 계산
@@ -1043,7 +1112,7 @@ function renderCongestionStatus() {
         <div class="gt-time">${s.timeRange}</div>
         <div class="gt-label">${s.label}</div>
         <div class="gt-stat-metric">
-          <span>평균 가동률 <b>${s.utilizationRate}%</b></span>
+          <span>예상 혼잡도 <b>${s.utilizationRate}%</b></span>
           <span>(일평균 ${s.avgRuns}회)</span>
         </div>
         <p class="gt-tip">${s.desc}</p>
@@ -1099,7 +1168,7 @@ function createTowerCardElement(tower, isFloorplan = false) {
   const wStateInfo = STATE_TRANSLATION[wState] || { label: wState };
 
   const dFluc = analyzeDynamicTimeFluctuation('dryer', dState, dTimer, cycleCount, dError);
-  const wFluc = analyzeDynamicTimeFluctuation('washer', wState, wTimer, cycleCount, dError);
+  const wFluc = analyzeDynamicTimeFluctuation('washer', wState, wTimer, cycleCount, wError);
   const dMinutes = (dTimer.remainHour || 0) * 60 + (dTimer.remainMinute || 0);
   const wMinutes = (wTimer.remainHour || 0) * 60 + (wTimer.remainMinute || 0);
 
@@ -1294,6 +1363,18 @@ function renderTowers() {
   }
 }
 
+// 주어진 구역에서 가장 먼저 완료되는(잔여시간이 가장 짧은) 세탁기를 실제 타이머로 산출
+function findSoonestFreeWasher(towers) {
+  return towers
+    .map(t => {
+      const d = globalStatusData[t.name] || {};
+      const timer = d.washer?.timer || {};
+      return { tower: t, minutes: (timer.remainHour || 0) * 60 + (timer.remainMinute || 0) };
+    })
+    .filter(x => x.minutes > 0)
+    .sort((a, b) => a.minutes - b.minutes)[0] || null;
+}
+
 // 4. 남녀 맞춤 듀얼 스마트 추천 알고리즘
 function renderSmartSummary() {
   let menFreeWash = 0, commonFreeWash = 0, womenFreeWash = 0;
@@ -1370,7 +1451,8 @@ function renderSmartSummary() {
   if (menFreeWashers.length > 0) {
     menFreeWashers.sort((a, b) => a.cycles - b.cycles);
     const bestMenWash = menFreeWashers[0];
-    const bestMenDry = menFreeDryers[0]?.tower.label || '4호기(구김방지)';
+    menFreeDryers.sort((a, b) => a.cycles - b.cycles);
+    const bestMenDry = menFreeDryers[0]?.tower.label || '대기 중인 건조기 없음';
     menRecPill.textContent = '즉시 세탁 가능';
     menRecPill.style.background = 'rgba(0, 232, 122, 0.15)';
     menRecPill.style.color = 'var(--jungle-green)';
@@ -1380,8 +1462,14 @@ function renderSmartSummary() {
     menRecPill.textContent = '가동 중';
     menRecPill.style.background = 'rgba(245, 158, 11, 0.15)';
     menRecPill.style.color = '#f59e0b';
-    menRecTitle.textContent = `세탁기 No.4 (약 40분 뒤 완료)`;
-    menRecDesc.textContent = `남성 구역 세탁기가 모두 가동 중입니다. 공용 구역 No.6(5분 남음)을 확인하세요.`;
+    const soonestMen = findSoonestFreeWasher(menTowers);
+    const commonAlt = findSoonestFreeWasher(TOWERS.filter(t => t.zone === 'common'));
+    menRecTitle.textContent = soonestMen
+      ? `세탁기 ${soonestMen.tower.label} (약 ${soonestMen.minutes}분 뒤 완료)`
+      : `남성 구역 세탁기 전체 사용 중`;
+    menRecDesc.textContent = commonAlt
+      ? `남성 구역 세탁기가 모두 가동 중입니다. 공용 구역 ${commonAlt.tower.label}(${commonAlt.minutes}분 남음)도 확인해 보세요.`
+      : `남성 구역 세탁기가 모두 가동 중입니다. 공용 구역(6~7호기)을 확인해 보세요.`;
   }
 
   // 👧 여성 구역 최적 기기 산출
@@ -1392,7 +1480,8 @@ function renderSmartSummary() {
   if (womenFreeWashers.length > 0) {
     womenFreeWashers.sort((a, b) => a.cycles - b.cycles);
     const bestWomenWash = womenFreeWashers[0];
-    const bestWomenDry = womenFreeDryers[0]?.tower.label || '8호기';
+    womenFreeDryers.sort((a, b) => a.cycles - b.cycles);
+    const bestWomenDry = womenFreeDryers[0]?.tower.label || '대기 중인 건조기 없음';
     womenRecPill.textContent = '즉시 사용 가능';
     womenRecPill.style.background = 'rgba(236, 72, 153, 0.15)';
     womenRecPill.style.color = '#f472b6';
@@ -1400,8 +1489,13 @@ function renderSmartSummary() {
     womenRecDesc.textContent = `여성 구역 ${bestWomenWash.tower.label} 세탁기(누적 ${bestWomenWash.cycles}회)가 가장 쾌적하게 대기 중입니다.`;
   } else {
     womenRecPill.textContent = '가동 중';
-    womenRecTitle.textContent = `여성 구역 대기 중`;
-    womenRecDesc.textContent = `현재 가동 현황을 확인 중입니다.`;
+    const soonestWomen = findSoonestFreeWasher(womenTowers);
+    womenRecTitle.textContent = soonestWomen
+      ? `세탁기 ${soonestWomen.tower.label} (약 ${soonestWomen.minutes}분 뒤 완료)`
+      : `여성 구역 세탁기 전체 사용 중`;
+    womenRecDesc.textContent = soonestWomen
+      ? `여성 구역 세탁기가 모두 가동 중이며, ${soonestWomen.tower.label}가 가장 먼저 완료됩니다.`
+      : `여성 구역 세탁기가 모두 사용 중입니다. 잠시 후 다시 확인해 주세요.`;
   }
 }
 
@@ -1427,22 +1521,22 @@ function renderStaleTracker() {
     }
   });
 
-  // 2) 에러 기기 감지
+  // 2) 에러 기기 감지 (세탁기/건조기를 각각 정확한 이름으로 표기)
   TOWERS.forEach(t => {
     const data = globalStatusData[t.name] || {};
-    const err = data.dryer?.error || data.washer?.error;
-    if (err) {
+    [['dryer', '건조기', data.dryer?.error], ['washer', '세탁기', data.washer?.error]].forEach(([, unitLabel, err]) => {
+      if (!err) return;
       const diag = getErrorDiagnostic(err);
       items.push(`
         <div class="stale-item" style="background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.35);">
           <div>
-            <span class="stale-tower" style="color:#ef4444">${diag.icon} ${t.label} 건조기</span>
+            <span class="stale-tower" style="color:#ef4444">${diag.icon} ${t.label} ${unitLabel}</span>
             <span style="color:#fca5a5;font-weight:600;">: ${diag.short}</span>
           </div>
-          <span class="stale-time" style="color:#ef4444">배수관 점검</span>
+          <span class="stale-time" style="color:#ef4444">점검 필요</span>
         </div>
       `);
-    }
+    });
   });
 
   if (items.length === 0) {
@@ -1591,6 +1685,23 @@ function openTowerModal(tower, data, wFluc, dFluc) {
 // 9. 🧠 Google Gemini AI 실시간 LLM 챗봇 엔진 (Direct & Smart)
 // =========================================================
 
+// 모델 출력과 사용자 입력이 그대로 HTML로 실행되지 않도록 이스케이프
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// 이스케이프 후 **굵게** 만 서식으로 변환 (모델이 쓰는 마크다운 별표가 그대로 노출되는 문제 해결)
+function renderChatText(text) {
+  return escapeHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/\n/g, '<br>');
+}
+
 function appendChatMessage(sender, htmlText) {
   const chatBox = document.getElementById('aiChatBox');
   if (!chatBox) return;
@@ -1638,7 +1749,7 @@ async function processNaturalLanguageQuery(userText) {
   if (!q) return;
 
   // 1. 유저 질문 추가
-  appendChatMessage('user', q);
+  appendChatMessage('user', escapeHtml(q));
   chatHistoryBuffer.push({ role: 'user', content: q });
 
   // 2. AI 말풍선 생성 (타이핑 스트리밍용)
@@ -1728,7 +1839,7 @@ ${compactStatus}
                   const textDelta = chunk.choices?.[0]?.delta?.content;
                   if (textDelta) {
                     fullText += textDelta;
-                    bubbleEl.innerHTML = fullText.replace(/\n/g, '<br>') + '<span style="opacity:0.6;animation:pulse-dot 0.8s infinite;"> ▋</span>';
+                    bubbleEl.innerHTML = renderChatText(fullText) + '<span style="opacity:0.6;animation:pulse-dot 0.8s infinite;"> ▋</span>';
                     chatBox.scrollTop = chatBox.scrollHeight;
                   }
                 } catch (e) {}
@@ -1737,7 +1848,7 @@ ${compactStatus}
           }
 
           if (fullText.trim()) {
-            bubbleEl.innerHTML = fullText.replace(/\n/g, '<br>');
+            bubbleEl.innerHTML = renderChatText(fullText);
             chatHistoryBuffer.push({ role: 'assistant', content: fullText });
             return;
           }
@@ -1791,7 +1902,7 @@ ${compactStatus}
                     const textChunk = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
                     if (textChunk) {
                       fullText += textChunk;
-                      bubbleEl.innerHTML = fullText.replace(/\n/g, '<br>') + '<span style="opacity:0.6;animation:pulse-dot 0.8s infinite;"> ▋</span>';
+                      bubbleEl.innerHTML = renderChatText(fullText) + '<span style="opacity:0.6;animation:pulse-dot 0.8s infinite;"> ▋</span>';
                       chatBox.scrollTop = chatBox.scrollHeight;
                     }
                   } catch (e) {}
@@ -1801,7 +1912,7 @@ ${compactStatus}
           }
 
           if (fullText.trim()) {
-            bubbleEl.innerHTML = fullText.replace(/\n/g, '<br>');
+            bubbleEl.innerHTML = renderChatText(fullText);
             chatHistoryBuffer.push({ role: 'assistant', content: fullText });
             return;
           }

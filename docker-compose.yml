@@ -9,5 +9,8 @@ services:
       - "8000:8000"
     environment:
       - PORT=8000
+      - SUBS_FILE=/app/data/push_subscriptions.json
     volumes:
-      - ./push_subscriptions.json:/app/push_subscriptions.json
+      # 단일 파일을 bind 하면 파일이 없을 때 도커가 디렉터리를 생성해 저장이 깨진다.
+      # 디렉터리를 마운트하고 파일 경로는 SUBS_FILE 로 지정한다.
+      - ./data:/app/data
