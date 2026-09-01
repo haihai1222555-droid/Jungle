@@ -706,10 +706,18 @@ async function syncPushAlarmToServer(alarm) {
 
 async function removePushAlarmFromServer(key) {
   try {
+    // 어느 기기의 등록을 지울지 알려준다.
+    // 안 보내면 같은 세탁기에 걸린 다른 기기(폰/컴퓨터)의 알림까지 함께 지워진다.
+    let endpoint = null;
+    try {
+      const sub = swRegistration && await swRegistration.pushManager.getSubscription();
+      endpoint = sub ? sub.endpoint : null;
+    } catch (e) {}
+
     await fetch(`${PUSH_API_BASE}/api/unsubscribe-push`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key })
+      body: JSON.stringify({ key, endpoint })
     });
   } catch (e) {}
 }
@@ -759,6 +767,10 @@ function toggleLaundryAlarm(towerId, unitType, deviceName, remainMinutes) {
     // (정적 배포에는 /api/subscribe-push 가 없어 페이지를 열어둔 동안만 동작)
     const whenText = remainMinutes <= 5 ? '완료 시점에 즉시' : '5분 전 및 완료 시점에';
     syncPushAlarmToServer(newAlarm).then(pushOk => {
+      // 서버 푸시가 살아있으면 앱 내부 알림은 띄우지 않는다 (같은 내용이 두 번 오는 것 방지)
+      newAlarm.pushRegistered = pushOk;
+      saveMyAlarms();
+
       const detail = pushOk
         ? `💡 ${whenText} 모바일 잠금화면으로 푸시 알림이 발송됩니다.`
         : `💡 ${whenText} 알려드립니다. (이 페이지를 열어둔 동안 동작)`;
@@ -947,7 +959,7 @@ setInterval(() => {
 
       showToast('🧺', `<b>[${item.deviceName}]</b> 완료 5분 전입니다!<br>세탁실로 이동해 수거를 준비하세요.`, 'warning');
 
-      if ('Notification' in window && Notification.permission === 'granted') {
+      if (!item.pushRegistered && 'Notification' in window && Notification.permission === 'granted') {
         new Notification(`🧺 [선택 기기 알림] ${item.deviceName} 5분 전!`, {
           body: `회원님이 등록하신 ${item.deviceName} 가동이 약 5분 뒤 완료됩니다. 세탁실로 이동해 주세요!`,
           icon: '/jungle-logo-192.png'
@@ -966,7 +978,7 @@ setInterval(() => {
 
       showToast('🏁', `<b>[${item.deviceName}]</b> 세탁/건조가 완료되었습니다!<br><small style="color:#a7f3d0">💡 알림이 자동으로 해제되었습니다. 세탁실에서 빨래를 수거해 주세요 👍</small>`, 'success');
 
-      if ('Notification' in window && Notification.permission === 'granted') {
+      if (!item.pushRegistered && 'Notification' in window && Notification.permission === 'granted') {
         new Notification(`🏁 [선택 기기 완료] ${item.deviceName} 완료!`, {
           body: `회원님이 등록하신 ${item.deviceName} 가동이 모두 끝났습니다. 세탁실에서 빨래를 수거해 주세요!`,
           icon: '/jungle-logo-192.png'

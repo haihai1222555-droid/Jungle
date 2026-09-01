@@ -179,7 +179,7 @@ def background_push_worker():
                     changed = True
                     print(f"[Alarm] 5분전 조건 충족: {device_name} (실시간 {live_min}분 / 판정 {remain_min:.1f}분)")
                     send_push_notification(sub_info, {
-                        'title': f"[정글 세탁실] {device_name} 완료 5분 전!",
+                        'title': f"🧺 [선택 기기 알림] {device_name} 5분 전!",
                         'body': f"회원님이 등록하신 {device_name} 가동이 약 5분 뒤 완료됩니다. 세탁실로 이동해 주세요!",
                         'tag': f"5min-{device_name}"
                     })
@@ -191,7 +191,7 @@ def background_push_worker():
                     alarm['notified0Min'] = True
                     changed = True
                     send_push_notification(sub_info, {
-                        'title': f"[정글 세탁실] {device_name} 완료!",
+                        'title': f"🏁 [선택 기기 완료] {device_name} 완료!",
                         'body': f"회원님이 등록하신 {device_name} 가동이 끝났습니다. 세탁실에서 빨래를 즉시 수거해 주세요!",
                         'tag': f"complete-{device_name}"
                     })
@@ -278,7 +278,13 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 if sub_info and alarm_info:
                     subs = load_subscriptions()
                     key = alarm_info.get('key')
-                    subs = [s for s in subs if s.get('alarm', {}).get('key') != key]
+                    endpoint = sub_info.get('endpoint')
+                    # 중복 판정은 (구독 기기 + 세탁기) 조합으로 한다.
+                    # 세탁기 키만 보면, 같은 세탁기를 폰과 컴퓨터에서 각각 등록했을 때
+                    # 나중에 등록한 기기가 먼저 등록한 기기의 구독을 지워버린다.
+                    subs = [x for x in subs
+                            if not (x.get('alarm', {}).get('key') == key
+                                    and (x.get('subscription') or {}).get('endpoint') == endpoint)]
                     subs.append({'subscription': sub_info, 'alarm': alarm_info, 'createdAt': time.time()})
                     save_subscriptions(subs)
                 self.send_response(200)
@@ -293,13 +299,58 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
                 return
 
+        if req_path == '/api/test-push':
+            # 빨래가 끝날 때까지 기다리지 않고 '알림이 실제로 폰에 도착하는지'만
+            # 즉시 확인하기 위한 경로. 이미 등록된 구독에만 보내므로 아무나
+            # 임의의 기기로 알림을 보낼 수는 없다.
+            try:
+                data = json.loads(post_data.decode('utf-8')) if post_data else {}
+                key = data.get('key')
+                subs = load_subscriptions()
+                targets = [x for x in subs
+                           if not key or x.get('alarm', {}).get('key') == key]
+
+                sent = 0
+                for x in targets:
+                    device = x.get('alarm', {}).get('deviceName', '기기')
+                    send_push_notification(x.get('subscription'), {
+                        'title': f"🧪 [테스트] {device} 알림 도착",
+                        'body': "이 알림이 보이면 전달 경로가 정상입니다. 실제 5분 전 알림도 같은 방식으로 옵니다.",
+                        'tag': f"jungle-test-{int(time.time())}"
+                    })
+                    sent += 1
+
+                print(f"[TestPush] {sent}개 구독으로 발송 시도 (전체 등록 {len(subs)}개)")
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "sent": sent, "registered": len(subs),
+                    "devices": [x.get('alarm', {}).get('deviceName') for x in targets]
+                }, ensure_ascii=False).encode('utf-8'))
+                return
+            except Exception as e:
+                print(f"[TestPush Error] {e}")
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+                return
+
         if req_path == '/api/unsubscribe-push':
             try:
                 data = json.loads(post_data.decode('utf-8'))
                 key = data.get('key')
+                endpoint = data.get('endpoint')
                 if key:
                     subs = load_subscriptions()
-                    subs = [s for s in subs if s.get('alarm', {}).get('key') != key]
+                    if endpoint:
+                        # 해제를 요청한 그 기기의 등록만 지운다
+                        subs = [x for x in subs
+                                if not (x.get('alarm', {}).get('key') == key
+                                        and (x.get('subscription') or {}).get('endpoint') == endpoint)]
+                    else:
+                        subs = [x for x in subs if x.get('alarm', {}).get('key') != key]
                     save_subscriptions(subs)
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
