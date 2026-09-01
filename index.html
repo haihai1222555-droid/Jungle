@@ -8,8 +8,8 @@
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Jungle Laundry 2.0 | 정글 스마트 세탁실" />
   <meta property="og:description" content="실시간 9대 워시타워 현황, 남녀 맞춤 추천, 5분 전 잠금화면 푸시 알림 및 AI 비서" />
-  <meta property="og:image" content="https://cdn-icons-png.flaticon.com/512/2954/2954893.png" />
-  <link rel="icon" type="image/png" href="https://cdn-icons-png.flaticon.com/512/2954/2954893.png" />
+  <meta property="og:image" content="https://jungle-wash.vercel.app/jungle-logo.png" />
+  <link rel="icon" type="image/png" href="jungle-logo.png" />
   <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -20,7 +20,7 @@
   <meta name="apple-mobile-web-app-title" content="정글세탁실">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#0a0c10">
-  <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/2954/2954893.png">
+  <link rel="apple-touch-icon" href="jungle-logo.png">
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -33,7 +33,10 @@
   <header class="app-header">
     <div class="header-container">
       <div class="brand-group">
-        <div class="brand-badge">KRAFTON JUNGLE</div>
+        <div class="brand-badge-wrap">
+          <img src="jungle-logo.png" alt="크래프톤 정글 나침반 로고" class="brand-jungle-logo" />
+          <div class="brand-badge">KRAFTON JUNGLE</div>
+        </div>
         <h1 class="brand-title">
           <span class="highlight">스마트 세탁실</span> 현황 대시보드
         </h1>
@@ -239,7 +242,7 @@
         <div class="assistant-header-row">
           <div class="assistant-visual">
             <div class="ai-orb" id="aiOrb">
-              <div class="ai-core"></div>
+              <img src="jungle-logo.png" alt="정글 AI 나침반" class="ai-compass-inner-logo" />
             </div>
           </div>
           <div class="assistant-header-text">
@@ -253,20 +256,22 @@
         <div class="ai-chat-box" id="aiChatBox">
           <div class="chat-message ai-msg">
             <div class="msg-bubble">
-              안녕하세요, 정글러님! 저는 크래프톤 정글 스마트 세탁 AI 비서입니다. 🫧<br>
-              <em>"남자 세탁기 빈 거 있어?", "4번 세탁기 언제 끝나?", "통살균 어떻게 해?"</em> 등 무엇이든 물어보세요!
+              👋 <b>반갑습니다 정글러님!</b><br>
+              저는 크래프톤 정글 스마트 세탁실 AI 비서입니다. 🫧<br>
+              • 실시간 남/여 빈 세탁기 및 건조기 추천<br>
+              • 옷 종류별(수건, 운동복, 흰 옷) 최적 세탁 코스 추천<br>
+              • 에러 해결 및 통살균 케어 알림까지 무엇이든 편하게 물어보세요!
             </div>
           </div>
         </div>
 
-        <!-- 빠른 예시 질문 칩 -->
-        <div class="quick-prompt-tags">
-          <span class="prompt-guide-label">💡 추천 질문:</span>
-          <button class="prompt-chip" data-prompt="남자 세탁기 빈 거 있어?">"남자 세탁기 빈 거 있어?"</button>
-          <button class="prompt-chip" data-prompt="여자 건조기 상태 어때?">"여자 건조기 상태 어때?"</button>
-          <button class="prompt-chip" data-prompt="제일 빨리 끝나는 건조기는?">"제일 빨리 끝나는 건조기는?"</button>
-          <button class="prompt-chip" data-prompt="청소해야 하는 세탁기 알려줘">"청소 필요한 세탁기 알려줘"</button>
-          <button class="prompt-chip" data-prompt="1호기 에러 어떻게 해결해?">"1호기 에러 어떻게 해결해?"</button>
+        <!-- 추천 퀵 질문 칩 -->
+        <div class="ai-chips-scroll">
+          <button type="button" class="ai-quick-chip" data-prompt="수건 냄새 안 나게 세탁하는 코스 알려줘">🧺 수건 냄새 제거 팁</button>
+          <button type="button" class="ai-quick-chip" data-prompt="지금 바로 쓸 수 있는 세탁기 추천해줘">⚡ 즉시 사용 세탁기</button>
+          <button type="button" class="ai-quick-chip" data-prompt="운동복이나 기능성 티셔츠는 어떤 코스로 돌려야 해?">🏃 운동복 추천 코스</button>
+          <button type="button" class="ai-quick-chip" data-prompt="건조기 dE4 에러가 떴는데 어떻게 해결해?">⚠️ dE4 에러 대처법</button>
+          <button type="button" class="ai-quick-chip" data-prompt="LG 권장 세탁조 통살균은 어떻게 진행해?">🧼 통살균 청소 가이드</button>
         </div>
 
         <!-- 자유 텍스트 & 음성 입력창 -->
@@ -328,7 +333,10 @@
   </div>
 
   <footer class="app-footer">
-    <p>KRAFTON JUNGLE · Dedicated Laundry System · Data powered by LG ThinQ API</p>
+    <div class="footer-brand-row">
+      <img src="jungle-logo.png" class="footer-jungle-logo" alt="크래프톤 정글 로고" />
+      <span>KRAFTON JUNGLE · Dedicated Laundry System · Data powered by LG ThinQ API</span>
+    </div>
   </footer>
 
   <script src="app.js"></script>
