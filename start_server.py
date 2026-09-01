@@ -9,12 +9,14 @@ import threading
 import time
 import base64
 
-if sys.stdout.encoding != 'utf-8':
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
-    except Exception:
-        pass
+# 로그를 줄 단위로 즉시 내보낸다.
+# (출력이 파이프로 갈 때 파이썬이 버퍼링을 해서, Render 로그에 오류가 제때 안 뜬다.
+#  알림이 안 갈 때 원인을 볼 수 있어야 하므로 반드시 필요하다.)
+try:
+    sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
+    sys.stderr.reconfigure(encoding='utf-8', line_buffering=True)
+except Exception:
+    pass
 
 # Render 등 PaaS 는 실행 포트를 PORT 로 지정해준다. 없으면 로컬 기본값.
 PORT = int(os.environ.get('PORT') or 8000)
@@ -90,6 +92,7 @@ def send_push_notification(subscription_info, payload_data):
             vapid_private_key=VAPID_PRIV_PATH,
             vapid_claims={"sub": "mailto:admin@jungle-laundry.local"}
         )
+        print(f"[WebPush] 발송 성공: {payload_data.get('title', '')}")
     except Exception as e:
         print(f"[WebPush Error] {e}")
 
@@ -160,8 +163,8 @@ def background_push_worker():
 
             if changed:
                 save_subscriptions(active_subs)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Worker Error] {e}")
 
 class RobustHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -323,6 +326,9 @@ if __name__ == '__main__':
     if HAS_WEBPUSH:
         t = threading.Thread(target=background_push_worker, daemon=True)
         t.start()
+        print("[WebPush] 백그라운드 알림 워커 시작됨 (5초 주기)")
+    else:
+        print("[WebPush] 라이브러리 없음 - 백그라운드 알림 비활성")
 
     with ThreadedTCPServer(("", PORT), RobustHandler) as httpd:
         print("============================================================")

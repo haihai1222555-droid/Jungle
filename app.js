@@ -14,7 +14,7 @@ const API_STATS  = '/api/stats?days=7';
 //    Vercel 배포본에는 푸시 백엔드가 없으므로, Render 주소를 여기에 넣어야
 //    앱을 꺼도 알림이 온다. 예) 'https://jungle-laundry.onrender.com'
 //    비워두면 알림은 '화면을 보고 있는 동안'만 동작한다.
-const PUSH_API_BASE = '';
+const PUSH_API_BASE = 'https://jungle-wash.onrender.com';
 const REFRESH_INTERVAL_SEC = 20;
 
 // 워시타워 9대 메타데이터
