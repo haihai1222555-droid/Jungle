@@ -1134,24 +1134,31 @@ function createTowerCardElement(tower, isFloorplan = false) {
           </div>
         </div>
         <div class="unit-meta">
-          <div class="unit-type-row">
+          <!-- 1행: 기기 구분 & 타이머 -->
+          <div class="unit-header-line">
             <span class="unit-name">${isFloorplan ? '건조기' : 'UPPER · 건조기'}</span>
-            ${renderUnitAlarmButton(tower.id, 'dryer', `${tower.label} 건조기`, dMinutes, dState, isFloorplan)}
+            <span class="unit-timer ${dTimerStr ? '' : 'dim'}">${dTimerStr || (isDryerErr ? '점검 필요' : '대기 중')}</span>
           </div>
-          <div class="unit-state-row">
-            <div class="unit-state-group">
+
+          <!-- 2행: 현재 상태/코스 & 알림 버튼 -->
+          <div class="unit-action-line">
+            <div class="unit-state-pill-group">
               <span class="unit-state-text ${dRunning ? 'state-active-dry' : ''} ${isDryerErr ? 'state-error' : ''}">
                 ${dStateInfo.label}
               </span>
-              ${dCourse ? `<span class="unit-course-badge course-dry">🌀 ${dCourse}</span>` : ''}
+              ${dCourse ? `<span class="unit-course-badge course-dry">🌀 ${dCourse.replace(/\s*\(.*?\)/g, '')}</span>` : ''}
             </div>
-            <span class="unit-timer ${dTimerStr ? '' : 'dim'}">${dTimerStr || (isDryerErr ? '점검' : '대기')}</span>
+            <div class="unit-alarm-btn-wrap">
+              ${renderUnitAlarmButton(tower.id, 'dryer', `${tower.label} 건조기`, dMinutes, dState, isFloorplan)}
+            </div>
           </div>
+
+          <!-- 3행: 시간 변동 예측 / 에러 칩 -->
           ${dRunning ? `<div class="unit-fluc-tag ${dFluc.tagClass}">${dFluc.tagText}</div>` : ''}
           ${isDryerErr && dError ? `
             <div class="unit-error-chip" title="${getErrorDiagnostic(dError).title}">
               <span class="error-chip-icon">${getErrorDiagnostic(dError).icon}</span>
-              <span class="error-chip-text">${getErrorDiagnostic(dError).title}</span>
+              <span class="error-chip-text">${getErrorDiagnostic(dError).short || getErrorDiagnostic(dError).title}</span>
             </div>
           ` : ''}
         </div>
@@ -1174,24 +1181,31 @@ function createTowerCardElement(tower, isFloorplan = false) {
           </div>
         </div>
         <div class="unit-meta">
-          <div class="unit-type-row">
+          <!-- 1행: 기기 구분 & 타이머 -->
+          <div class="unit-header-line">
             <span class="unit-name">${isFloorplan ? '세탁기' : 'LOWER · 세탁기'}</span>
-            ${renderUnitAlarmButton(tower.id, 'washer', `${tower.label} 세탁기`, wMinutes, wState, isFloorplan)}
+            <span class="unit-timer ${wTimerStr ? '' : 'dim'}">${wTimerStr || (isWasherErr ? '점검 필요' : '대기 중')}</span>
           </div>
-          <div class="unit-state-row">
-            <div class="unit-state-group">
+
+          <!-- 2행: 현재 상태/코스 & 알림 버튼 -->
+          <div class="unit-action-line">
+            <div class="unit-state-pill-group">
               <span class="unit-state-text ${wRunning ? 'state-active-wash' : ''} ${isWasherErr ? 'state-error' : ''}">
                 ${wStateInfo.label}
               </span>
-              ${wCourse ? `<span class="unit-course-badge course-wash">🫧 ${wCourse}</span>` : ''}
+              ${wCourse ? `<span class="unit-course-badge course-wash">🫧 ${wCourse.replace(/\s*\(.*?\)/g, '')}</span>` : ''}
             </div>
-            <span class="unit-timer ${wTimerStr ? '' : 'dim'}">${wTimerStr || (isWasherErr ? '점검' : '대기')}</span>
+            <div class="unit-alarm-btn-wrap">
+              ${renderUnitAlarmButton(tower.id, 'washer', `${tower.label} 세탁기`, wMinutes, wState, isFloorplan)}
+            </div>
           </div>
+
+          <!-- 3행: 시간 변동 예측 / 에러 칩 -->
           ${wRunning ? `<div class="unit-fluc-tag ${wFluc.tagClass}">${wFluc.tagText}</div>` : ''}
           ${isWasherErr && wError ? `
             <div class="unit-error-chip" title="${getErrorDiagnostic(wError).title}">
               <span class="error-chip-icon">${getErrorDiagnostic(wError).icon}</span>
-              <span class="error-chip-text">${getErrorDiagnostic(wError).title}</span>
+              <span class="error-chip-text">${getErrorDiagnostic(wError).short || getErrorDiagnostic(wError).title}</span>
             </div>
           ` : ''}
         </div>

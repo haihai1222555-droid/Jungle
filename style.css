@@ -1516,15 +1516,17 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 5px;
 }
-.unit-type-row {
+
+/* 1행: 기기 라벨(좌측) & 남은 시간 타이머(우측) */
+.unit-header-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 20px;
 }
+
 .unit-name {
   font-size: 11px;
   font-weight: 800;
@@ -1532,15 +1534,32 @@ body {
   color: var(--text-dim);
   white-space: nowrap;
 }
-.unit-state-row {
+
+.unit-timer {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text-main);
+  text-align: right;
+  white-space: nowrap;
+  letter-spacing: -0.3px;
+}
+.unit-timer.dim {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* 2행: 현재 상태/코스 배지(좌측) & 5분 전 알림 버튼(우측) */
+.unit-action-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 2px;
+  min-height: 22px;
 }
 
-.unit-state-group {
+.unit-state-pill-group {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1559,15 +1578,15 @@ body {
 .unit-state-text.state-error { color: var(--color-error); }
 
 .unit-course-badge {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
-  padding: 2.5px 8px;
+  padding: 2px 7px;
   border-radius: 6px;
   letter-spacing: -0.2px;
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   flex-shrink: 0;
 }
 .unit-course-badge.course-wash {
@@ -1581,19 +1600,8 @@ body {
   border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
-.unit-timer {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 15px;
-  font-weight: 800;
-  color: var(--text-main);
-  text-align: right;
-  white-space: nowrap;
-  letter-spacing: -0.3px;
+.unit-alarm-btn-wrap {
   flex-shrink: 0;
-}
-.unit-timer.dim {
-  color: var(--text-dim);
-  font-size: 12px;
 }
 
 /* 🔮 동적 시간 변동 예측 태그 & ⚠️ 에러 안내 칩 (동일한 패널 Height 및 디자인으로 일원화) */
