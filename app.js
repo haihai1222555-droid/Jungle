@@ -1136,16 +1136,16 @@ function createTowerCardElement(tower, isFloorplan = false) {
         <div class="unit-meta">
           <div class="unit-type-row">
             <span class="unit-name">${isFloorplan ? '건조기' : 'UPPER · 건조기'}</span>
-            <div class="unit-timer-group">
-              <span class="unit-timer ${dTimerStr ? '' : 'dim'}">${dTimerStr || (isDryerErr ? '점검' : '대기')}</span>
-              ${renderUnitAlarmButton(tower.id, 'dryer', `${tower.label} 건조기`, dMinutes, dState, isFloorplan)}
-            </div>
+            ${renderUnitAlarmButton(tower.id, 'dryer', `${tower.label} 건조기`, dMinutes, dState, isFloorplan)}
           </div>
           <div class="unit-state-row">
-            <div class="unit-state-text ${dRunning ? 'state-active-dry' : ''} ${isDryerErr ? 'state-error' : ''}">
-              ${dStateInfo.label}
+            <div class="unit-state-group">
+              <span class="unit-state-text ${dRunning ? 'state-active-dry' : ''} ${isDryerErr ? 'state-error' : ''}">
+                ${dStateInfo.label}
+              </span>
+              ${dCourse ? `<span class="unit-course-badge course-dry">🌀 ${dCourse}</span>` : ''}
             </div>
-            ${dCourse ? `<span class="unit-course-badge course-dry">🌀 ${dCourse}</span>` : ''}
+            <span class="unit-timer ${dTimerStr ? '' : 'dim'}">${dTimerStr || (isDryerErr ? '점검' : '대기')}</span>
           </div>
           ${dRunning ? `<div class="unit-fluc-tag ${dFluc.tagClass}">${dFluc.tagText}</div>` : ''}
           ${isDryerErr && dError ? `
@@ -1176,16 +1176,16 @@ function createTowerCardElement(tower, isFloorplan = false) {
         <div class="unit-meta">
           <div class="unit-type-row">
             <span class="unit-name">${isFloorplan ? '세탁기' : 'LOWER · 세탁기'}</span>
-            <div class="unit-timer-group">
-              <span class="unit-timer ${wTimerStr ? '' : 'dim'}">${wTimerStr || (isWasherErr ? '점검' : '대기')}</span>
-              ${renderUnitAlarmButton(tower.id, 'washer', `${tower.label} 세탁기`, wMinutes, wState, isFloorplan)}
-            </div>
+            ${renderUnitAlarmButton(tower.id, 'washer', `${tower.label} 세탁기`, wMinutes, wState, isFloorplan)}
           </div>
           <div class="unit-state-row">
-            <div class="unit-state-text ${wRunning ? 'state-active-wash' : ''} ${isWasherErr ? 'state-error' : ''}">
-              ${wStateInfo.label}
+            <div class="unit-state-group">
+              <span class="unit-state-text ${wRunning ? 'state-active-wash' : ''} ${isWasherErr ? 'state-error' : ''}">
+                ${wStateInfo.label}
+              </span>
+              ${wCourse ? `<span class="unit-course-badge course-wash">🫧 ${wCourse}</span>` : ''}
             </div>
-            ${wCourse ? `<span class="unit-course-badge course-wash">🫧 ${wCourse}</span>` : ''}
+            <span class="unit-timer ${wTimerStr ? '' : 'dim'}">${wTimerStr || (isWasherErr ? '점검' : '대기')}</span>
           </div>
           ${wRunning ? `<div class="unit-fluc-tag ${wFluc.tagClass}">${wFluc.tagText}</div>` : ''}
           ${isWasherErr && wError ? `
