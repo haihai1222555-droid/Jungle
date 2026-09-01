@@ -1,4 +1,6 @@
 {
+  "framework": null,
+  "cleanUrls": true,
   "rewrites": [
     {
       "source": "/api/status",
