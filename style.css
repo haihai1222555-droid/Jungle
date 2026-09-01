@@ -3854,3 +3854,58 @@ body.light-theme .app-footer {
     display: none !important;
   }
 }
+
+/* ---------------------------------------------
+   📱 모바일 스크롤 성능 최적화 (768px 이하에서만 적용)
+
+   데스크톱 렌더링은 전혀 건드리지 않는다. 모바일 GPU 에서 스크롤이
+   끊기는 주된 원인 두 가지만 걷어낸다.
+
+   1) backdrop-filter
+      스크롤하는 매 프레임마다 '요소 뒤 배경'을 다시 블러 처리한다.
+      화면을 크게 덮는 헤더/히어로/혼잡도 카드에 걸려 있어 비용이 가장 크다.
+      카드 배경이 이미 75~90% 불투명이라, 불투명도만 조금 올리면
+      겉보기 차이는 거의 없다.
+
+   2) .ambient-glow 의 filter: blur(120px)
+      배경이 이미 radial-gradient(... transparent 70%) 로 부드럽게 퍼지는데
+      그 위에 500~600px 짜리 큰 블러를 한 번 더 씌우고 있었다.
+      position: fixed 라 스크롤 내내 재합성되므로 중복 비용이 계속 발생한다.
+   --------------------------------------------- */
+@media (max-width: 768px) {
+  /* 그라디언트 자체가 이미 흐릿하므로 블러를 걷어내도 모양이 거의 같다 */
+  .ambient-glow {
+    filter: none;
+  }
+
+  .app-header,
+  .hero-card,
+  .congestion-card,
+  .quick-guide-section,
+  .alarm-dock-content,
+  .app-toast,
+  .modal-overlay {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* 블러가 빠진 만큼 배경을 조금 더 불투명하게 해 겉보기를 유지한다 (다크) */
+  .hero-card,
+  .congestion-card,
+  .quick-guide-section {
+    background: rgba(22, 26, 36, 0.94);
+  }
+  .app-header {
+    background: rgba(10, 12, 16, 0.97);
+  }
+
+  /* 라이트 테마도 같은 기준으로 맞춘다 */
+  body.light-theme .hero-card,
+  body.light-theme .congestion-card,
+  body.light-theme .quick-guide-section {
+    background: rgba(255, 255, 255, 0.97);
+  }
+  body.light-theme .app-header {
+    background: rgba(255, 255, 255, 0.97);
+  }
+}

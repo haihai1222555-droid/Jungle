@@ -435,6 +435,21 @@ function analyzeDynamicTimeFluctuation(unitType, runState, timer, cycleCount, er
     };
   }
 
+  // 구김 방지(WRINKLE_CARE)는 세탁/건조가 이미 끝난 뒤 옷감이 구겨지지 않게
+  // 주기적으로 살살 돌려주는 단계다. 즉 빨래 자체는 완료된 상태이므로
+  // '완료 예상'이 아니라 '완료'로 알려야 맞다.
+  if (runState === 'WRINKLE_CARE') {
+    return {
+      status: 'finished',
+      tagText: '🏁 완료 (수거 가능)',
+      tagClass: 'fluc-normal',
+      confidence: 100,
+      predictedDeltaMin: 0,
+      reason: '가동이 끝나고 구김 방지 단계입니다. 지금 바로 수거하실 수 있습니다.',
+      sensorType: '구김 방지 케어'
+    };
+  }
+
   const remainMinutes = (timer.remainHour || 0) * 60 + (timer.remainMinute || 0);
   const totalMinutes = (timer.totalHour || 0) * 60 + (timer.totalMinute || 0);
   const progressPercent = totalMinutes > 0 ? Math.min(100, Math.round(((totalMinutes - remainMinutes) / totalMinutes) * 100)) : 50;
