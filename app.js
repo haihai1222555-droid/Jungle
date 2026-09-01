@@ -801,6 +801,16 @@ function isAlarmStale(item, towerData, now) {
   return now > item.targetMs + STALE_GRACE_MS;
 }
 
+// 화면에서만 지운다. 서버 구독은 남겨서 '수거 안 함' 알림이 이어지게 한다.
+function removeLaundryAlarmLocalOnly(key) {
+  const idx = myLaundryAlarms.findIndex(a => a.key === key);
+  if (idx < 0) return;
+  myLaundryAlarms.splice(idx, 1);
+  saveMyAlarms();
+  renderTowers();
+  updateAlarmDockUI();
+}
+
 // 지난 빨래 정리용: 알림음/토스트 없이 조용히 해제한다
 function removeLaundryAlarmSilently(key) {
   const idx = myLaundryAlarms.findIndex(a => a.key === key);
@@ -976,7 +986,7 @@ setInterval(() => {
       playChimeSound();
       if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 500]);
 
-      showToast('🏁', `<b>[${item.deviceName}]</b> 세탁/건조가 완료되었습니다!<br><small style="color:#a7f3d0">💡 알림이 자동으로 해제되었습니다. 세탁실에서 빨래를 수거해 주세요 👍</small>`, 'success');
+      showToast('🏁', `<b>[${item.deviceName}]</b> 세탁/건조가 완료되었습니다!<br><small style="color:#a7f3d0">💡 세탁실에서 빨래를 수거해 주세요. 오래 두시면 한 번 더 알려드립니다 👍</small>`, 'success');
 
       if (!item.pushRegistered && 'Notification' in window && Notification.permission === 'granted') {
         new Notification(`🏁 [선택 기기 완료] ${item.deviceName} 완료!`, {
@@ -985,9 +995,15 @@ setInterval(() => {
         });
       }
 
-      // 🧹 완료 알림 발생 즉시 웹사이트 내 알림 설정 자동 해제!
+      // 🧹 완료 알림 발생 즉시 웹사이트 내 알림 설정 자동 해제.
+      //    단, 서버 푸시가 걸려 있으면 서버 구독은 남긴다.
+      //    서버가 '완료 후에도 안 가져갔는지' 를 15분간 더 지켜보고 한 번 더 알려주기 때문이다.
       setTimeout(() => {
-        removeLaundryAlarm(item.key);
+        if (item.pushRegistered) {
+          removeLaundryAlarmLocalOnly(item.key);
+        } else {
+          removeLaundryAlarm(item.key);
+        }
       }, 1000);
     }
   });
@@ -2230,6 +2246,10 @@ window.addEventListener('keydown', (e) => {
     if (dm && dm.classList.contains('open')) {
       dm.classList.remove('open');
     }
+    const hm = document.getElementById('helpModal');
+    if (hm && hm.classList.contains('open')) {
+      hm.classList.remove('open');
+    }
   }
 });
 
@@ -2263,6 +2283,19 @@ function applyTheme(theme) {
     if (labelEl) labelEl.textContent = '다크';
     localStorage.setItem('jungle_theme', 'dark');
   }
+}
+
+// 📖 사용 방법 모달 (기존 기기 상세 모달과 동일한 동작)
+const helpModal = document.getElementById('helpModal');
+const btnHelp = document.getElementById('btnHelp');
+function closeHelpModal() { if (helpModal) helpModal.classList.remove('open'); }
+if (btnHelp && helpModal) {
+  btnHelp.onclick = () => helpModal.classList.add('open');
+  helpModal.onclick = (e) => { if (e.target.id === 'helpModal') closeHelpModal(); };
+  const hClose = document.getElementById('helpModalClose');
+  const hBottom = document.getElementById('btnHelpCloseBottom');
+  if (hClose) hClose.onclick = closeHelpModal;
+  if (hBottom) hBottom.onclick = closeHelpModal;
 }
 
 const btnAlarmCenter = document.getElementById('btnAlarmCenter');

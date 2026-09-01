@@ -44,6 +44,10 @@
 
       <!-- 실시간 상태 및 빠른 액션 -->
       <div class="header-controls">
+        <button class="btn-help" id="btnHelp" title="사용 방법 보기">
+          <span>📖</span>
+          <span class="help-label">사용법</span>
+        </button>
         <button class="btn-theme-toggle" id="btnThemeToggle" title="다크/라이트 테마 전환">
           <span class="theme-icon" id="themeIcon">🌙</span>
           <span class="theme-label" id="themeLabel">다크</span>
@@ -334,6 +338,100 @@
       </div>
       <div class="modal-footer-bar">
         <button type="button" class="btn-modal-close-bottom" id="btnModalCloseBottom">닫기</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- 📖 사용 방법 모달 (기존 모달 스타일 재사용) -->
+  <div class="modal-overlay" id="helpModal">
+    <div class="modal-card">
+      <div class="modal-header-bar">
+        <div class="modal-header-info">
+          <div class="modal-badge">사용 안내</div>
+          <h2 class="modal-title">📖 정글 세탁실 사용 방법</h2>
+        </div>
+        <button class="modal-close" id="helpModalClose" title="닫기">&times;</button>
+      </div>
+
+      <div class="modal-body">
+
+        <div class="modal-section-card modal-care-card">
+          <div class="modal-section-header">
+            <strong class="modal-care-title">1️⃣ 지금 빈 기기 찾기</strong>
+          </div>
+          <ol class="help-step-list">
+            <li>맨 위 <b>남녀 맞춤 추천</b>에 지금 쓸 수 있는 기기가 바로 뜹니다.</li>
+            <li>누적 가동 횟수가 가장 적은(= 가장 깨끗한) 기기를 우선 추천합니다.</li>
+            <li>기기 카드를 누르면 코스·남은 시간·에러 해결법이 열립니다.</li>
+          </ol>
+          <div class="modal-care-subtip">
+            👦 남성 1~5호기 &nbsp;·&nbsp; 🤝 공용 6~7호기 &nbsp;·&nbsp; 👧 여성 8~9호기
+          </div>
+        </div>
+
+        <div class="modal-section-card modal-fluc-card">
+          <div class="modal-section-header">
+            <strong class="modal-fluc-title">2️⃣ 알림 걸기 — 가장 중요한 기능</strong>
+            <span class="modal-fluc-badge">핵심</span>
+          </div>
+          <ol class="help-step-list">
+            <li>가동 중인 기기의 <b>[🔔 5분전 알림]</b> 버튼을 누르면 끝입니다.</li>
+            <li><b>내가 누른 기기만</b> 추적합니다. 다른 기기는 절대 울리지 않습니다.</li>
+            <li><b>앱을 완전히 꺼도</b> 잠금화면으로 알림이 옵니다.</li>
+            <li>완료되면 등록이 <b>자동 해제</b>되어, 다음 사람이 써도 나에게 울리지 않습니다.</li>
+            <li>빨래를 오래 안 꺼내면 <b>수거 요청 알림</b>이 한 번 더 옵니다.</li>
+          </ol>
+          <div class="help-note">
+            ⚠️ <b>아이폰은 반드시 홈 화면에 설치해야 합니다.</b><br>
+            사파리 탭에서는 알림이 아예 오지 않습니다.
+            <b>공유 → 홈 화면에 추가</b>로 설치한 뒤, <b>그 아이콘으로 실행해서</b> 알림을 허용해 주세요.
+            안드로이드는 크롬에서 알림만 허용하면 됩니다.
+          </div>
+        </div>
+
+        <div class="modal-section-card modal-care-card">
+          <div class="modal-section-header">
+            <strong class="modal-care-title">3️⃣ 안 밀리는 시간에 가기</strong>
+          </div>
+          <ol class="help-step-list">
+            <li>상단 <b>신호등</b>은 지금 비어있는 기기 수를 5단계로 보여줍니다.</li>
+            <li><b>24H 골든타임</b>에서 시간대별 혼잡도를 볼 수 있습니다.</li>
+            <li>심야 21~02시가 가장 붐비고, 새벽 02~08시가 가장 여유롭습니다.</li>
+          </ol>
+        </div>
+
+        <div class="modal-section-card modal-care-card">
+          <div class="modal-section-header">
+            <strong class="modal-care-title">4️⃣ AI 비서에게 물어보기</strong>
+          </div>
+          <ol class="help-step-list">
+            <li>"지금 남성 구역에 바로 쓸 수 있는 세탁기 있어?"</li>
+            <li>"수건 냄새 안 나게 하려면 어떤 코스로 돌려?"</li>
+            <li>"건조기 dE4 에러 떴는데 어떻게 해?"</li>
+          </ol>
+          <div class="modal-care-subtip">
+            🎤 마이크 버튼으로 음성 질문도 됩니다.
+          </div>
+        </div>
+
+        <div class="modal-section-card modal-care-card">
+          <div class="modal-section-header">
+            <strong class="modal-care-title">5️⃣ 앱처럼 쓰기</strong>
+          </div>
+          <ol class="help-step-list">
+            <li>브라우저 메뉴에서 <b>홈 화면에 추가</b>를 누르면 앱처럼 설치됩니다.</li>
+            <li>우측 상단 버튼으로 다크/라이트 테마를 바꿀 수 있습니다.</li>
+          </ol>
+          <div class="modal-care-subtip">
+            💡 알림 소리가 안 난다면 휴대폰의 <b>설정 → 앱 → 알림 → 중요도</b>를 확인해 주세요.
+          </div>
+        </div>
+
+      </div>
+
+      <div class="modal-footer-bar">
+        <button type="button" class="btn-modal-close-bottom" id="btnHelpCloseBottom">닫기</button>
       </div>
     </div>
   </div>

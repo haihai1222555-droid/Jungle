@@ -294,7 +294,8 @@ body {
 }
 
 /* 상단 헤더 다크/라이트 테마 전환 버튼 */
-.btn-theme-toggle {
+.btn-theme-toggle,
+.btn-help {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -309,7 +310,8 @@ body {
   transition: all 0.2s ease;
   white-space: nowrap;
 }
-.btn-theme-toggle:hover {
+.btn-theme-toggle:hover,
+.btn-help:hover {
   background: rgba(255, 255, 255, 0.12);
   border-color: rgba(255, 255, 255, 0.25);
   transform: translateY(-1px);
@@ -2798,13 +2800,15 @@ body.light-theme .btn-refresh:hover {
   border-color: #059669;
   color: #059669;
 }
-body.light-theme .btn-theme-toggle {
+body.light-theme .btn-theme-toggle,
+body.light-theme .btn-help {
   background: #ffffff;
   border-color: #cbd5e1;
   color: #0f172a;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
-body.light-theme .btn-theme-toggle:hover {
+body.light-theme .btn-theme-toggle:hover,
+body.light-theme .btn-help:hover {
   background: #f1f5f9;
   border-color: #94a3b8;
 }
@@ -3690,7 +3694,8 @@ body.light-theme .app-footer {
     width: 100% !important;
   }
 
-  .btn-theme-toggle {
+  .btn-theme-toggle,
+  .btn-help {
     padding: 6px 9px !important;
     font-size: 11px !important;
     flex-shrink: 0 !important;
@@ -3923,4 +3928,31 @@ body.light-theme .app-footer {
   body.light-theme .app-header {
     background: rgba(255, 255, 255, 0.97);
   }
+}
+
+/* 📖 사용 방법 모달 - 기존 modal / card 스타일을 재사용하고 목록 서식만 더한다 */
+.help-step-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-main);
+}
+.help-step-list li { margin-bottom: 4px; }
+.help-note {
+  font-size: 11.5px;
+  line-height: 1.6;
+  border-radius: 8px;
+  padding: 9px 11px;
+  margin-top: 8px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #fcd34d;
+}
+
+/* 라이트 테마에서는 밝은 호박색 글씨가 흰 배경에 묻히므로 진한 색으로 바꾼다 */
+body.light-theme .help-note {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(217, 119, 6, 0.45);
+  color: #92400e;
 }

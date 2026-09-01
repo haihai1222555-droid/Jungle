@@ -69,6 +69,13 @@ CACHED_STATS = {}
 # 이보다 오래된 알림 등록은 지난 빨래로 보고 정리한다 (한 사이클은 길어야 2시간)
 MAX_ALARM_AGE_SEC = 4 * 60 * 60
 
+# 세탁이 끝난 뒤 이 시간이 지나도록 기기가 그대로면 '수거 안 함' 으로 보고 한 번 더 알린다.
+# 환경변수로 조정할 수 있다 (기본 15분).
+STALE_PICKUP_SEC = int(os.environ.get('STALE_PICKUP_SEC') or 15 * 60)
+
+# 가동 중으로 볼 상태들 (완료 후 이 상태가 되면 = 다음 사람이 새로 돌린 것)
+RUNNING_STATES = ('RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING')
+
 # 구독 파일에 대한 읽기/쓰기를 직렬화한다 (워커 스레드와 요청 스레드가 동시에 접근)
 SUBS_LOCK = threading.Lock()
 
@@ -189,16 +196,53 @@ def background_push_worker():
                     or (has_live and run_state in ('END', 'COMPLETE', 'WRINKLE_CARE', 'POWER_OFF', 'INITIAL'))
                 ):
                     alarm['notified0Min'] = True
+                    alarm['completedAt'] = time.time()
                     changed = True
+                    print(f"[Alarm] 완료: {device_name}")
                     send_push_notification(sub_info, {
                         'title': f"🏁 [선택 기기 완료] {device_name} 완료!",
                         'body': f"회원님이 등록하신 {device_name} 가동이 끝났습니다. 세탁실에서 빨래를 즉시 수거해 주세요!",
                         'tag': f"complete-{device_name}"
                     })
+                    # 여기서 구독을 버리지 않는다. 빨래를 실제로 가져갔는지 계속 지켜본다.
+                    active_subs.append(item)
                     continue
 
+                # ── 완료 알림을 이미 보낸 뒤: 수거했는지 감시하는 구간 ──
                 if notified_0min:
-                    changed = True
+                    # 기기가 다시 돌기 시작했다 = 누군가 꺼내고 새로 돌렸다는 뜻 → 감시 종료
+                    if has_live and run_state in RUNNING_STATES:
+                        changed = True
+                        continue
+
+                    if alarm.get('notifiedStale'):
+                        # 방치 알림까지 보냈으면 더 할 일이 없다
+                        changed = True
+                        continue
+
+                    completed_at = alarm.get('completedAt') or 0
+                    if not completed_at:
+                        # 이 기능 이전에 등록된 알림은 기준 시각이 없으므로 지금부터 센다
+                        alarm['completedAt'] = time.time()
+                        changed = True
+                        active_subs.append(item)
+                        continue
+
+                    waited = time.time() - completed_at
+                    if waited >= STALE_PICKUP_SEC:
+                        alarm['notifiedStale'] = True
+                        changed = True
+                        mins = int(waited // 60)
+                        print(f"[Alarm] 방치 감지: {device_name} (완료 후 {mins}분 경과)")
+                        send_push_notification(sub_info, {
+                            'title': f"🚨 [수거 요청] {device_name} 빨래가 그대로 있어요",
+                            'body': f"{device_name} 가동이 끝난 지 {mins}분이 지났습니다. 다음 정글러를 위해 빨래를 수거해 주세요!",
+                            'tag': f"stale-{device_name}"
+                        })
+                        continue
+
+                    # 아직 유예 시간 안 - 계속 지켜본다
+                    active_subs.append(item)
                     continue
 
                 active_subs.append(item)
