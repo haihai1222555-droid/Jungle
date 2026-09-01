@@ -322,13 +322,18 @@
   <!-- 상세 정보 모달 (기기 클릭 시 팝업) -->
   <div class="modal-overlay" id="detailModal">
     <div class="modal-card">
-      <button class="modal-close" id="modalClose">&times;</button>
-      <div class="modal-header">
-        <div class="modal-badge" id="mZoneBadge">남성 전용</div>
-        <h2 class="modal-title" id="mTowerTitle">워시타워 1호기</h2>
+      <div class="modal-header-bar">
+        <div class="modal-header-info">
+          <div class="modal-badge" id="mZoneBadge">남성 전용</div>
+          <h2 class="modal-title" id="mTowerTitle">워시타워 1호기</h2>
+        </div>
+        <button class="modal-close" id="modalClose" title="닫기">&times;</button>
       </div>
       <div class="modal-body" id="mBodyContent">
         <!-- 상세 스펙 및 에러 가이드 렌더링 -->
+      </div>
+      <div class="modal-footer-bar">
+        <button type="button" class="btn-modal-close-bottom" id="btnModalCloseBottom">닫기</button>
       </div>
     </div>
   </div>

@@ -2022,17 +2022,20 @@ if (btnVoiceMic) {
 }
 
 const modalCloseBtn = document.getElementById('modalClose');
-if (modalCloseBtn) {
-  modalCloseBtn.onclick = () => {
-    const dm = document.getElementById('detailModal');
-    if (dm) dm.classList.remove('open');
-  };
+const btnModalCloseBottom = document.getElementById('btnModalCloseBottom');
+
+function closeModal() {
+  const dm = document.getElementById('detailModal');
+  if (dm) dm.classList.remove('open');
 }
+
+if (modalCloseBtn) modalCloseBtn.onclick = closeModal;
+if (btnModalCloseBottom) btnModalCloseBottom.onclick = closeModal;
 
 const detailModalOverlay = document.getElementById('detailModal');
 if (detailModalOverlay) {
   detailModalOverlay.onclick = (e) => {
-    if (e.target.id === 'detailModal') e.target.classList.remove('open');
+    if (e.target.id === 'detailModal') closeModal();
   };
 }
 

@@ -2148,7 +2148,7 @@ body.light-theme .unit-error-chip {
 }
 
 /* ---------------------------------------------
-   Detail Modal
+   Detail Modal (100% Mobile Viewport Compliant)
    --------------------------------------------- */
 .modal-overlay {
   position: fixed;
@@ -2156,13 +2156,14 @@ body.light-theme .unit-error-chip {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(8px);
-  z-index: 1000;
+  background: rgba(0, 0, 0, 0.78);
+  backdrop-filter: blur(10px);
+  z-index: 10000;
   display: none;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  padding: 16px;
+  box-sizing: border-box;
 }
 .modal-overlay.open {
   display: flex;
@@ -2173,43 +2174,102 @@ body.light-theme .unit-error-chip {
   border: 1px solid var(--border-subtle);
   border-radius: 20px;
   width: 100%;
-  max-width: 500px;
-  padding: 24px;
+  max-width: 480px;
+  max-height: 88vh; /* 화면을 벗어나지 않도록 최대 높이 고정 */
+  display: flex;
+  flex-direction: column;
   position: relative;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.8);
   animation: modal-up 0.25s ease-out;
+  overflow: hidden;
 }
 @keyframes modal-up {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(20px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  background: #141720;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.modal-header-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.modal-badge {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 6px;
+  width: fit-content;
+}
+.modal-title {
+  font-size: 19px;
+  font-weight: 900;
+  color: var(--text-main);
+  margin: 0;
 }
 
 .modal-close {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  background: none;
-  border: none;
-  font-size: 24px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
   color: var(--text-dim);
   cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
 }
-.modal-close:hover { color: var(--text-main); }
+.modal-close:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.4);
+}
 
-.modal-header {
-  margin-bottom: 20px;
+.modal-body {
+  padding: 16px 18px;
+  overflow-y: auto; /* 내용이 길면 내부에서 부드럽게 스크롤 */
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
 }
-.modal-badge {
-  display: inline-block;
-  font-size: 11px;
-  font-weight: 800;
-  padding: 2px 8px;
-  border-radius: 6px;
-  margin-bottom: 6px;
+
+.modal-footer-bar {
+  padding: 12px 18px;
+  background: #141720;
+  border-top: 1px solid var(--border-subtle);
+  flex-shrink: 0;
 }
-.modal-title {
-  font-size: 22px;
-  font-weight: 900;
+
+.btn-modal-close-bottom {
+  width: 100%;
+  padding: 11px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn-modal-close-bottom:hover {
+  background: rgba(0, 232, 122, 0.15);
+  border-color: var(--jungle-green);
+  color: var(--jungle-green);
 }
 
 .modal-info-row {
@@ -3405,6 +3465,14 @@ body.light-theme .modal-card {
   border: 1px solid #cbd5e1 !important;
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2) !important;
 }
+body.light-theme .modal-header-bar {
+  background: #f8fafc !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+}
+body.light-theme .modal-footer-bar {
+  background: #f8fafc !important;
+  border-top: 1px solid #e2e8f0 !important;
+}
 body.light-theme .modal-title {
   color: #0f172a !important;
 }
@@ -3413,16 +3481,21 @@ body.light-theme .modal-close {
   color: #64748b !important;
   border: 1px solid #cbd5e1 !important;
   border-radius: 8px !important;
-  width: 32px !important;
-  height: 32px !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  font-size: 20px !important;
 }
 body.light-theme .modal-close:hover {
+  background: #fee2e2 !important;
+  color: #ef4444 !important;
+  border-color: #fca5a5 !important;
+}
+body.light-theme .btn-modal-close-bottom {
+  background: #f1f5f9 !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #334155 !important;
+}
+body.light-theme .btn-modal-close-bottom:hover {
   background: #e2e8f0 !important;
-  color: #0f172a !important;
+  border-color: #059669 !important;
+  color: #059669 !important;
 }
 body.light-theme .modal-info-row {
   border-bottom: 1px solid #f1f5f9 !important;
