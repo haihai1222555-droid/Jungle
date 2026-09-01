@@ -4,6 +4,10 @@
    ========================================================= */
 
 :root {
+  /* 🔤 통일된 타이포그래피 & 폰트 시스템 */
+  --font-sans: 'Pretendard Variable', 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Apple SD Gothic Neo', 'Malgun Gothic', '맑은 고딕', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+
   --bg-main: #0a0c10;
   --bg-card: rgba(22, 26, 36, 0.75);
   --bg-card-hover: rgba(30, 35, 48, 0.9);
@@ -72,11 +76,16 @@ body.light-theme {
   --wt-bezel: #cbd5e1;
 }
 
-*, button, input, textarea, select {
+
+code, kbd, samp, pre {
+  font-family: var(--font-mono);
+}
+
+*, *::before, *::after, button, input, textarea, select {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
-  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -84,7 +93,7 @@ body.light-theme {
 body {
   background-color: var(--bg-main);
   color: var(--text-main);
-  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  font-family: var(--font-sans);
   min-height: 100vh;
   overflow-x: hidden;
   position: relative;
@@ -238,7 +247,7 @@ body {
   font-weight: 500;
 }
 .sync-time {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   color: var(--text-main);
   font-weight: 700;
 }
@@ -470,7 +479,7 @@ body {
   font-weight: 600;
 }
 .stat-val {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 18px;
   font-weight: 800;
 }
@@ -527,7 +536,7 @@ body {
   white-space: nowrap;
 }
 .stale-time {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-weight: 800;
   color: #f59e0b;
   white-space: nowrap;
@@ -707,7 +716,7 @@ body {
 .gt-hint {
   font-size: 11px;
   color: var(--text-dim);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
 }
 
 .gt-grid {
@@ -853,7 +862,7 @@ body {
 }
 
 .gt-time {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 800;
   color: var(--text-main);
@@ -876,7 +885,7 @@ body {
 }
 .gt-stat-metric b {
   color: var(--text-main);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
 }
 
 .gt-tip {
@@ -1067,7 +1076,7 @@ body {
   font-weight: 600;
 }
 .floor-wall-tag {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 800;
   color: var(--text-dim);
@@ -1536,7 +1545,7 @@ body {
 }
 
 .unit-timer {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 15px;
   font-weight: 800;
   color: var(--text-main);
@@ -1702,7 +1711,7 @@ body.light-theme .unit-error-chip {
   border: 1px solid rgba(255, 255, 255, 0.03);
 }
 .center-bar-brand {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 8px;
   font-weight: 800;
   letter-spacing: 1.5px;
@@ -1733,7 +1742,7 @@ body.light-theme .unit-error-chip {
   padding-top: 4px;
 }
 .wt-cycle-count {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
 }
 .wt-error-banner {
   background: rgba(239, 68, 68, 0.12);
@@ -2280,7 +2289,7 @@ body.light-theme .unit-error-chip {
   font-size: 13px;
 }
 .modal-info-label { color: var(--text-dim); }
-.modal-info-value { font-weight: 700; color: var(--text-main); font-family: 'JetBrains Mono', monospace; }
+.modal-info-value { font-weight: 700; color: var(--text-main); font-family: var(--font-mono); }
 .modal-val-blue { color: #93c5fd; }
 .modal-val-cyan { color: #38bdf8; }
 .modal-val-amber { color: #f59e0b; }

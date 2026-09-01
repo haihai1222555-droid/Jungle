@@ -9,13 +9,13 @@
   "orientation": "portrait",
   "icons": [
     {
-      "src": "/jungle-logo.png",
+      "src": "/jungle-logo-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/jungle-logo.png",
+      "src": "/jungle-logo-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

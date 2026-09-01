@@ -717,12 +717,18 @@ function toggleLaundryAlarm(towerId, unitType, deviceName, remainMinutes) {
     }
 
     const targetMs = Date.now() + Math.max(1, remainMinutes) * 60 * 1000;
+    // 등록 시점의 누적 가동 횟수를 남겨둔다.
+    // 나중에 이 값이 늘어나 있으면 '내가 등록한 사이클은 이미 끝났다'는 확실한 신호다.
+    const _tower = TOWERS.find(t => t.id === towerId);
+    const cycleAtRegister = _tower ? globalStatusData[_tower.name]?.washer?.cycle?.cycleCount : undefined;
+
     const newAlarm = {
       key,
       towerId,
       unitType,
       deviceName,
       targetMs,
+      cycleAtRegister,
       remainMinutes,
       registeredAt: Date.now(),
       notified5Min: false,
@@ -749,6 +755,35 @@ function toggleLaundryAlarm(towerId, unitType, deviceName, remainMinutes) {
 
   renderTowers();
   updateAlarmDockUI();
+}
+
+// 등록했던 그 사이클이 이미 끝났는지 판정한다.
+//
+// 앱을 끈 사이에 빨래가 끝나면 이 화면의 자동 해제 코드가 돌지 못해 등록이 그대로 남는다.
+// 그 상태로 다음 사람이 같은 기기를 쓰면 '남의 빨래'에 5분 전 알림이 울린다.
+const STALE_GRACE_MS = 40 * 60 * 1000; // 건조기 습도 감지 연장(최대 20~30분)을 넉넉히 넘기는 여유
+
+function isAlarmStale(item, towerData, now) {
+  // 1) 세탁기: 누적 가동 횟수가 늘었으면 내 사이클은 확실히 종료됨
+  const nowCycle = towerData?.washer?.cycle?.cycleCount;
+  if (item.unitType === 'washer'
+      && typeof item.cycleAtRegister === 'number'
+      && typeof nowCycle === 'number'
+      && nowCycle > item.cycleAtRegister) {
+    return true;
+  }
+  // 2) 건조기는 누적 횟수가 없으므로, 예상 완료 시각을 크게 지났으면 지난 빨래로 본다
+  return now > item.targetMs + STALE_GRACE_MS;
+}
+
+// 지난 빨래 정리용: 알림음/토스트 없이 조용히 해제한다
+function removeLaundryAlarmSilently(key) {
+  const idx = myLaundryAlarms.findIndex(a => a.key === key);
+  if (idx < 0) return;
+  const removed = myLaundryAlarms.splice(idx, 1)[0];
+  saveMyAlarms();
+  removePushAlarmFromServer(removed.key);
+  console.log('[Alarm] 지난 사이클 알림 자동 해제:', removed.deviceName);
 }
 
 // 특정 선택 기기 알림만 삭제
@@ -847,6 +882,7 @@ setInterval(() => {
 
   const now = Date.now();
   let changed = false;
+  const staleKeys = [];
 
   myLaundryAlarms.forEach(item => {
     const tower = TOWERS.find(t => t.id === item.towerId);
@@ -854,6 +890,13 @@ setInterval(() => {
     const unitData = item.unitType === 'dryer' ? (data.dryer || {}) : (data.washer || {});
     const unitTimer = unitData.timer || {};
     const runState = unitData.runState?.currentState || 'POWER_OFF';
+
+    // 🧹 0) 내가 등록했던 사이클이 이미 끝났으면 조용히 해제하고 건너뛴다.
+    //       (그대로 두면 다음 사람 빨래에 내 알림이 울린다)
+    if (isAlarmStale(item, data, now)) {
+      staleKeys.push(item.key);
+      return;
+    }
 
     // ⚠️ 1) 내가 등록한 특정 기기 가동 중 에러/중단 발생 시 즉시 긴급 알림
     const isError = runState === 'ERROR' || !!unitData.error || (data.error && (item.unitType === 'dryer' ? data.dryer?.error : data.washer?.error));
@@ -870,7 +913,7 @@ setInterval(() => {
       if ('Notification' in window && Notification.permission === 'granted') {
         new Notification(`🚨 [긴급 점검] ${item.deviceName} 가동 중단!`, {
           body: `회원님이 사용 중인 ${item.deviceName}에 오류(${diag.title})가 발생하여 동작이 멈췄습니다. 세탁실을 확인해 주세요!`,
-          icon: 'https://cdn-icons-png.flaticon.com/512/564/564619.png'
+          icon: '/jungle-logo-192.png'
         });
       }
     }
@@ -894,7 +937,7 @@ setInterval(() => {
       if ('Notification' in window && Notification.permission === 'granted') {
         new Notification(`🧺 [선택 기기 알림] ${item.deviceName} 5분 전!`, {
           body: `회원님이 등록하신 ${item.deviceName} 가동이 약 5분 뒤 완료됩니다. 세탁실로 이동해 주세요!`,
-          icon: 'https://cdn-icons-png.flaticon.com/512/2954/2954893.png'
+          icon: '/jungle-logo-192.png'
         });
       }
     }
@@ -913,7 +956,7 @@ setInterval(() => {
       if ('Notification' in window && Notification.permission === 'granted') {
         new Notification(`🏁 [선택 기기 완료] ${item.deviceName} 완료!`, {
           body: `회원님이 등록하신 ${item.deviceName} 가동이 모두 끝났습니다. 세탁실에서 빨래를 수거해 주세요!`,
-          icon: 'https://cdn-icons-png.flaticon.com/512/2954/2954893.png'
+          icon: '/jungle-logo-192.png'
         });
       }
 
@@ -923,6 +966,11 @@ setInterval(() => {
       }, 1000);
     }
   });
+
+  if (staleKeys.length > 0) {
+    staleKeys.forEach(removeLaundryAlarmSilently);
+    renderTowers();
+  }
 
   if (changed) {
     saveMyAlarms();
