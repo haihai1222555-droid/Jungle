@@ -1,0 +1,8 @@
+start_server.py
+Dockerfile
+docker-compose.yml
+requirements-docker.txt
+*.log
+push_subscriptions.json
+vapid_private.pem
+vapid_public.pem
