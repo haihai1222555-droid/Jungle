@@ -2,19 +2,17 @@
    Jungle Laundry Dashboard 2.0 - Application Logic
    ========================================================= */
 
-// API는 항상 같은 출처의 프록시를 통해 호출한다.
-// (배포: vercel.json 의 rewrite / 로컬: start_server.py 의 프록시)
+// API는 항상 같은 출처의 프록시(start_server.py)를 통해 호출한다.
 // ※ 원본 터널로 브라우저가 직접 호출하면 CORS 로 차단되므로 프록시가 반드시 필요하다.
-//   터널 주소가 바뀌면 vercel.json 만 고치면 된다. 이 파일은 손댈 필요 없다.
+//   원본 주소가 바뀌면 Render 환경변수 TARGET_BASE 만 바꾸면 된다. 코드는 손댈 필요 없다.
 const API_STATUS = '/api/status';
 const API_STATS  = '/api/stats?days=7';
 
 // 🔔 백그라운드 푸시(앱을 꺼도 오는 알림) 백엔드 주소.
 //    비워두면 같은 출처를 쓴다 → 로컬 start_server.py 에서 그대로 동작.
-//    Vercel 배포본에는 푸시 백엔드가 없으므로, Render 주소를 여기에 넣어야
-//    앱을 꺼도 알림이 온다. 예) 'https://jungle-laundry.onrender.com'
-//    비워두면 알림은 '화면을 보고 있는 동안'만 동작한다.
-const PUSH_API_BASE = 'https://jungle-wash.onrender.com';
+//    사이트와 푸시 백엔드가 같은 서버(Render)에서 돌므로 비워두면 된다.
+//    프런트를 다른 곳에 따로 올릴 때만 그 백엔드 주소를 여기에 적는다.
+const PUSH_API_BASE = '';
 const REFRESH_INTERVAL_SEC = 20;
 
 // 워시타워 9대 메타데이터

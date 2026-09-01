@@ -6,7 +6,10 @@
 :root {
   /* 🔤 통일된 타이포그래피 & 폰트 시스템 */
   --font-sans: 'Pretendard Variable', 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Apple SD Gothic Neo', 'Malgun Gothic', '맑은 고딕', sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  /* JetBrains Mono 에는 한글 글리프가 없다. 그대로 두면 '5대', '24분', '대기 중' 처럼
+     숫자와 한글이 섞인 곳에서 한글만 시스템 고정폭 폰트로 떨어져 주변과 달라 보인다.
+     바로 뒤에 Pretendard 를 두어 숫자는 JetBrains Mono, 한글은 Pretendard 로 그리게 한다. */
+  --font-mono: 'JetBrains Mono', 'Pretendard Variable', 'Pretendard', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 
   --bg-main: #0a0c10;
   --bg-card: rgba(22, 26, 36, 0.75);
@@ -81,7 +84,19 @@ code, kbd, samp, pre {
   font-family: var(--font-mono);
 }
 
-*, *::before, *::after, button, input, textarea, select {
+/* 전체 선택자로 font-family 를 박으면 자식이 부모 폰트를 물려받지 못한다.
+   (숫자용 폰트를 지정한 요소 안의 <b>, <span> 이 제각각으로 보이던 원인)
+   폰트는 body 에서 한 번만 정하고 상속되게 둔다. */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 폼 요소는 브라우저 기본 폰트가 강해서 상속이 안 되므로 명시적으로 지정한다 */
+button, input, textarea, select {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
