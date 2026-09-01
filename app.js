@@ -1725,8 +1725,6 @@ ${compactStatus}
           if (fullText.trim()) {
             bubbleEl.innerHTML = fullText.replace(/\n/g, '<br>');
             chatHistoryBuffer.push({ role: 'assistant', content: fullText });
-            const cleanSpeak = fullText.replace(/[*#•`]/g, '').replace(/<[^>]*>/g, '');
-            speakWithTts(cleanSpeak);
             return;
           }
         }
@@ -1791,8 +1789,6 @@ ${compactStatus}
           if (fullText.trim()) {
             bubbleEl.innerHTML = fullText.replace(/\n/g, '<br>');
             chatHistoryBuffer.push({ role: 'assistant', content: fullText });
-            const cleanSpeak = fullText.replace(/[*#•`]/g, '').replace(/<[^>]*>/g, '');
-            speakWithTts(cleanSpeak);
             return;
           }
         }
@@ -1812,17 +1808,8 @@ function jsonString(obj) {
 }
 
 function speakWithTts(text) {
-  try {
-    if ('speechSynthesis' in window && text) {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = 'ko-KR';
-      utter.rate = 1.05;
-      window.speechSynthesis.speak(utter);
-    }
-  } catch (e) {
-    console.warn('TTS SpeechSynthesis error:', e);
-  }
+  // 공용 기숙사/세탁실 환경을 고려하여 음성 TTS는 비활성화 (텍스트 챗 전용)
+  return;
 }
 
 // 고지능 로컬 규칙/상황별 응답 엔진 (Fallback)
@@ -1937,7 +1924,6 @@ function fallbackLocalNlp(q, isNoKey = false) {
   }
 
   appendChatMessage('ai', answer);
-  speakWithTts(speakText);
 }
 
 // 10. 이벤트 리스너 & 음성 인식 (Web Speech API)
