@@ -1,0 +1,27 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/status",
+      "destination": "https://miracle-beautifully-onto-ser.trycloudflare.com/api/status"
+    },
+    {
+      "source": "/api/stats",
+      "destination": "https://miracle-beautifully-onto-ser.trycloudflare.com/api/stats?days=7"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/sw.js",
+      "headers": [
+        {
+          "key": "Service-Worker-Allowed",
+          "value": "/"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    }
+  ]
+}

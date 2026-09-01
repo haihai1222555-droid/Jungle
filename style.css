@@ -1,0 +1,3469 @@
+/* =========================================================
+   Jungle Laundry Dashboard 2.0 - Theme & Styling
+   Inspired by KRAFTON JUNGLE & Real LG WashTower Hardware
+   ========================================================= */
+
+:root {
+  --bg-main: #0a0c10;
+  --bg-card: rgba(22, 26, 36, 0.75);
+  --bg-card-hover: rgba(30, 35, 48, 0.9);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-active: rgba(0, 232, 122, 0.4);
+  
+  --text-main: #f3f4f6;
+  --text-muted: #9ca3af;
+  --text-dim: #6b7280;
+  
+  /* 브랜드 & 상태 컬러 */
+  --jungle-green: #00e87a;
+  --jungle-glow: rgba(0, 232, 122, 0.25);
+  
+  --color-men: #3b82f6;
+  --color-men-bg: rgba(59, 130, 246, 0.12);
+  --color-common: #a855f7;
+  --color-common-bg: rgba(168, 85, 247, 0.12);
+  --color-women: #ec4899;
+  --color-women-bg: rgba(236, 72, 153, 0.12);
+  
+  --color-running: #00e87a;
+  --color-drying: #f59e0b;
+  --color-wrinkle: #38bdf8;
+  --color-error: #ef4444;
+  --color-idle: #6b7280;
+
+  /* 워시타워 하드웨어 메탈릭 룩 */
+  --wt-chassis: #171920;
+  --wt-glass: #0c0e14;
+  --wt-ring: #262a36;
+  --wt-bezel: #323847;
+}
+
+/* ☀️ 라이트 모드 (화이트/클린 테마) */
+body.light-theme {
+  --bg-main: #f0f4f8;
+  --bg-card: rgba(255, 255, 255, 0.95);
+  --bg-card-hover: #ffffff;
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-active: rgba(0, 180, 90, 0.5);
+  
+  --text-main: #0f172a;
+  --text-muted: #475569;
+  --text-dim: #64748b;
+  
+  --jungle-green: #059669;
+  --jungle-glow: rgba(5, 150, 105, 0.2);
+  
+  --color-men: #1d4ed8;
+  --color-men-bg: #eff6ff;
+  --color-common: #7e22ce;
+  --color-common-bg: #faf5ff;
+  --color-women: #be185d;
+  --color-women-bg: #fdf2f8;
+  
+  --color-running: #059669;
+  --color-drying: #d97706;
+  --color-wrinkle: #0284c7;
+  --color-error: #dc2626;
+  --color-idle: #94a3b8;
+
+  --wt-chassis: #ffffff;
+  --wt-glass: #f8fafc;
+  --wt-ring: #e2e8f0;
+  --wt-bezel: #cbd5e1;
+}
+
+*, button, input, textarea, select {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+  position: relative;
+  line-height: 1.5;
+  letter-spacing: -0.2px;
+}
+
+/* 앰비언트 글로우 배경 */
+.ambient-glow {
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(120px);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.15;
+}
+.glow-1 {
+  width: 500px;
+  height: 500px;
+  top: -100px;
+  left: 10%;
+  background: radial-gradient(circle, var(--jungle-green), transparent 70%);
+}
+.glow-2 {
+  width: 600px;
+  height: 600px;
+  bottom: 5%;
+  right: 5%;
+  background: radial-gradient(circle, #3b82f6, transparent 70%);
+}
+
+/* ---------------------------------------------
+   Header
+   --------------------------------------------- */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(10, 12, 16, 0.85);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 14px 24px;
+}
+
+.header-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.brand-group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-badge {
+  background: linear-gradient(135deg, rgba(0, 232, 122, 0.15), rgba(0, 232, 122, 0.05));
+  border: 1px solid var(--jungle-green);
+  color: var(--jungle-green);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  text-transform: uppercase;
+}
+
+.brand-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-main);
+  letter-spacing: -0.3px;
+}
+.brand-title .highlight {
+  color: var(--jungle-green);
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.btn-config-ai {
+  background: rgba(0, 232, 122, 0.1);
+  border: 1px solid rgba(0, 232, 122, 0.35);
+  color: var(--jungle-green);
+  font-weight: 800;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+.btn-config-ai:hover {
+  background: rgba(0, 232, 122, 0.2);
+  border-color: var(--jungle-green);
+  transform: translateY(-1px);
+}
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--jungle-green);
+  box-shadow: 0 0 10px var(--jungle-green);
+  animation: pulse-dot 2s infinite ease-in-out;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+.status-text {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.sync-time {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-main);
+  font-weight: 700;
+}
+
+.btn-refresh {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn-refresh:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--jungle-green);
+}
+.refresh-icon {
+  width: 18px;
+  height: 18px;
+  transition: transform 0.4s ease;
+}
+.btn-refresh.spinning .refresh-icon {
+  transform: rotate(360deg);
+}
+
+/* 상단 헤더 다크/라이트 테마 전환 버튼 */
+.btn-theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 11px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+.btn-theme-toggle:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-1px);
+}
+
+/* 상단 헤더 내 알리미 바로가기 버튼 */
+.btn-alarm-center {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 232, 122, 0.1);
+  border: 1px solid rgba(0, 232, 122, 0.3);
+  color: var(--jungle-green);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+.btn-alarm-center:hover {
+  background: rgba(0, 232, 122, 0.2);
+  border-color: var(--jungle-green);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 232, 122, 0.25);
+}
+.btn-alarm-center.has-active-alarms {
+  background: rgba(0, 232, 122, 0.2);
+  animation: pulse-alarm-btn 2s infinite;
+}
+@keyframes pulse-alarm-btn {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 232, 122, 0.4); }
+  50% { box-shadow: 0 0 10px rgba(0, 232, 122, 0.3); }
+}
+.alarm-badge-count {
+  background: var(--jungle-green);
+  color: #06110a;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 1px 6px;
+  border-radius: 10px;
+  min-width: 16px;
+  text-align: center;
+}
+
+/* ---------------------------------------------
+   Main Content Layout
+   --------------------------------------------- */
+.main-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  position: relative;
+  z-index: 1;
+}
+
+/* 1. Summary Hero */
+.summary-hero {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 992px) {
+  .summary-hero {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hero-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  padding: 20px 24px;
+  backdrop-filter: blur(20px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.dual-recommendation-card {
+  background: linear-gradient(135deg, rgba(22, 26, 36, 0.95), rgba(15, 23, 42, 0.85));
+}
+
+.dual-rec-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+@media (max-width: 768px) {
+  .dual-rec-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.rec-divider {
+  display: none;
+}
+
+.rec-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+.rec-column.rec-men {
+  border-color: rgba(59, 130, 246, 0.25);
+  background: rgba(59, 130, 246, 0.04);
+}
+.rec-column.rec-women {
+  border-color: rgba(236, 72, 153, 0.25);
+  background: rgba(236, 72, 153, 0.04);
+}
+
+.rec-col-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.rec-gender-tag {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.3px;
+}
+.tag-men { background: var(--color-men-bg); color: var(--color-men); }
+.tag-women { background: var(--color-women-bg); color: var(--color-women); }
+
+.rec-status-pill {
+  font-size: 10px;
+  font-weight: 800;
+  background: rgba(0, 232, 122, 0.15);
+  color: var(--jungle-green);
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+
+.rec-target-title {
+  font-size: 17px;
+  font-weight: 900;
+  color: var(--text-main);
+  letter-spacing: -0.3px;
+}
+
+.rec-target-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.quick-stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stat-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.stat-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 800;
+}
+.val-green { color: var(--jungle-green); }
+.val-purple { color: var(--color-common); }
+.val-pink { color: var(--color-women); }
+.val-red { color: var(--color-error); }
+
+/* 세탁물 방치 알리미 (상하 여백 최적화 및 슬림 스크롤바) */
+.stale-alert-card {
+  border-left: 4px solid #f59e0b;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 6px;
+}
+.stale-alert-card .card-header {
+  margin-bottom: 2px;
+}
+.stale-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  max-height: 155px;
+  padding-right: 4px;
+  margin-top: 4px;
+}
+.stale-list::-webkit-scrollbar {
+  width: 4px;
+}
+.stale-list::-webkit-scrollbar-thumb {
+  background: rgba(245, 158, 11, 0.4);
+  border-radius: 4px;
+}
+.stale-list::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 4px;
+}
+.stale-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  gap: 8px;
+}
+.stale-tower {
+  font-weight: 700;
+  color: #fcd34d;
+  white-space: nowrap;
+}
+.stale-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 800;
+  color: #f59e0b;
+  white-space: nowrap;
+}
+.stale-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 14px 0;
+}
+
+/* ---------------------------------------------
+   🚦 2. Congestion Traffic Light & Golden Time Section
+   --------------------------------------------- */
+.congestion-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.congestion-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(20px);
+}
+
+.congestion-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.traffic-light-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.traffic-signal-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  background: #0d1017;
+  border: 2px solid rgba(255, 255, 255, 0.08);
+  border-radius: 50%;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8);
+}
+
+.signal-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  transition: all 0.3s ease;
+}
+.signal-dot.dot-blue {
+  background: #38bdf8;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.8), inset 0 0 4px #fff;
+  animation: pulse-traffic-blue 2s infinite;
+}
+.signal-dot.dot-green {
+  background: #00e87a;
+  box-shadow: 0 0 16px rgba(0, 232, 122, 0.8), inset 0 0 4px #fff;
+  animation: pulse-traffic-green 2s infinite;
+}
+.signal-dot.dot-yellow {
+  background: #facc15;
+  box-shadow: 0 0 16px rgba(250, 204, 21, 0.8), inset 0 0 4px #fff;
+  animation: pulse-traffic-yellow 2s infinite;
+}
+.signal-dot.dot-orange {
+  background: #f97316;
+  box-shadow: 0 0 16px rgba(249, 115, 22, 0.8), inset 0 0 4px #fff;
+  animation: pulse-traffic-orange 2s infinite;
+}
+.signal-dot.dot-red {
+  background: #ef4444;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.8), inset 0 0 4px #fff;
+  animation: pulse-traffic-red 1.5s infinite;
+}
+
+@keyframes pulse-traffic-blue {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 12px rgba(56, 189, 248, 0.6); }
+  50% { transform: scale(1.08); box-shadow: 0 0 20px rgba(56, 189, 248, 1); }
+}
+@keyframes pulse-traffic-green {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 12px rgba(0, 232, 122, 0.6); }
+  50% { transform: scale(1.08); box-shadow: 0 0 20px rgba(0, 232, 122, 1); }
+}
+@keyframes pulse-traffic-yellow {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 12px rgba(250, 204, 21, 0.6); }
+  50% { transform: scale(1.08); box-shadow: 0 0 20px rgba(250, 204, 21, 1); }
+}
+@keyframes pulse-traffic-orange {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 12px rgba(249, 115, 22, 0.6); }
+  50% { transform: scale(1.08); box-shadow: 0 0 20px rgba(249, 115, 22, 1); }
+}
+@keyframes pulse-traffic-red {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 12px rgba(239, 68, 68, 0.6); }
+  50% { transform: scale(1.1); box-shadow: 0 0 22px rgba(239, 68, 68, 1); }
+}
+
+.traffic-text-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.traffic-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text-main);
+}
+
+.traffic-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.congestion-badge {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 12px;
+  border-radius: 12px;
+}
+.badge-blue { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); }
+.badge-green { background: rgba(0, 232, 122, 0.15); color: #00e87a; border: 1px solid rgba(0, 232, 122, 0.35); }
+.badge-yellow { background: rgba(234, 179, 8, 0.15); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.4); }
+.badge-orange { background: rgba(249, 115, 22, 0.15); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.4); }
+.badge-red { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+
+/* 골든타임 타임테이블 */
+.golden-time-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 14px;
+}
+
+.gt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.gt-header-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.gt-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-main);
+  letter-spacing: 0.3px;
+}
+.gt-current-tag {
+  font-size: 11px;
+  background: rgba(0, 232, 122, 0.15);
+  border: 1px solid rgba(0, 232, 122, 0.35);
+  color: var(--jungle-green);
+  padding: 3px 9px;
+  border-radius: 20px;
+  font-weight: 600;
+}
+.gt-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.gt-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+}
+@media (max-width: 1200px) {
+  .gt-grid {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+}
+@media (max-width: 768px) {
+  .gt-grid {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    padding-bottom: 8px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .gt-grid > .gt-card {
+    min-width: 200px;
+    scroll-snap-align: start;
+    flex-shrink: 0;
+  }
+}
+
+.gt-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: all 0.25s ease;
+  position: relative;
+}
+.gt-card:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.gt-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.gt-now-chip {
+  font-size: 10px;
+  font-weight: 800;
+  background: var(--jungle-green);
+  color: #06110a;
+  padding: 1px 6px;
+  border-radius: 6px;
+  animation: pulse-now 1.5s infinite;
+}
+@keyframes pulse-now {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 232, 122, 0.6); }
+  50% { transform: scale(1.05); box-shadow: 0 0 8px rgba(0, 232, 122, 0.4); }
+}
+
+.gt-card.gt-current-active {
+  box-shadow: 0 0 16px rgba(0, 232, 122, 0.15);
+}
+
+.gt-card.gt-best {
+  border: 1.5px solid rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.05);
+}
+.gt-card.gt-good {
+  border: 1.5px solid rgba(0, 232, 122, 0.4);
+  background: rgba(0, 232, 122, 0.05);
+}
+.gt-card.gt-normal {
+  border: 1.5px solid rgba(234, 179, 8, 0.4);
+  background: rgba(234, 179, 8, 0.04);
+}
+.gt-card.gt-caution {
+  border: 1.5px solid rgba(249, 115, 22, 0.45);
+  background: rgba(249, 115, 22, 0.05);
+}
+.gt-card.gt-busy {
+  border: 1.5px solid rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.gt-card.gt-current-active.gt-best {
+  border: 2px solid #38bdf8 !important;
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.35);
+}
+.gt-card.gt-current-active.gt-good {
+  border: 2px solid #00e87a !important;
+  box-shadow: 0 0 18px rgba(0, 232, 122, 0.35);
+}
+.gt-card.gt-current-active.gt-normal {
+  border: 2px solid #facc15 !important;
+  box-shadow: 0 0 18px rgba(250, 204, 21, 0.35);
+}
+.gt-card.gt-current-active.gt-caution {
+  border: 2px solid #f97316 !important;
+  box-shadow: 0 0 18px rgba(249, 115, 22, 0.35);
+}
+.gt-card.gt-current-active.gt-busy {
+  border: 2px solid #ef4444 !important;
+  box-shadow: 0 0 18px rgba(239, 68, 68, 0.35);
+}
+
+.gt-badge {
+  font-size: 10.5px;
+  font-weight: 800;
+  padding: 3px 9px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.gt-badge.badge-blue {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+.gt-badge.badge-green {
+  background: rgba(0, 232, 122, 0.15);
+  color: #00e87a;
+  border: 1px solid rgba(0, 232, 122, 0.35);
+}
+.gt-badge.badge-yellow {
+  background: rgba(234, 179, 8, 0.15);
+  color: #facc15;
+  border: 1px solid rgba(234, 179, 8, 0.4);
+}
+.gt-badge.badge-orange {
+  background: rgba(249, 115, 22, 0.15);
+  color: #fb923c;
+  border: 1px solid rgba(249, 115, 22, 0.4);
+}
+.gt-badge.badge-red {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.gt-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-main);
+}
+.gt-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.gt-stat-metric {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  color: #94a3b8;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.gt-stat-metric b {
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.gt-tip {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.35;
+}
+
+/* ---------------------------------------------
+   Toolbar & Filter Tabs & View Mode Switcher
+   --------------------------------------------- */
+.toolbar-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.toolbar-left-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.zone-tabs {
+  display: flex;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  gap: 4px;
+}
+
+.tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-weight: 700;
+  font-size: 13px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.tab-btn:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.05);
+}
+.tab-btn.active {
+  background: #222736;
+  color: var(--text-main);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.tab-btn.tab-men.active { color: var(--color-men); background: rgba(59, 130, 246, 0.15); border-bottom: 2px solid var(--color-men); }
+.tab-btn.tab-common.active { color: var(--color-common); background: rgba(168, 85, 247, 0.15); border-bottom: 2px solid var(--color-common); }
+.tab-btn.tab-women.active { color: var(--color-women); background: rgba(244, 114, 182, 0.15); border-bottom: 2px solid var(--color-women); }
+
+/* 뷰 모드 전환 버튼 그룹 (카드 뷰 vs 현실 2열 뷰) */
+.view-mode-tabs {
+  display: flex;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 232, 122, 0.25);
+  gap: 4px;
+}
+
+.view-tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-weight: 700;
+  font-size: 12px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+.view-tab-btn:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.05);
+}
+.view-tab-btn.active {
+  background: rgba(0, 232, 122, 0.18);
+  color: var(--jungle-green);
+  box-shadow: 0 2px 8px rgba(0, 232, 122, 0.2);
+  border: 1px solid rgba(0, 232, 122, 0.4);
+}
+
+.view-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.legend-chip .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.legend-idle .dot { background-color: var(--text-dim); }
+.legend-running .dot { background-color: var(--color-running); box-shadow: 0 0 6px var(--color-running); }
+.legend-wrinkle .dot { background-color: var(--color-wrinkle); }
+.legend-error .dot { background-color: var(--color-error); }
+
+/* ---------------------------------------------
+   3. Real WashTower Container & Grid vs Floorplan
+   --------------------------------------------- */
+.washtower-container {
+  width: 100%;
+}
+
+/* 📋 기본 3x3 카드 뷰 */
+.washtower-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+
+@media (max-width: 1100px) {
+  .washtower-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 650px) {
+  .washtower-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 🏢 현실 2열 세탁실 배치 뷰 (Floorplan View) */
+.washtower-floorplan-view {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  background: rgba(12, 17, 29, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 20px;
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.4);
+  position: relative;
+  overflow: hidden;
+}
+
+.floor-line-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: transparent !important;
+  border: none !important;
+}
+
+.floor-line-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.floor-line-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.floor-line-badge {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+.floor-line-badge.tag-men { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+.floor-line-badge.tag-common-women { background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(244, 114, 182, 0.2)); color: #e879f9; border: 1px solid rgba(244, 114, 182, 0.35); }
+
+.floor-line-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.floor-wall-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* 현실 2열 기기 카드 가로 그리드 */
+.floor-cards-row {
+  display: grid;
+  gap: 12px;
+}
+.floor-cards-row.line-5-row {
+  grid-template-columns: repeat(5, minmax(180px, 1fr));
+}
+.floor-cards-row.line-4-row {
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+}
+
+@media (max-width: 1200px) {
+  .floor-cards-row.line-5-row,
+  .floor-cards-row.line-4-row {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    gap: 12px;
+    padding-bottom: 10px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .floor-cards-row > .washtower-card {
+    min-width: 210px;
+    max-width: 250px;
+    scroll-snap-align: start;
+    flex-shrink: 0;
+  }
+}
+
+/* 🏢 현실 2열 뷰 전용 워시타워 카드 고밀도 슬림 최적화 스타일 (핵심 정보 집중 & 보조 정보 생략) */
+.washtower-floorplan-view .washtower-card {
+  padding: 10px 8px;
+  gap: 6px;
+  border-radius: 14px;
+  min-height: auto;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
+}
+
+.washtower-floorplan-view .wt-header {
+  gap: 4px;
+}
+.washtower-floorplan-view .wt-title-group {
+  gap: 4px;
+  white-space: nowrap;
+}
+.washtower-floorplan-view .wt-no {
+  font-size: 15px;
+  font-weight: 900;
+}
+.washtower-floorplan-view .wt-zone-tag {
+  font-size: 8.5px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+.washtower-floorplan-view .wt-status-pill {
+  font-size: 9px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.washtower-floorplan-view .wt-body-hardware {
+  padding: 5px;
+  gap: 4px;
+  border-radius: 10px;
+}
+.washtower-floorplan-view .unit-section {
+  padding: 6px 8px;
+  gap: 8px;
+  border-radius: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+.washtower-floorplan-view .drum-door-wrapper {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+}
+.washtower-floorplan-view .drum-inner-light {
+  width: 12px;
+  height: 12px;
+  font-size: 9px;
+}
+
+.washtower-floorplan-view .unit-meta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.washtower-floorplan-view .unit-type-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+.washtower-floorplan-view .unit-name {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.washtower-floorplan-view .unit-timer-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.washtower-floorplan-view .unit-timer {
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.washtower-floorplan-view .btn-unit-alarm {
+  font-size: 8.5px;
+  padding: 2px 5px;
+  border-radius: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.washtower-floorplan-view .unit-state-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+  margin-top: 1px;
+}
+.washtower-floorplan-view .unit-state-text {
+  font-size: 11px;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.washtower-floorplan-view .unit-course-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2.5px 7px;
+  border-radius: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  letter-spacing: -0.2px;
+}
+
+/* 2열 뷰에서는 중앙 바를 슬림한 LED 인디케이터 라인으로 정돈 */
+.washtower-floorplan-view .wt-center-bar {
+  padding: 2px 6px;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.02);
+}
+.washtower-floorplan-view .center-bar-brand {
+  display: none !important;
+}
+
+/* 2열 뷰에서는 복잡한 부차적 정보(케어 지수 바, 동적 긴 설명)는 생략하여 극도의 시인성 확보 (모달에서 상세 확인 가능) */
+.washtower-floorplan-view .lg-care-box {
+  display: none !important;
+}
+.washtower-floorplan-view .unit-fluc-tag {
+  display: none !important;
+}
+
+/* 🚶‍♂️ 세탁실 중앙 통로 (Aisle Corridor) */
+.floor-aisle-corridor {
+  background: linear-gradient(90deg, rgba(30, 41, 59, 0.6), rgba(15, 23, 42, 0.8), rgba(30, 41, 59, 0.6));
+  border: 1px dashed rgba(0, 232, 122, 0.3);
+  border-radius: 14px;
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.aisle-item {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 5px 12px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.aisle-item.aisle-door {
+  background: rgba(0, 232, 122, 0.15);
+  border-color: var(--jungle-green);
+  color: var(--jungle-green);
+}
+
+.aisle-lane-track {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.aisle-arrow {
+  color: var(--jungle-green);
+  animation: pulse-arrow 1.5s infinite;
+}
+@keyframes pulse-arrow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* 개별 워시타워 기기 카드 (구역별 은은한 다크 틴트 적용) */
+.washtower-card {
+  background: var(--wt-chassis);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+  transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+  cursor: pointer;
+}
+
+/* 👦 남성 전용 (1~5호기): 파란색이 아주 은은하게 감도는 다크 블랙 */
+.washtower-card.wt-card-men {
+  background: linear-gradient(165deg, #0e1526 0%, #080b14 100%);
+  border-color: rgba(59, 130, 246, 0.18);
+  box-shadow: 0 12px 30px rgba(5, 9, 18, 0.6);
+}
+.washtower-card.wt-card-men:hover {
+  transform: translateY(-4px);
+  border-color: rgba(59, 130, 246, 0.45);
+  box-shadow: 0 18px 40px rgba(5, 9, 18, 0.8), 0 0 24px rgba(59, 130, 246, 0.08);
+}
+.washtower-card.wt-card-men .wt-body-hardware {
+  background: rgba(8, 12, 22, 0.85);
+  border-color: rgba(59, 130, 246, 0.1);
+}
+
+/* 🤝 공용 (6~7호기): 보라색이 아주 은은하게 감도는 다크 블랙 */
+.washtower-card.wt-card-common {
+  background: linear-gradient(165deg, #170f24 0%, #0b0713 100%);
+  border-color: rgba(168, 85, 247, 0.18);
+  box-shadow: 0 12px 30px rgba(10, 5, 18, 0.6);
+}
+.washtower-card.wt-card-common:hover {
+  transform: translateY(-4px);
+  border-color: rgba(168, 85, 247, 0.45);
+  box-shadow: 0 18px 40px rgba(10, 5, 18, 0.8), 0 0 24px rgba(168, 85, 247, 0.08);
+}
+.washtower-card.wt-card-common .wt-body-hardware {
+  background: rgba(13, 8, 22, 0.85);
+  border-color: rgba(168, 85, 247, 0.1);
+}
+
+/* 👧 여성 전용 (8~9호기): 로즈/핑크빛이 아주 은은하게 감도는 다크 블랙 */
+.washtower-card.wt-card-women {
+  background: linear-gradient(165deg, #220e1a 0%, #10060d 100%);
+  border-color: rgba(244, 114, 182, 0.18);
+  box-shadow: 0 12px 30px rgba(16, 5, 12, 0.6);
+}
+.washtower-card.wt-card-women:hover {
+  transform: translateY(-4px);
+  border-color: rgba(244, 114, 182, 0.45);
+  box-shadow: 0 18px 40px rgba(16, 5, 12, 0.8), 0 0 24px rgba(244, 114, 182, 0.08);
+}
+.washtower-card.wt-card-women .wt-body-hardware {
+  background: rgba(18, 7, 14, 0.85);
+  border-color: rgba(244, 114, 182, 0.1);
+}
+
+.washtower-card.is-active-wash {
+  border-color: rgba(56, 189, 248, 0.45);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.12);
+}
+.washtower-card.is-active-both {
+  border-color: rgba(0, 232, 122, 0.45);
+  box-shadow: 0 0 16px rgba(0, 232, 122, 0.12);
+}
+.washtower-card.is-active-dry {
+  border-color: rgba(245, 158, 11, 0.45);
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.12);
+}
+.washtower-card.is-error {
+  border-color: rgba(239, 68, 68, 0.6);
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
+}
+
+/* 기기 헤더 (번호, 구역 태그, 전체 상태 배지) */
+.wt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.wt-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.wt-no {
+  font-size: 20px;
+  font-weight: 900;
+  color: var(--text-main);
+  letter-spacing: -0.5px;
+}
+.wt-zone-tag {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.3px;
+}
+.zone-tag-men { background: var(--color-men-bg); color: var(--color-men); }
+.zone-tag-common { background: var(--color-common-bg); color: var(--color-common); }
+.zone-tag-women { background: var(--color-women-bg); color: var(--color-women); }
+
+.wt-status-pill {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: 12px;
+  text-transform: uppercase;
+}
+.pill-both, .pill-running { background: rgba(0, 232, 122, 0.15); color: #00e87a; border: 1px solid rgba(0, 232, 122, 0.35); }
+.pill-washing { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35); }
+.pill-drying { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.35); }
+.pill-idle { background: rgba(255, 255, 255, 0.05); color: var(--text-dim); border: 1px solid rgba(255, 255, 255, 0.12); }
+.pill-error { background: rgba(239, 68, 68, 0.2); color: var(--color-error); border: 1px solid rgba(239, 68, 68, 0.45); }
+
+/* 실물 워시타워 본체 시각화 (상단 건조기 + 중간 컨트롤러 + 하단 세탁기) */
+.wt-body-hardware {
+  background: #111318;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 14px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+
+/* 기기 모듈 단위 (건조기 또는 세탁기) */
+.unit-section {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+  overflow: hidden;
+}
+
+.unit-section.is-running {
+  background: rgba(56, 189, 248, 0.05);
+  border-color: rgba(56, 189, 248, 0.25);
+}
+.unit-section.is-drying {
+  background: rgba(245, 158, 11, 0.04);
+  border-color: rgba(245, 158, 11, 0.2);
+}
+.unit-section.is-error {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+/* 원형 도어 시각화 (실물 글래스 도어) */
+.drum-door-wrapper {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+}
+.drum-door {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: radial-gradient(circle, #0e1117 30%, #1e222e 100%);
+  border: 3px solid var(--wt-bezel);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  box-shadow: inset 0 2px 6px rgba(0,0,0,0.8);
+}
+
+.drum-inner-light {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}
+
+/* 회전 애니메이션 */
+.unit-section.is-running .drum-door {
+  border-color: #38bdf8;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.4), inset 0 0 10px rgba(56, 189, 248, 0.25);
+  animation: spin-drum 3s linear infinite;
+}
+.unit-section.is-drying .drum-door {
+  border-color: var(--color-drying);
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.3), inset 0 0 10px rgba(245, 158, 11, 0.2);
+  animation: spin-drum 4s linear infinite;
+}
+
+@keyframes spin-drum {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* 유닛 정보 및 타이머 */
+.unit-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.unit-type-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.unit-name {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.unit-state-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.unit-state-text {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.unit-state-text.state-active-wash { color: #38bdf8; }
+.unit-state-text.state-active-dry { color: var(--color-drying); }
+.unit-state-text.state-error { color: var(--color-error); }
+
+.unit-course-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2.5px 8px;
+  border-radius: 6px;
+  letter-spacing: -0.2px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.unit-course-badge.course-wash {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+.unit-course-badge.course-dry {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.unit-timer {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text-main);
+  text-align: right;
+  white-space: nowrap;
+}
+.unit-timer.dim {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/* 🔮 동적 시간 변동 예측 태그 & ⚠️ 에러 안내 칩 (동일한 패널 Height 및 디자인으로 일원화) */
+.unit-fluc-tag,
+.unit-error-chip {
+  margin-top: 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  line-height: 1.35;
+  box-sizing: border-box;
+  min-height: 25px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.unit-fluc-tag.fluc-extend {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+.unit-fluc-tag.fluc-normal {
+  background: rgba(0, 232, 122, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(0, 232, 122, 0.3);
+}
+.unit-fluc-tag.fluc-error {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+.unit-fluc-tag.fluc-idle {
+  display: none;
+}
+
+.unit-error-chip {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  animation: pulse-error-chip 2s infinite;
+}
+
+.error-chip-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.error-chip-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes pulse-error-chip {
+  0%, 100% { border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.15); }
+  50% { border-color: rgba(239, 68, 68, 0.8); background: rgba(239, 68, 68, 0.28); }
+}
+
+body.light-theme .unit-fluc-tag.fluc-extend {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #b45309;
+}
+body.light-theme .unit-fluc-tag.fluc-normal {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #059669;
+}
+body.light-theme .unit-fluc-tag.fluc-error,
+body.light-theme .unit-error-chip {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #dc2626;
+}
+
+.washtower-floorplan-view .unit-fluc-tag,
+.washtower-floorplan-view .unit-error-chip {
+  font-size: 9px;
+  padding: 2.5px 6px;
+  margin-top: 3px;
+  min-height: 20px;
+}
+
+/* 중간 중앙 제어판 (Center Control Bar) */
+.wt-center-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: #191c24;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+.center-bar-brand {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+}
+.center-bar-lights {
+  display: flex;
+  gap: 4px;
+}
+.led-indicator {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+.led-indicator.active {
+  background: var(--jungle-green);
+  box-shadow: 0 0 4px var(--jungle-green);
+}
+
+/* 카드 푸터 (에러 메시지 및 사이클 횟수) */
+.wt-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding-top: 4px;
+}
+.wt-cycle-count {
+  font-family: 'JetBrains Mono', monospace;
+}
+.wt-error-banner {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 🧼 LG 권장 케어/청소 지수 박스 스타일 */
+.lg-care-box {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: auto;
+}
+.care-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.care-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-dim);
+  letter-spacing: 0.3px;
+}
+.care-badge {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.care-danger {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+.care-warning {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+.care-good {
+  background: rgba(0, 232, 122, 0.12);
+  color: #4ade80;
+  border: 1px solid rgba(0, 232, 122, 0.3);
+}
+
+.care-progress-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.care-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.care-progress-fill.care-danger { background: #ef4444; }
+.care-progress-fill.care-warning { background: #f59e0b; }
+.care-progress-fill.care-good { background: #00e87a; }
+
+/* 📖 정글러 실전 세탁 1초 치트시트 섹션 */
+.quick-guide-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  padding: 20px 24px;
+  backdrop-filter: blur(20px);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+.quick-guide-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+@media (max-width: 992px) {
+  .guide-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 576px) {
+  .guide-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.guide-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.guide-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(0, 232, 122, 0.3);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.guide-icon {
+  font-size: 26px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.guide-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.guide-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-main);
+}
+
+.guide-course {
+  font-size: 11px;
+  font-weight: 700;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-block;
+  width: fit-content;
+}
+
+.guide-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  margin-top: 2px;
+}
+
+/* ---------------------------------------------
+   5. AI Voice Assistant (Chatbot & Speech)
+   --------------------------------------------- */
+.voice-assistant-section {
+  background: linear-gradient(135deg, rgba(16, 24, 38, 0.95), rgba(10, 14, 23, 0.98));
+  border: 1px solid rgba(0, 232, 122, 0.25);
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.assistant-header-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.assistant-visual {
+  flex-shrink: 0;
+}
+
+.ai-orb {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--jungle-green), #0284c7);
+  box-shadow: 0 0 25px rgba(0, 232, 122, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: float-orb 4s infinite ease-in-out;
+}
+.ai-core {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 12px #ffffff;
+}
+
+@keyframes float-orb {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-4px) scale(1.04); }
+}
+
+.ai-tag {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--jungle-green);
+  letter-spacing: 1px;
+}
+.ai-title {
+  font-size: 18px;
+  font-weight: 800;
+  margin: 1px 0 2px;
+}
+.ai-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* 챗 박스 & 말풍선 */
+.ai-chat-box {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  padding: 16px;
+  max-height: 240px;
+  min-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ai-chat-box::-webkit-scrollbar {
+  width: 4px;
+}
+.ai-chat-box::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 4px;
+}
+
+.chat-message {
+  display: flex;
+  flex-direction: column;
+  animation: msg-appear 0.25s ease-out;
+}
+@keyframes msg-appear {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.ai-msg { align-items: flex-start; }
+.user-msg { align-items: flex-end; }
+
+.msg-bubble {
+  max-width: 85%;
+  padding: 10px 15px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.ai-msg .msg-bubble {
+  background: rgba(30, 41, 59, 0.85);
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom-left-radius: 4px;
+}
+.user-msg .msg-bubble {
+  background: linear-gradient(135deg, #0284c7, #0369a1);
+  color: #ffffff;
+  font-weight: 500;
+  border-bottom-right-radius: 4px;
+  box-shadow: 0 4px 12px rgba(2, 132, 199, 0.25);
+}
+
+/* 추천 질문 칩 영역 간격 확장 및 시원한 레이아웃 */
+.quick-prompt-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 12px 0 8px 0;
+  padding: 4px 2px;
+}
+
+.prompt-guide-label {
+  font-size: 12px;
+  font-weight: 800;
+  color: #94a3b8;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+}
+
+.prompt-chip {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  line-height: 1.2;
+}
+
+.prompt-chip:hover {
+  background: rgba(0, 232, 122, 0.16);
+  border-color: var(--jungle-green);
+  color: var(--jungle-green);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 232, 122, 0.18);
+}
+
+/* 자유 텍스트 & 음성 입력창 */
+.ai-input-bar {
+  display: flex;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  padding: 8px 12px;
+  border-radius: 16px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  margin-top: 4px;
+}
+.ai-input-bar:focus-within {
+  border-color: var(--jungle-green);
+  box-shadow: 0 0 12px rgba(0, 232, 122, 0.15);
+}
+
+.ai-input-field {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 12px;
+  outline: none;
+}
+.ai-input-field::placeholder {
+  color: var(--text-dim);
+}
+
+.btn-voice-mic {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn-voice-mic:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.12);
+}
+.btn-voice-mic.listening {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #ef4444;
+  color: #ef4444;
+  animation: pulse-dot 1s infinite;
+}
+
+.btn-ai-send {
+  background: var(--jungle-green);
+  border: none;
+  color: #0a0c10;
+  font-weight: 800;
+  font-size: 12.5px;
+  padding: 0 16px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 232, 122, 0.25);
+}
+.btn-ai-send svg {
+  stroke: #0a0c10;
+}
+.btn-ai-send:hover {
+  background: #22c55e;
+  color: #0a0c10;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.35);
+}
+
+/* ---------------------------------------------
+   Detail Modal
+   --------------------------------------------- */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-overlay.open {
+  display: flex;
+}
+
+.modal-card {
+  background: #181b24;
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  width: 100%;
+  max-width: 500px;
+  padding: 24px;
+  position: relative;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  animation: modal-up 0.25s ease-out;
+}
+@keyframes modal-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: none;
+  border: none;
+  font-size: 24px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.modal-close:hover { color: var(--text-main); }
+
+.modal-header {
+  margin-bottom: 20px;
+}
+.modal-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+}
+.modal-title {
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.modal-info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 13px;
+}
+.modal-info-label { color: var(--text-dim); }
+.modal-info-value { font-weight: 700; color: var(--text-main); font-family: 'JetBrains Mono', monospace; }
+.modal-val-blue { color: #93c5fd; }
+.modal-val-cyan { color: #38bdf8; }
+.modal-val-amber { color: #f59e0b; }
+
+.modal-alarm-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.modal-alarm-btn {
+  flex: 1;
+  padding: 9px 12px;
+  font-size: 11.5px;
+  font-weight: 800;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.modal-section-card {
+  border-radius: 12px;
+  padding: 14px;
+  margin-top: 14px;
+}
+.modal-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.modal-fluc-card {
+  background: rgba(14, 165, 233, 0.08);
+  border: 1px solid rgba(14, 165, 233, 0.25);
+}
+.modal-fluc-title {
+  font-size: 13px;
+  color: #38bdf8;
+}
+.modal-fluc-badge {
+  font-size: 11px;
+  background: rgba(14, 165, 233, 0.2);
+  color: #7dd3fc;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.modal-fluc-unit {
+  font-size: 12px;
+  color: #cbd5e1;
+  margin-bottom: 6px;
+}
+.modal-fluc-unit .fluc-unit-name.dry { color: #f59e0b; font-weight: 700; }
+.modal-fluc-unit .fluc-unit-name.wash { color: var(--jungle-green); font-weight: 700; }
+.modal-fluc-unit .fluc-unit-sub { font-size: 11px; color: #94a3b8; }
+.modal-fluc-tip {
+  font-size: 11px;
+  color: #38bdf8;
+  margin-top: 8px;
+  background: rgba(14, 165, 233, 0.1);
+  padding: 8px 10px;
+  border-radius: 8px;
+  line-height: 1.4;
+}
+
+.modal-care-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.modal-care-title {
+  font-size: 13px;
+  color: var(--text-main);
+}
+.modal-care-desc {
+  font-size: 12px;
+  color: #cbd5e1;
+  line-height: 1.5;
+  margin: 0;
+}
+.modal-care-subtip {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 6px;
+}
+
+.modal-error-card {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  margin-top: 10px;
+}
+.modal-error-title {
+  color: #ef4444;
+  font-size: 13px;
+}
+.modal-error-pos {
+  font-size: 11px;
+  color: #fca5a5;
+  margin-bottom: 6px;
+}
+.modal-error-cause {
+  font-size: 12px;
+  color: #fca5a5;
+  margin-bottom: 8px;
+}
+.modal-error-step-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #cbd5e1;
+  margin-bottom: 4px;
+}
+.modal-error-steps {
+  font-size: 12px;
+  color: #cbd5e1;
+  padding-left: 18px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* ---------------------------------------------
+   🔔 Unit Alarm Button & Floating Alarm Dock
+   --------------------------------------------- */
+.unit-timer-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-unit-alarm {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  touch-action: manipulation;
+}
+.btn-unit-alarm:hover {
+  background: rgba(0, 232, 122, 0.15);
+  border-color: var(--jungle-green);
+  color: var(--jungle-green);
+  transform: scale(1.04);
+}
+.btn-unit-alarm.alarm-active {
+  background: rgba(0, 232, 122, 0.2);
+  border-color: var(--jungle-green);
+  color: var(--jungle-green);
+  box-shadow: 0 0 8px rgba(0, 232, 122, 0.3);
+  animation: pulse-border 2s infinite;
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: var(--jungle-green); }
+  50% { border-color: rgba(0, 232, 122, 0.4); }
+}
+
+/* 하단 플로팅 알리미 도크 (모바일 및 데스크탑 반응형) */
+.floating-alarm-dock {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 999;
+  width: calc(100% - 32px);
+  max-width: 480px;
+  animation: dock-slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes dock-slide-up {
+  from { opacity: 0; transform: translate(-50%, 20px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.alarm-dock-content {
+  background: linear-gradient(135deg, rgba(16, 24, 38, 0.96), rgba(10, 14, 23, 0.98));
+  border: 1px solid rgba(0, 232, 122, 0.4);
+  border-radius: 18px;
+  padding: 14px 16px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 24px rgba(0, 232, 122, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  backdrop-filter: blur(16px);
+}
+
+.alarm-dock-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.alarm-icon-pulse {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(0, 232, 122, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  animation: alarm-pulse 1.5s infinite;
+  flex-shrink: 0;
+}
+
+@keyframes alarm-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(0, 232, 122, 0.4); }
+  50% { transform: scale(1.08); box-shadow: 0 0 0 8px rgba(0, 232, 122, 0); }
+}
+
+.alarm-dock-summary {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dock-summary-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-main);
+}
+.dock-summary-count {
+  font-size: 11px;
+  color: #34d399;
+  font-weight: 600;
+}
+
+.btn-alarm-clear-all {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn-alarm-clear-all:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+/* 개별 선택 기기 행 목록 */
+.alarm-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.alarm-row-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 8px 12px;
+  border-radius: 10px;
+  gap: 10px;
+}
+.alarm-row-item.alarm-row-error {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.45);
+  animation: pulse-error-chip 2s infinite;
+}
+
+.alarm-row-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.alarm-device-pill {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.alarm-device-pill.pill-wash {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+.alarm-device-pill.pill-dry {
+  background: rgba(245, 158, 11, 0.2);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+.alarm-device-pill.pill-error {
+  background: rgba(239, 68, 68, 0.25);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+}
+
+.alarm-row-time {
+  font-size: 11px;
+  color: var(--text-main);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.btn-alarm-row-del {
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  color: var(--text-dim);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+.btn-alarm-row-del:hover {
+  background: rgba(239, 68, 68, 0.25);
+  color: #f87171;
+}
+
+/* ---------------------------------------------
+   🍞 실시간 토스트 알림 (Toast Feedback)
+   --------------------------------------------- */
+.toast-container {
+  position: fixed;
+  top: 96px; /* 상단 고정 헤더 패널에 가려지지 않도록 아래로 배치 */
+  right: 24px;
+  z-index: 100000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.app-toast {
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.75), 0 0 20px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(16px);
+  padding: 14px 20px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #f8fafc;
+  font-size: 13px;
+  pointer-events: auto;
+  animation: toast-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  max-width: 380px;
+  line-height: 1.45;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-16px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.app-toast.toast-fadeout {
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: all 0.3s ease;
+}
+
+.toast-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+.toast-msg {
+  flex: 1;
+}
+
+.app-toast.toast-success {
+  border-color: rgba(0, 232, 122, 0.5);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.75), 0 0 16px rgba(0, 232, 122, 0.2);
+}
+.app-toast.toast-warning {
+  border-color: rgba(245, 158, 11, 0.5);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.75), 0 0 16px rgba(245, 158, 11, 0.2);
+}
+.app-toast.toast-neutral {
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+@media (max-width: 600px) {
+  .toast-container {
+    top: 85px;
+    right: 16px;
+    left: 16px;
+  }
+  .app-toast {
+    max-width: 100%;
+  }
+}
+
+/* Footer */
+.app-footer {
+  text-align: center;
+  padding: 30px 20px 80px; /* 플로팅 도크 여백 확보 */
+  font-size: 12px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 40px;
+}
+
+/* ---------------------------------------------
+   ☀️ Light Mode (화이트/클린 프리미엄 테마)
+   --------------------------------------------- */
+body.light-theme {
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+body.light-theme .ambient-glow.glow-1 {
+  background: radial-gradient(circle, rgba(16, 185, 129, 0.12), transparent 70%);
+}
+body.light-theme .ambient-glow.glow-2 {
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.1), transparent 70%);
+}
+
+/* 1. Header */
+body.light-theme .app-header {
+  background: rgba(255, 255, 255, 0.9);
+  border-bottom: 1px solid #e2e8f0;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+body.light-theme .brand-title {
+  color: #0f172a;
+}
+body.light-theme .brand-title .highlight {
+  color: #059669;
+}
+body.light-theme .brand-badge {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #059669;
+}
+body.light-theme .connection-status {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #334155;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+body.light-theme .status-text {
+  color: #334155;
+}
+body.light-theme .sync-time {
+  color: #64748b;
+}
+body.light-theme .btn-refresh {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #334155;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+body.light-theme .btn-refresh:hover {
+  background: #f1f5f9;
+  border-color: #059669;
+  color: #059669;
+}
+body.light-theme .btn-theme-toggle {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #0f172a;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+body.light-theme .btn-theme-toggle:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+body.light-theme .btn-alarm-center {
+  background: #ecfdf5;
+  border-color: #6ee7b7;
+  color: #059669;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+body.light-theme .btn-alarm-center:hover {
+  background: #d1fae5;
+  border-color: #059669;
+  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.2);
+}
+body.light-theme .alarm-badge-count {
+  background: #059669;
+  color: #ffffff;
+}
+
+/* 2. Congestion Traffic Light & Golden Time */
+body.light-theme .congestion-card {
+  background: #ffffff;
+  border-color: #e2e8f0;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+}
+body.light-theme .traffic-title {
+  color: #0f172a;
+}
+body.light-theme .traffic-desc {
+  color: #475569;
+}
+body.light-theme .traffic-signal-box {
+  background: #f8fafc;
+  border: 2px solid #cbd5e1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05), inset 0 1px 3px rgba(255, 255, 255, 0.8);
+}
+body.light-theme .signal-dot.dot-blue {
+  background: #2563eb;
+  box-shadow: 0 0 14px rgba(37, 99, 235, 0.8), inset 0 0 4px #ffffff;
+}
+body.light-theme .signal-dot.dot-green {
+  background: #059669;
+  box-shadow: 0 0 14px rgba(5, 150, 105, 0.8), inset 0 0 4px #ffffff;
+}
+body.light-theme .signal-dot.dot-yellow {
+  background: #eab308;
+  box-shadow: 0 0 14px rgba(202, 138, 4, 0.8), inset 0 0 4px #ffffff;
+}
+body.light-theme .signal-dot.dot-orange {
+  background: #ea580c;
+  box-shadow: 0 0 14px rgba(234, 88, 12, 0.8), inset 0 0 4px #ffffff;
+}
+body.light-theme .signal-dot.dot-red {
+  background: #dc2626;
+  box-shadow: 0 0 14px rgba(220, 38, 38, 0.8), inset 0 0 4px #ffffff;
+}
+body.light-theme .golden-time-container {
+  border-top-color: #f1f5f9;
+}
+body.light-theme .gt-title {
+  color: #0f172a;
+}
+body.light-theme .gt-current-tag {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #059669;
+}
+body.light-theme .gt-hint {
+  color: #64748b;
+}
+body.light-theme .gt-card {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+body.light-theme .gt-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
+}
+body.light-theme .gt-card.gt-best {
+  background: #f0f9ff;
+  border: 1.5px solid #7dd3fc;
+}
+body.light-theme .gt-card.gt-good {
+  background: #f0fdf4;
+  border: 1.5px solid #86efac;
+}
+body.light-theme .gt-card.gt-normal {
+  background: #fefce8;
+  border: 1.5px solid #fde047;
+}
+body.light-theme .gt-card.gt-caution {
+  background: #fff7ed;
+  border: 1.5px solid #fdba74;
+}
+body.light-theme .gt-card.gt-busy {
+  background: #fef2f2;
+  border: 1.5px solid #fca5a5;
+}
+
+/* 현재 활성화된 시간대 슬롯 */
+body.light-theme .gt-card.gt-current-active.gt-best {
+  background: #e0f2fe;
+  border: 2px solid #0284c7 !important;
+  box-shadow: 0 4px 16px rgba(2, 132, 199, 0.2);
+}
+body.light-theme .gt-card.gt-current-active.gt-good {
+  background: #dcfce7;
+  border: 2px solid #059669 !important;
+  box-shadow: 0 4px 16px rgba(5, 150, 105, 0.2);
+}
+body.light-theme .gt-card.gt-current-active.gt-normal {
+  background: #fef9c3;
+  border: 2px solid #ca8a04 !important;
+  box-shadow: 0 4px 16px rgba(202, 138, 4, 0.2);
+}
+body.light-theme .gt-card.gt-current-active.gt-caution {
+  background: #ffedd5;
+  border: 2px solid #ea580c !important;
+  box-shadow: 0 4px 16px rgba(234, 88, 12, 0.2);
+}
+body.light-theme .gt-card.gt-current-active.gt-busy {
+  background: #fee2e2;
+  border: 2px solid #dc2626 !important;
+  box-shadow: 0 4px 16px rgba(220, 38, 38, 0.2);
+}
+body.light-theme .gt-now-chip {
+  background: #059669;
+  color: #ffffff;
+}
+body.light-theme .gt-time {
+  color: #0f172a;
+}
+body.light-theme .gt-label {
+  color: #1e293b;
+}
+body.light-theme .gt-tip {
+  color: #64748b;
+}
+body.light-theme .gt-stat-metric {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  color: #475569;
+}
+body.light-theme .gt-stat-metric b {
+  color: #0f172a;
+}
+body.light-theme .congestion-badge.badge-blue,
+body.light-theme .gt-badge.badge-blue {
+  background: #eff6ff;
+  color: #2563eb;
+  border-color: #bfdbfe;
+}
+body.light-theme .congestion-badge.badge-green,
+body.light-theme .gt-badge.badge-green {
+  background: #ecfdf5;
+  color: #059669;
+  border-color: #a7f3d0;
+}
+body.light-theme .congestion-badge.badge-yellow,
+body.light-theme .gt-badge.badge-yellow {
+  background: #fefce8;
+  color: #ca8a04;
+  border-color: #fde047;
+}
+body.light-theme .congestion-badge.badge-orange,
+body.light-theme .gt-badge.badge-orange {
+  background: #fff7ed;
+  color: #ea580c;
+  border-color: #fed7aa;
+}
+body.light-theme .congestion-badge.badge-red,
+body.light-theme .gt-badge.badge-red {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+/* 3. Hero & Summary */
+body.light-theme .hero-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04);
+}
+body.light-theme .card-title {
+  color: #0f172a;
+}
+body.light-theme .card-desc {
+  color: #64748b;
+}
+body.light-theme .dual-recommendation-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-left: 1px solid #e2e8f0;
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04);
+}
+body.light-theme .dual-rec-grid {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+body.light-theme .rec-column.rec-men {
+  background: #f8fbff;
+  border: 1px solid #dbeafe;
+}
+body.light-theme .rec-column.rec-women {
+  background: #fff5f8;
+  border: 1px solid #fce7f3;
+}
+body.light-theme .rec-target-title {
+  color: #0f172a;
+}
+body.light-theme .rec-target-desc {
+  color: #475569;
+}
+body.light-theme .stale-alert-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04);
+}
+body.light-theme .stale-item {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #92400e;
+}
+body.light-theme .stale-tower {
+  color: #b45309;
+}
+body.light-theme .stat-bar {
+  border-top-color: #f1f5f9;
+}
+body.light-theme .stat-label {
+  color: #64748b;
+}
+
+/* 4. Toolbar & Filter Tabs */
+body.light-theme .zone-tabs {
+  background: #e2e8f0;
+  border: 1px solid #cbd5e1;
+}
+body.light-theme .tab-btn {
+  color: #64748b;
+}
+body.light-theme .tab-btn:hover {
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.6);
+}
+body.light-theme .tab-btn.active {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+body.light-theme .tab-btn.tab-men.active {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1.5px solid #93c5fd;
+  border-bottom: 3px solid #1d4ed8;
+  font-weight: 800;
+}
+body.light-theme .tab-btn.tab-common.active {
+  background: #faf5ff;
+  color: #7e22ce;
+  border: 1.5px solid #d8b4fe;
+  border-bottom: 3px solid #7e22ce;
+  font-weight: 800;
+}
+body.light-theme .tab-btn.tab-women.active {
+  background: #fdf2f8;
+  color: #be185d;
+  border: 1.5px solid #f9a8d4;
+  border-bottom: 3px solid #be185d;
+  font-weight: 800;
+}
+body.light-theme .view-mode-tabs {
+  background: #e2e8f0;
+  border: 1px solid #cbd5e1;
+}
+body.light-theme .view-tab-btn {
+  color: #64748b;
+}
+body.light-theme .view-tab-btn:hover {
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.6);
+}
+body.light-theme .view-tab-btn.active {
+  background: #ffffff;
+  color: #059669;
+  border: 1px solid #059669;
+  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.15);
+}
+
+/* 5. WashTower Cards (Hardware Finish) */
+body.light-theme .washtower-card {
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04), 0 1px 2px rgba(15, 23, 42, 0.02);
+}
+body.light-theme .washtower-card:hover {
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.04);
+}
+body.light-theme .washtower-card.wt-card-men {
+  background: linear-gradient(180deg, #f0f7ff 0%, #ffffff 75%);
+  border: 1.5px solid #93c5fd;
+}
+body.light-theme .washtower-card.wt-card-common {
+  background: linear-gradient(180deg, #faf5ff 0%, #ffffff 75%);
+  border: 1.5px solid #d8b4fe;
+}
+body.light-theme .washtower-card.wt-card-women {
+  background: linear-gradient(180deg, #fff1f6 0%, #ffffff 75%);
+  border: 1.5px solid #f9a8d4;
+}
+
+/* 🚨 라이트 모드 기기 카드 상태별 외곽 테두리 (에러 시 붉은색 외곽선, 건조 시 골드, 세탁 시 블루, 전체 가동 시 그린) */
+body.light-theme .washtower-card.is-error {
+  border: 2px solid #ef4444 !important;
+  box-shadow: 0 0 18px rgba(239, 68, 68, 0.22), 0 4px 16px rgba(15, 23, 42, 0.04) !important;
+}
+body.light-theme .washtower-card.is-active-dry {
+  border: 2px solid #f59e0b !important;
+  box-shadow: 0 0 18px rgba(245, 158, 11, 0.18), 0 4px 16px rgba(15, 23, 42, 0.04) !important;
+}
+body.light-theme .washtower-card.is-active-wash {
+  border: 2px solid #0284c7 !important;
+  box-shadow: 0 0 18px rgba(2, 132, 199, 0.18), 0 4px 16px rgba(15, 23, 42, 0.04) !important;
+}
+body.light-theme .washtower-card.is-active-both {
+  border: 2px solid #059669 !important;
+  box-shadow: 0 0 18px rgba(5, 150, 105, 0.18), 0 4px 16px rgba(15, 23, 42, 0.04) !important;
+}
+
+body.light-theme .wt-no {
+  color: #0f172a;
+}
+
+/* 🏷️ 라이트 모드 기기 헤더 상태 뱃지 (선명한 외곽 테두리 및 틴트 적용) */
+body.light-theme .wt-status-pill.pill-error {
+  background: #fef2f2 !important;
+  color: #dc2626 !important;
+  border: 1.5px solid #fca5a5 !important;
+  box-shadow: 0 1px 3px rgba(220, 38, 38, 0.08);
+}
+body.light-theme .wt-status-pill.pill-drying {
+  background: #fffbeb !important;
+  color: #b45309 !important;
+  border: 1.5px solid #fcd34d !important;
+  box-shadow: 0 1px 3px rgba(217, 119, 6, 0.08);
+}
+body.light-theme .wt-status-pill.pill-washing {
+  background: #f0f9ff !important;
+  color: #0284c7 !important;
+  border: 1.5px solid #7dd3fc !important;
+  box-shadow: 0 1px 3px rgba(2, 132, 199, 0.08);
+}
+body.light-theme .wt-status-pill.pill-both,
+body.light-theme .wt-status-pill.pill-running {
+  background: #ecfdf5 !important;
+  color: #059669 !important;
+  border: 1.5px solid #6ee7b7 !important;
+  box-shadow: 0 1px 3px rgba(5, 150, 105, 0.08);
+}
+body.light-theme .wt-status-pill.pill-idle {
+  background: #f1f5f9 !important;
+  color: #64748b !important;
+  border: 1.5px solid #cbd5e1 !important;
+}
+
+/* 🎛️ 하드웨어 섀시 및 유닛 화이트/그레이 조화 레이어링 */
+body.light-theme .washtower-card.wt-card-men .wt-body-hardware,
+body.light-theme .washtower-card.wt-card-common .wt-body-hardware,
+body.light-theme .washtower-card.wt-card-women .wt-body-hardware,
+body.light-theme .washtower-card .wt-body-hardware,
+body.light-theme .washtower-floorplan-view .wt-body-hardware,
+body.light-theme .wt-body-hardware {
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: none !important;
+}
+
+body.light-theme .washtower-card .unit-section,
+body.light-theme .washtower-floorplan-view .unit-section,
+body.light-theme .unit-section {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+}
+
+body.light-theme .washtower-card .unit-section.is-drying,
+body.light-theme .washtower-floorplan-view .unit-section.is-drying {
+  background: #fffdf5 !important;
+  border: 1.5px solid #fcd34d !important;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.12) !important;
+}
+
+body.light-theme .washtower-card .unit-section.is-running,
+body.light-theme .washtower-floorplan-view .unit-section.is-running {
+  background: #f4faff !important;
+  border: 1.5px solid #7dd3fc !important;
+  box-shadow: 0 2px 8px rgba(2, 132, 199, 0.12) !important;
+}
+
+body.light-theme .washtower-card .unit-section.is-error,
+body.light-theme .washtower-floorplan-view .unit-section.is-error {
+  background: #fff5f5 !important;
+  border: 1.5px solid #fca5a5 !important;
+  box-shadow: 0 2px 8px rgba(220, 38, 38, 0.12) !important;
+}
+body.light-theme .drum-door {
+  border: 3px solid #cbd5e1;
+  background: radial-gradient(circle, #ffffff 40%, #f1f5f9 100%);
+  box-shadow: inset 0 2px 4px rgba(15, 23, 42, 0.06), 0 2px 6px rgba(15, 23, 42, 0.04);
+}
+body.light-theme .unit-section.is-running .drum-door {
+  border-color: #0284c7;
+  box-shadow: 0 0 12px rgba(2, 132, 199, 0.35), inset 0 0 6px rgba(2, 132, 199, 0.2);
+}
+body.light-theme .unit-section.is-drying .drum-door {
+  border-color: #d97706;
+  box-shadow: 0 0 12px rgba(217, 119, 6, 0.35), inset 0 0 6px rgba(217, 119, 6, 0.2);
+}
+body.light-theme .drum-inner-light {
+  background: rgba(15, 23, 42, 0.03);
+  color: #0f172a;
+}
+body.light-theme .wt-center-bar {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+body.light-theme .center-bar-brand {
+  color: #64748b;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+body.light-theme .unit-name {
+  color: #475569;
+  font-weight: 700;
+  font-size: 12px;
+}
+body.light-theme .unit-timer {
+  color: #0f172a;
+  font-weight: 900;
+  font-size: 16px;
+}
+body.light-theme .unit-timer.dim {
+  color: #94a3b8;
+  font-weight: 600;
+  font-size: 13px;
+}
+body.light-theme .unit-state-text {
+  color: #334155;
+  font-weight: 700;
+}
+body.light-theme .unit-state-text.state-active-dry {
+  color: #b45309;
+  font-weight: 800;
+}
+body.light-theme .unit-state-text.state-active-wash {
+  color: #0284c7;
+  font-weight: 800;
+}
+body.light-theme .unit-state-text.state-error {
+  color: #dc2626;
+  font-weight: 800;
+}
+body.light-theme .btn-unit-alarm {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+}
+body.light-theme .btn-unit-alarm:hover {
+  background: #ecfdf5;
+  border-color: #059669;
+  color: #059669;
+}
+body.light-theme .btn-unit-alarm.alarm-active {
+  background: #d1fae5;
+  border-color: #059669;
+  color: #059669;
+  box-shadow: 0 0 8px rgba(5, 150, 105, 0.25);
+}
+body.light-theme .unit-course-badge.course-wash {
+  background: #e0f2fe;
+  color: #0369a1;
+  border-color: #7dd3fc;
+}
+body.light-theme .unit-course-badge.course-dry {
+  background: #fef3c7;
+  color: #b45309;
+  border-color: #fcd34d;
+}
+body.light-theme .lg-care-box {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+body.light-theme .care-label {
+  color: #475569;
+  font-weight: 700;
+}
+body.light-theme .care-progress-track {
+  background: #e2e8f0;
+}
+body.light-theme .wt-error-banner {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #dc2626;
+}
+
+/* 6. Reality Floorplan Single Wall View */
+body.light-theme .washtower-floorplan-view {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04);
+}
+body.light-theme .washtower-floorplan-view .floor-line-section,
+body.light-theme .floor-line-section {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+body.light-theme .washtower-floorplan-view .floor-line-header {
+  border-bottom: 1px solid #e2e8f0;
+}
+body.light-theme .washtower-floorplan-view .floor-line-desc {
+  color: #64748b;
+}
+body.light-theme .washtower-floorplan-view .floor-wall-tag {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+body.light-theme .floor-line-badge.tag-men {
+  background: #eff6ff !important;
+  color: #1d4ed8 !important;
+  border: 1.5px solid #93c5fd !important;
+  font-weight: 800;
+}
+body.light-theme .floor-line-badge.tag-common-women {
+  background: linear-gradient(135deg, #faf5ff, #fdf2f8) !important;
+  color: #7e22ce !important;
+  border: 1.5px solid #d8b4fe !important;
+  font-weight: 800;
+}
+
+body.light-theme .zone-tag-men,
+body.light-theme .wt-zone-tag.zone-tag-men {
+  background: #eff6ff !important;
+  color: #1d4ed8 !important;
+  border: 1.5px solid #93c5fd !important;
+  font-weight: 800;
+}
+body.light-theme .zone-tag-common,
+body.light-theme .wt-zone-tag.zone-tag-common {
+  background: #faf5ff !important;
+  color: #7e22ce !important;
+  border: 1.5px solid #d8b4fe !important;
+  font-weight: 800;
+}
+body.light-theme .zone-tag-women,
+body.light-theme .wt-zone-tag.zone-tag-women {
+  background: #fdf2f8 !important;
+  color: #be185d !important;
+  border: 1.5px solid #f9a8d4 !important;
+  font-weight: 800;
+}
+
+body.light-theme .rec-gender-tag.tag-men {
+  background: #eff6ff !important;
+  color: #1d4ed8 !important;
+  border: 1px solid #93c5fd !important;
+  font-weight: 800;
+}
+body.light-theme .rec-gender-tag.tag-women {
+  background: #fdf2f8 !important;
+  color: #be185d !important;
+  border: 1px solid #f9a8d4 !important;
+  font-weight: 800;
+}
+body.light-theme .floor-cards-row::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+body.light-theme .floor-cards-row::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+/* 7. Quick Guide & AI Assistant */
+body.light-theme .quick-guide-section {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04) !important;
+}
+body.light-theme .guide-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  box-shadow: none;
+}
+body.light-theme .guide-card:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+body.light-theme .guide-title {
+  color: #0f172a;
+}
+body.light-theme .guide-desc {
+  color: #475569;
+}
+body.light-theme .voice-assistant-section {
+  background: #ffffff;
+  border-color: #a7f3d0;
+  box-shadow: 0 6px 30px rgba(5, 150, 105, 0.08);
+}
+body.light-theme .ai-title {
+  color: #0f172a;
+}
+body.light-theme .ai-desc {
+  color: #64748b;
+}
+body.light-theme .ai-chat-box {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+body.light-theme .ai-msg .msg-bubble {
+  background: #ffffff;
+  color: #0f172a;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+body.light-theme .ai-msg .msg-sender {
+  color: #059669;
+}
+body.light-theme .user-msg .msg-bubble {
+  background: #059669;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.25);
+}
+body.light-theme .prompt-chip {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+body.light-theme .prompt-chip:hover {
+  background: #ecfdf5;
+  border-color: #059669;
+  color: #059669;
+  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.15);
+}
+body.light-theme .ai-input-bar {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+}
+body.light-theme .ai-input-field {
+  color: #0f172a;
+}
+body.light-theme .ai-input-field::placeholder {
+  color: #94a3b8;
+}
+body.light-theme .btn-voice-mic {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+}
+body.light-theme .btn-ai-send {
+  background: #059669 !important;
+  color: #ffffff !important;
+  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.25);
+}
+body.light-theme .btn-ai-send svg {
+  stroke: #ffffff !important;
+}
+body.light-theme .btn-ai-send:hover {
+  background: #047857 !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+}
+
+/* 8. Modal & Bottom Alarm Dock & Toast */
+body.light-theme .modal-overlay {
+  background: rgba(15, 23, 42, 0.45);
+}
+body.light-theme .modal-card {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid #cbd5e1 !important;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2) !important;
+}
+body.light-theme .modal-title {
+  color: #0f172a !important;
+}
+body.light-theme .modal-close {
+  background: #f1f5f9 !important;
+  color: #64748b !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 8px !important;
+  width: 32px !important;
+  height: 32px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 20px !important;
+}
+body.light-theme .modal-close:hover {
+  background: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+body.light-theme .modal-info-row {
+  border-bottom: 1px solid #f1f5f9 !important;
+}
+body.light-theme .modal-info-label {
+  color: #64748b !important;
+}
+body.light-theme .modal-info-value {
+  color: #0f172a !important;
+}
+body.light-theme .modal-val-blue { color: #2563eb !important; }
+body.light-theme .modal-val-cyan { color: #0284c7 !important; }
+body.light-theme .modal-val-amber { color: #d97706 !important; }
+
+body.light-theme .modal-fluc-card {
+  background: #f0f9ff !important;
+  border: 1px solid #bae6fd !important;
+}
+body.light-theme .modal-fluc-title {
+  color: #0284c7 !important;
+}
+body.light-theme .modal-fluc-badge {
+  background: #e0f2fe !important;
+  color: #0369a1 !important;
+}
+body.light-theme .modal-fluc-unit {
+  color: #334155 !important;
+}
+body.light-theme .modal-fluc-unit .fluc-unit-sub {
+  color: #64748b !important;
+}
+body.light-theme .modal-fluc-tip {
+  background: #e0f2fe !important;
+  color: #0369a1 !important;
+}
+
+body.light-theme .modal-care-card {
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+}
+body.light-theme .modal-care-title {
+  color: #0f172a !important;
+}
+body.light-theme .modal-care-desc {
+  color: #334155 !important;
+}
+body.light-theme .modal-care-subtip {
+  color: #64748b !important;
+}
+
+body.light-theme .modal-error-card {
+  background: #fef2f2 !important;
+  border: 1px solid #fca5a5 !important;
+}
+body.light-theme .modal-error-title {
+  color: #dc2626 !important;
+}
+body.light-theme .modal-error-pos {
+  color: #b91c1c !important;
+}
+body.light-theme .modal-error-cause {
+  color: #b91c1c !important;
+}
+body.light-theme .modal-error-step-title {
+  color: #0f172a !important;
+}
+body.light-theme .modal-error-steps {
+  color: #334155 !important;
+}
+body.light-theme .alarm-dock-content {
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid #a7f3d0;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.14);
+}
+body.light-theme .alarm-dock-title {
+  color: #0f172a;
+}
+body.light-theme .alarm-row-item {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+body.light-theme .alarm-row-name {
+  color: #0f172a;
+}
+body.light-theme .alarm-row-time {
+  color: #059669;
+}
+body.light-theme .btn-cancel-all-alarms {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+}
+body.light-theme .app-toast {
+  background: #ffffff;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.12);
+}
+body.light-theme .app-footer {
+  border-top: 1px solid #e2e8f0;
+  color: #64748b;
+}

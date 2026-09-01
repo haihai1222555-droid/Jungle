@@ -1,0 +1,24 @@
+{
+  "name": "Jungle Laundry 2.0 | 정글 스마트 세탁실",
+  "short_name": "정글세탁실",
+  "description": "크래프톤 정글러를 위한 실시간 세탁실 현황 및 5분전 스마트 푸시 알리미",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0c10",
+  "theme_color": "#0a0c10",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2954/2954893.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2954/2954893.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

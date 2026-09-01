@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  jungle-laundry:
+    build: .
+    container_name: jungle-laundry-app
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+    volumes:
+      - ./push_subscriptions.json:/app/push_subscriptions.json
