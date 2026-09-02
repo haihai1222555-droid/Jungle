@@ -133,103 +133,90 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================================================
-# 현실 세탁실 배치도 임베드 생성기
+# 현실 세탁실 배치도 임베드 생성기 (2단 나란한 2열 레이아웃)
 # =========================================================
 def build_floorplan_embed(status_data):
-    embed = discord.Embed(
-        title="🧺 크래프톤 정글 스마트 세탁실 현황 & 알림",
-        description="현실 세탁실 2열 배치도 현황입니다. **현재 가동 중인 기기**를 아래 선택창에서 골라 5분 전 DM 알림을 등록하세요!",
-        color=discord.Color.from_rgb(0, 232, 122),
-        timestamp=datetime.now()
-    )
+    total_avail = 0
+    total_running = 0
+    total_error = 0
 
-    # 1) 남성 구역 (1~5호기 - 좌측 라인)
+    def parse_unit(unit_data):
+        nonlocal total_avail, total_running, total_error
+        state = unit_data.get("runState", {}).get("currentState", "POWER_OFF")
+        timer = unit_data.get("timer", {})
+        h = timer.get("remainHour", 0)
+        m = timer.get("remainMinute", 0)
+        remain_min = (h * 60) + m
+        is_err = unit_data.get("error") or (state == "ERROR")
+
+        if is_err:
+            total_error += 1
+            return "`⚠️점검`"
+        elif is_unit_running(state, remain_min):
+            total_running += 1
+            time_str = format_timer(h, m)
+            return f"`{time_str}`"
+        else:
+            total_avail += 1
+            return "`대기`"
+
+    # 1) 좌측 라인 (남성 1~5호기)
     men_lines = []
     for t in TOWERS[:5]:
         data = status_data.get(t["name"], {})
-        w = data.get("washer", {})
-        d = data.get("dryer", {})
-        w_state = w.get("runState", {}).get("currentState", "POWER_OFF")
-        d_state = d.get("runState", {}).get("currentState", "POWER_OFF")
-        w_timer = format_timer(w.get("timer", {}).get("remainHour", 0), w.get("timer", {}).get("remainMinute", 0))
-        d_timer = format_timer(d.get("timer", {}).get("remainHour", 0), d.get("timer", {}).get("remainMinute", 0))
-        
-        d_err = d.get("error") or (d_state == "ERROR")
-        w_err = w.get("error") or (w_state == "ERROR")
+        d_badge = parse_unit(data.get("dryer", {}))
+        w_badge = parse_unit(data.get("washer", {}))
+        men_lines.append(f"• **{t['label']}** 💨{d_badge} 🫧{w_badge}")
 
-        # 건조기 상태 문자열
-        if d_err:
-            d_str = "💨 건조: ⚠️ 점검필요"
-        elif d_timer:
-            d_str = f"💨 건조: 🌀 **{d_timer}**"
-        else:
-            d_str = "💨 건조: 🟢 대기"
-
-        # 세탁기 상태 문자열
-        if w_err:
-            w_str = "🫧 세탁: ⚠️ 점검필요"
-        elif w_timer:
-            w_str = f"🫧 세탁: 🫧 **{w_timer}**"
-        else:
-            w_str = "🫧 세탁: 🟢 대기"
-
-        men_lines.append(f"**[{t['label']}]** {d_str} | {w_str}")
-
-    embed.add_field(
-        name="🟦 남성 구역 (좌측 1 ~ 5호기)",
-        value="\n".join(men_lines) if men_lines else "데이터 없음",
-        inline=False
-    )
-
-    # 2) 공용 구역 (6~7호기 - 우측 상단)
-    common_lines = []
+    # 2) 우측 라인 (공용 6~7호기 + 여성 8~9호기)
+    right_lines = []
     for t in TOWERS[5:7]:
         data = status_data.get(t["name"], {})
-        w = data.get("washer", {})
-        d = data.get("dryer", {})
-        w_state = w.get("runState", {}).get("currentState", "POWER_OFF")
-        d_state = d.get("runState", {}).get("currentState", "POWER_OFF")
-        w_timer = format_timer(w.get("timer", {}).get("remainHour", 0), w.get("timer", {}).get("remainMinute", 0))
-        d_timer = format_timer(d.get("timer", {}).get("remainHour", 0), d.get("timer", {}).get("remainMinute", 0))
-        d_err = d.get("error") or (d_state == "ERROR")
-        w_err = w.get("error") or (w_state == "ERROR")
+        d_badge = parse_unit(data.get("dryer", {}))
+        w_badge = parse_unit(data.get("washer", {}))
+        right_lines.append(f"• **{t['label']}** 💨{d_badge} 🫧{w_badge} *(공용)*")
 
-        d_str = "💨 건조: ⚠️ 점검필요" if d_err else (f"💨 건조: 🌀 **{d_timer}**" if d_timer else "💨 건조: 🟢 대기")
-        w_str = "🫧 세탁: ⚠️ 점검필요" if w_err else (f"🫧 세탁: 🫧 **{w_timer}**" if w_timer else "🫧 세탁: 🟢 대기")
+    right_lines.append("────────────────")
 
-        common_lines.append(f"**[{t['label']}]** {d_str} | {w_str}")
-
-    embed.add_field(
-        name="🟪 공용 구역 (우측 상단 6 ~ 7호기)",
-        value="\n".join(common_lines) if common_lines else "데이터 없음",
-        inline=False
-    )
-
-    # 3) 여성 구역 (8~9호기 - 우측 하단)
-    women_lines = []
     for t in TOWERS[7:]:
         data = status_data.get(t["name"], {})
-        w = data.get("washer", {})
-        d = data.get("dryer", {})
-        w_state = w.get("runState", {}).get("currentState", "POWER_OFF")
-        d_state = d.get("runState", {}).get("currentState", "POWER_OFF")
-        w_timer = format_timer(w.get("timer", {}).get("remainHour", 0), w.get("timer", {}).get("remainMinute", 0))
-        d_timer = format_timer(d.get("timer", {}).get("remainHour", 0), d.get("timer", {}).get("remainMinute", 0))
-        d_err = d.get("error") or (d_state == "ERROR")
-        w_err = w.get("error") or (w_state == "ERROR")
+        d_badge = parse_unit(data.get("dryer", {}))
+        w_badge = parse_unit(data.get("washer", {}))
+        right_lines.append(f"• **{t['label']}** 💨{d_badge} 🫧{w_badge} *(여성)*")
 
-        d_str = "💨 건조: ⚠️ 점검필요" if d_err else (f"💨 건조: 🌀 **{d_timer}**" if d_timer else "💨 건조: 🟢 대기")
-        w_str = "🫧 세탁: ⚠️ 점검필요" if w_err else (f"🫧 세탁: 🫧 **{w_timer}**" if w_timer else "🫧 세탁: 🟢 대기")
+    embed = discord.Embed(
+        title="🧺 크래프톤 정글 스마트 세탁실 현황",
+        description=(
+            f"🟢 **이용 가능: {total_avail}대**  ·  🌀 **가동 중: {total_running}대**  ·  ⚠️ **점검: {total_error}대**\n"
+            f"*기호 안내: 💨 상단 건조기 ｜ 🫧 하단 세탁기*"
+        ),
+        color=discord.Color.from_rgb(16, 185, 129),
+        timestamp=datetime.now()
+    )
 
-        women_lines.append(f"**[{t['label']}]** {d_str} | {w_str}")
+    # 2열 나란히 배치 (inline=True)
+    embed.add_field(
+        name="🟦 좌측 통로 (남성 1~5호기)",
+        value="\n".join(men_lines) if men_lines else "데이터 없음",
+        inline=True
+    )
 
     embed.add_field(
-        name="🟥 여성 구역 (우측 하단 8 ~ 9호기)",
-        value="\n".join(women_lines) if women_lines else "데이터 없음",
+        name="🟪 우측 통로 (공용 & 여성)",
+        value="\n".join(right_lines) if right_lines else "데이터 없음",
+        inline=True
+    )
+
+    embed.add_field(
+        name="🔔 5분 전 개인 DM 알림",
+        value=f"현재 가동 중인 기기가 **{total_running}대** 있습니다. 아래 선택창에서 내 기기를 고르시면 완료 5분 전에 DM을 보내드립니다!",
         inline=False
     )
 
-    embed.set_footer(text="크래프톤 정글 세탁실 · Data powered by LG ThinQ API", icon_url="https://jungle-wash.vercel.app/jungle-logo.png")
+    embed.set_footer(
+        text="크래프톤 정글 스마트 세탁실 · Realtime LG ThinQ Data",
+        icon_url="https://raw.githubusercontent.com/haihai1222555-droid/Jungle_Wash/master/jungle-logo-192.png"
+    )
     return embed
 
 # =========================================================
