@@ -24,3 +24,7 @@ reply_*.txt
 
 # 봇 배치도 렌더 테스트 산출물
 bot_preview.png
+
+# 봇 런타임 데이터
+bot_settings.json
+discord_alarms.json

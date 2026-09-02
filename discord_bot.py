@@ -1172,6 +1172,37 @@ async def _run_assistant_inner(user_id, text):
     return (reply or "무슨 말씀인지 파악하지 못했습니다."), None
 
 
+@bot.tree.command(name="채널설정", description="이 채널에서 멘션 없이 봇과 대화할 수 있게 합니다. (다시 누르면 해제)")
+async def cmd_set_channel(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "DM 에서는 따로 설정하지 않아도 언제든 그냥 말을 걸면 됩니다.", ephemeral=True)
+        return
+
+    cid = str(interaction.channel_id)
+    if cid in assistant_channels:
+        assistant_channels.discard(cid)
+        save_settings()
+        await interaction.response.send_message(
+            "🔕 이 채널에서 **멘션 없이 대화하는 기능을 껐습니다.**\n"
+            "-# `@봇` 으로 부르거나 DM 은 계속 됩니다.")
+        return
+
+    assistant_channels.add(cid)
+    save_settings()
+
+    msg = ("🗣️ 이제 이 채널에서는 **멘션 없이 그냥 말을 걸어도** 답합니다!\n"
+           "-# 예) `남는 세탁기 있어?` · `3번 건조기 알림 걸어줘`\n"
+           "-# 다시 `/채널설정` 을 누르면 해제됩니다.")
+    if not intents.message_content:
+        msg += ("\n\n⚠️ **다만 지금은 동작하지 않습니다.**\n"
+                "메시지 내용을 읽을 권한이 꺼져 있습니다. 다음 두 가지가 필요합니다.\n"
+                "1. Discord 개발자 포털 → Bot → **MESSAGE CONTENT INTENT** 켜기\n"
+                "2. 환경변수 `ENABLE_MESSAGE_CONTENT=1` 설정 후 재시작\n"
+                "-# 그때까지는 `@봇` 멘션이나 DM 을 이용해 주세요.")
+    await interaction.response.send_message(msg)
+
+
 @bot.tree.command(name="비서", description="말로 알림을 걸 수 있어요. 예) 3번 건조기 알림 걸어줘")
 @app_commands.describe(말="예) 3번 건조기 알림 걸어줘 / 내 알림 보여줘 / 전부 해제해줘")
 async def cmd_assistant(interaction: discord.Interaction, 말: str):
@@ -1378,7 +1409,37 @@ async def before_alarm_loop():
 # 멘션 없이 채널에 그냥 쓴 말까지 읽으려면 개발자 포털에서
 # MESSAGE CONTENT INTENT 를 켜고 ENABLE_MESSAGE_CONTENT=1 을 줘야 한다.
 # =========================================================
-ASSISTANT_CHANNEL_ID = (os.environ.get("ASSISTANT_CHANNEL_ID") or "").strip()
+SETTINGS_FILE = os.path.join(BASE_DIR, "bot_settings.json")
+
+# 멘션 없이 대화할 채널 목록. /채널설정 으로 디스코드 안에서 바꾼다.
+# (환경변수로도 기본값을 줄 수 있지만, 그건 바꿀 때마다 재배포가 필요하다)
+assistant_channels = set()
+
+
+def load_settings():
+    global assistant_channels
+    found = set()
+    env_default = (os.environ.get("ASSISTANT_CHANNEL_ID") or "").strip()
+    if env_default:
+        found.add(env_default)
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            found.update(str(c) for c in data.get("assistantChannels", []))
+    except Exception as e:
+        print(f"[Settings Load Error] {e}")
+    assistant_channels = found
+
+
+def save_settings():
+    try:
+        tmp = SETTINGS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"assistantChannels": sorted(assistant_channels)}, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, SETTINGS_FILE)
+    except Exception as e:
+        print(f"[Settings Save Error] {e}")
 
 
 def strip_mention(content, me):
@@ -1395,7 +1456,7 @@ async def on_message(message: discord.Message):
 
     is_dm = message.guild is None
     mentioned = bot.user is not None and bot.user in message.mentions
-    in_assistant_channel = ASSISTANT_CHANNEL_ID and str(message.channel.id) == ASSISTANT_CHANNEL_ID
+    in_assistant_channel = str(message.channel.id) in assistant_channels
 
     # 아무 말에나 끼어들지 않는다. 말을 건 경우에만 답한다.
     if not (is_dm or mentioned or in_assistant_channel):
@@ -1434,6 +1495,9 @@ async def on_message(message: discord.Message):
 @bot.event
 async def on_ready():
     load_alarms()
+    load_settings()
+    if assistant_channels:
+        print(f"[Settings] 대화 채널 {len(assistant_channels)}개 등록됨")
     print(f"🤖 [Discord Bot] {bot.user.name}#{bot.user.discriminator} (ID: {bot.user.id}) 로그인 성공!")
     
     # 1) 봇이 속한 모든 서버에 1초 만에 즉시 슬래시 명령어 복사 및 동기화 (0초 딜레이)
@@ -1462,6 +1526,29 @@ async def start_bot_with_backoff():
         try:
             print("🤖 [Discord Bot] Discord Gateway 연결 시도 중...")
             await bot.start(DISCORD_BOT_TOKEN)
+
+        except discord.errors.PrivilegedIntentsRequired:
+            # 개발자 포털에서 MESSAGE CONTENT INTENT 를 켜지 않은 채
+            # ENABLE_MESSAGE_CONTENT=1 을 준 경우다.
+            # 이대로 두면 15초마다 영원히 재시작만 반복하므로,
+            # 그 기능을 끄고 스스로 다시 켜서 멘션/DM 만이라도 살린다.
+            print("=" * 60)
+            print("⚠️ [인텐트 오류] MESSAGE CONTENT INTENT 가 꺼져 있습니다.")
+            print("   Discord 개발자 포털 > Bot > MESSAGE CONTENT INTENT 를 켜야")
+            print("   멘션 없이 채널에서 대화하는 기능을 쓸 수 있습니다.")
+            print("   지금은 그 기능 없이 다시 시작합니다. (멘션과 DM 은 정상 동작)")
+            print("=" * 60)
+            os.environ["ENABLE_MESSAGE_CONTENT"] = "0"
+            await bot.close()
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        except discord.errors.LoginFailure:
+            print("=" * 60)
+            print("❌ [토큰 오류] 봇 토큰이 올바르지 않습니다. 재시도하지 않고 종료합니다.")
+            print("   DISCORD_BOT_TOKEN 환경변수를 확인해 주세요.")
+            print("=" * 60)
+            return
+
         except discord.errors.HTTPException as e:
             if e.status == 429:
                 print(f"⚠️ [Discord Rate Limit] 디스코드 API 글로벌 요청 제한(429) 감지. {delay}초 후 자동 재시도합니다...")
