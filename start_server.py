@@ -188,7 +188,11 @@ def background_push_worker():
                     send_push_notification(sub_info, {
                         'title': f"🧺 [선택 기기 알림] {device_name} 5분 전!",
                         'body': f"회원님이 등록하신 {device_name} 가동이 약 5분 뒤 완료됩니다. 세탁실로 이동해 주세요!",
-                        'tag': f"5min-{device_name}"
+                        'tag': f"5min-{device_name}",
+                        # 바로 가져갈 사람은 눌러두면 수거 요청을 보내지 않는다
+                        'actions': [{'action': 'picked', 'title': '🧺 가져갈게요'}],
+                        'key': alarm.get('key'),
+                        'endpoint': sub_info.get('endpoint'),
                     })
 
                 elif not notified_0min and (
@@ -202,7 +206,11 @@ def background_push_worker():
                     send_push_notification(sub_info, {
                         'title': f"🏁 [선택 기기 완료] {device_name} 완료!",
                         'body': f"회원님이 등록하신 {device_name} 가동이 끝났습니다. 세탁실에서 빨래를 즉시 수거해 주세요!",
-                        'tag': f"complete-{device_name}"
+                        'tag': f"complete-{device_name}",
+                        'actions': ([] if alarm.get('pickedUp')
+                                    else [{'action': 'picked', 'title': '🧺 가져갔어요'}]),
+                        'key': alarm.get('key'),
+                        'endpoint': sub_info.get('endpoint'),
                     })
                     # 여기서 구독을 버리지 않는다. 빨래를 실제로 가져갔는지 계속 지켜본다.
                     active_subs.append(item)
@@ -217,6 +225,12 @@ def background_push_worker():
 
                     if alarm.get('notifiedStale'):
                         # 방치 알림까지 보냈으면 더 할 일이 없다
+                        changed = True
+                        continue
+
+                    # 본인이 '가져갔어요' 를 눌렀으면 수거 요청을 보내지 않는다
+                    if alarm.get('pickedUp'):
+                        print(f"[Alarm] 수거 확인됨: {device_name}")
                         changed = True
                         continue
 
@@ -343,6 +357,36 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
+                return
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+                return
+
+        if req_path == '/api/picked-up':
+            # 알림의 '가져갔어요' 버튼을 누르면 서비스워커가 여기로 알려준다.
+            # 기기가 문 열림을 알려주지 않으므로 수거 여부는 이 신호로만 알 수 있다.
+            try:
+                data = json.loads(post_data.decode('utf-8')) if post_data else {}
+                key = data.get('key')
+                endpoint = data.get('endpoint')
+                marked = 0
+                if key and endpoint:
+                    subs = load_subscriptions()
+                    for x in subs:
+                        if (x.get('alarm', {}).get('key') == key
+                                and (x.get('subscription') or {}).get('endpoint') == endpoint):
+                            x['alarm']['pickedUp'] = True
+                            marked += 1
+                    if marked:
+                        save_subscriptions(subs)
+                        print(f"[Alarm] 수거 확인 접수: {key}")
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": True, "marked": marked}).encode('utf-8'))
                 return
             except Exception as e:
                 self.send_response(500)

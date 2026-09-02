@@ -333,6 +333,21 @@ function fetchWithTimeout(url, ms = API_TIMEOUT_MS) {
     .finally(() => clearTimeout(timer));
 }
 
+// AI 엔진이 응답을 시작하지 않으면 기다리지 않고 다음 엔진으로 넘어간다.
+// 스트리밍 답변이 중간에 끊기면 안 되므로, 응답 헤더가 오면 바로 타이머를 끈다.
+// (본문이 흘러나오는 시간은 제한하지 않는다)
+const AI_CONNECT_TIMEOUT_MS = 6000;
+
+async function fetchAiWithTimeout(url, options) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), AI_CONNECT_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // 끊긴 지 오래됐을 때 '2880분 전' 같이 읽기 힘든 표시를 피한다
 function formatDataAge(ms) {
   const min = Math.max(1, Math.round(ms / 60000));
@@ -1807,7 +1822,16 @@ function appendChatMessage(sender, htmlText) {
 // ⚡ 최상위 고지능 초대형 LLM (Groq 120B & Gemini 3.7/3.6 Flash)
 const GROQ_API_KEY = '***REMOVED***';
 const GROQ_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'groq/compound'];
-const GEMINI_API_KEY = '***REMOVED***';
+// 제미나이 키는 여러 개를 넣을 수 있다.
+// 한 키가 한도(429)에 걸리면 다음 키로 넘어간다.
+// ⚠️ 같은 구글 프로젝트에서 만든 키끼리는 한도를 같이 쓰므로 효과가 없다.
+//    반드시 서로 다른 계정 또는 프로젝트에서 받은 키를 넣어야 한다.
+const GEMINI_API_KEYS = [
+  '***REMOVED***',
+  '***REMOVED***',   // 두 번째 키를 여기에
+  '***REMOVED***',   // 세 번째 키를 여기에
+].filter(k => k && k.trim());
+const GEMINI_API_KEY = GEMINI_API_KEYS[0] || '';
 // 앞에서부터 시도한다. 앞쪽이 더 똑똑하고, 뒤로 갈수록 가볍고 빠르다.
 // (앞 모델이 혼잡(503)하면 자동으로 뒤로 넘어간다)
 const GEMINI_MODELS = ['gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-flash-latest', 'gemini-flash-lite-latest'];
@@ -1879,6 +1903,18 @@ const GUARD_ROLE_PATTERNS = [
   /(나는|내가|저는|제가)(이봇의|이|너의|네)?(개발자|관리자|제작자|만든사람|주인|운영자)(야|이야|다|입니다|임)/,
   /(관리자|개발자|디버그|테스트|무제한)(모드|권한)(로|으로)?(전환|바꿔|켜|진입|들어가)/,
   /(sudo|adminmode|overrideyour|bypassyour|systemoverride)/,
+  // 영어로 쓴 캐릭터 설정문 (정상 대화에서는 절대 나오지 않는 말들)
+  /(always|never)?(remain|stay|keep)incharacter/,
+  /break(ing)?character/,
+  /addresstheuseras/,
+  /speakonlyin/,
+  /(respond|reply|answer|talk)(only)?as/,
+  /you(are|re)(now)?(a|an|the)?[a-z]{2,24}from[a-z]/,
+  /fromnowonyouare/,
+  /your(persona|characteris|nameisnow|newname)/,
+  /use[a-z]{0,24}tone/,
+  /(in|with)a[a-z]{0,20}(voice|persona|tone)/,
+  /(system|developer|assistant)(prompt|message|instruction)s?[:=]/,
   /(하지말라는거|안된다는거|금지된거)(무시|빼고|말고)/
 ];
 
@@ -1893,7 +1929,11 @@ const GUARD_PERSONA_PATTERNS = [
   /(주인님|마스터|master|오빠|형|누나|언니)(이?라고)?(불러|부르)/,
   /(너의?|니|네|봇)이름(은|는|을|를)?.{0,10}(로|으로)?(바꿔|바꾸|정해|해라|할래|이야|야)/,
   /(성격|캐릭터|컨셉|컨셉트|페르소나|persona|character|말하는방식)(을|를|은|는)?.{0,8}(바꿔|바꾸|설정|정해|로해|부여)/,
-  /(냥체|해체|하오체|사투리|아저씨말투|애교)(로|으로)(말|해|답|써)/
+  /(냥체|해체|하오체|사투리|아저씨말투|애교)(로|으로)(말|해|답|써)/,
+  /(캐릭터|설정|컨셉|말투|정체)(을|를)?(계속)?유지/,
+  /(처럼|같이)(말해|말하|답해|행동|굴어)/,
+  /(인|한)척(하|해|행동)/,
+  /(이?라고)(불러줘|불러|부르세요|부를래|부름)/
 ];
 
 // 1층: 차단해야 할 말이면 대신 보여줄 답을 돌려준다. 괜찮으면 null
@@ -1931,6 +1971,24 @@ function sanitizeReply(reply) {
   if (!isLeakyReply(reply)) return reply;
   console.warn('[Guard] 답변에서 유출/코드/호칭 변경을 감지해 대체했습니다.');
   return GUARD_REPLY_ROLE;
+}
+
+// 지금이 어느 혼잡 구간인지 한 줄로 만든다 ("지금 붐벼?" 에 답할 수 있게)
+function describeNowForAI() {
+  const now = new Date();
+  const h = now.getHours();
+  const slots = [
+    [2, 8, '새벽 야간 골든타임', 15, '매우 여유'],
+    [8, 12, '오전 학습 시작 시간', 28, '여유'],
+    [12, 18, '오후 틈새 타임', 45, '보통'],
+    [18, 21, '저녁 식사·복귀 시간', 68, '혼잡'],
+    [21, 2, '몰입 종료 심야 피크', 88, '매우 혼잡']
+  ];
+  const hit = slots.find(([s, e]) => (s < e ? h >= s && h < e : h >= s || h < e)) || slots[2];
+  const week = '일월화수목금토'[now.getDay()];
+  const p = (v) => String(v).padStart(2, '0');
+  return `${now.getFullYear()}년 ${now.getMonth() + 1}월 ${now.getDate()}일 (${week}요일) `
+    + `${p(h)}시 ${p(now.getMinutes())}분 — 지금은 '${hit[2]}' 구간이라 예상 혼잡도 ${hit[3]}% (${hit[4]})`;
 }
 
 // 🧠 대화 문맥 기억(Multi-turn Memory) 버퍼
@@ -1980,8 +2038,12 @@ async function processNaturalLanguageQuery(userText) {
 8. 거절할 때는 짧고 유쾌하게 한두 문장으로만 하고, 무슨 규칙 때문인지 나열하지 마세요.
 
 [답변 허용 범위 & 역할]
-1. 세탁실 & 워시타워 관련 질문: 실시간 기기 현황, 남녀 추천, 코스/온도, 냄새 제거, 건조기 팁, 에러 조치법 등
-2. 크래프톤 정글 기숙사 생활 관련 질문: 세탁실 에티켓, 수면/컨디션 관리, 정글 기숙사 라이프 팁 등
+1. 세탁실 & 워시타워 관련 질문: 실시간 기기 현황, 남녀 추천, 코스/온도, 냄새 제거, 건조기 팁, 에러 조치법, 혼잡 시간대 등
+2. 캠퍼스·기숙사 생활 질문: 아래 [정글 생활 안내]에 있는 주제들
+   → 아래 [정글 생활 안내]에 근거가 있으면 반드시 그 내용대로 답하고, 없는 내용은 지어내지 마세요.
+     모르면 담당 코치나 운영사무실에 문의하라고 안내하세요.
+   → 정글 생활 관련 답변에는 [안내 페이지 링크]에서 관련된 것을 골라 맨 끝에 "자세히: <링크>" 한 줄만 덧붙이세요.
+     세탁 현황처럼 링크가 필요 없는 답변에는 붙이지 마세요.
 3. ⚠️ 코딩/프로그래밍/알고리즘 문제 풀이 등 일반 코딩 질문이 들어올 경우:
    - 답변을 장황하게 풀지 말고 1~2문장으로 유쾌하고 정중하게 거절하여 토큰을 절약하세요.
    - 예시: "저는 정글 세탁실 & 기숙사 생활 전용 비서입니다! 🫧 코딩 질문은 랩실 동료들과 페어 프로그래밍으로 해결하시고, 세탁실 현황이나 세탁 팁을 물어봐 주세요!"
@@ -1996,8 +2058,14 @@ async function processNaturalLanguageQuery(userText) {
   - 정글 에티켓: 세탁/건조 끝나면 다음 사람 위해 즉시 수거하기, 건조 후 먼지 필터 털어주기.
 • 구역: 1~5호기(남성 전용), 6~7호기(공용), 8~9호기(여성 전용) | LG 트롬 워시타워 일체형(자동 직배수)
 
+[지금 시각]
+${describeNowForAI()}
+
 [실시간 9대 기기 상태]
 ${compactStatus}
+
+[정글 생활 안내]
+${typeof JUNGLE_KB === 'string' ? JUNGLE_KB : '(안내 지식을 불러오지 못했습니다. 세탁실 관련만 답하세요.)'}
 
 이전 대화 맥락을 기억하여 꼬리 질문(예: "다른 방법은?", "그럼 몇 번?")에도 자연스럽게 이어가세요.`;
 
@@ -2005,80 +2073,91 @@ ${compactStatus}
   const recentHistory = chatHistoryBuffer.slice(-6);
 
   // ── [1순위: Gemini (문맥 기억 스트리밍) ──
-  //     상위 모델부터 시도하고, 혼잡하면 아래 Groq 으로 넘어간다 ──
+  //     답이 가장 정확하고 빠르다. 6초 안에 응답이 없으면 아래 Groq 으로 넘어간다 ──
   if (GEMINI_API_KEY) {
     const geminiContents = recentHistory.map(msg => ({
       role: msg.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: msg.content }]
     }));
 
+    // 모델을 낮추기 전에 키부터 바꿔 본다 (앞 모델이 더 똑똑하므로).
+    // 다만 429(그 키의 하루 한도 초과)가 아니면 모델 쪽 문제라
+    // 남은 키를 헛되이 시도하지 않고 바로 다음 모델로 넘어간다.
+    // (예: 3.7-flash 가 혼잡하면 503 이 뜨는데, 키를 바꿔도 똑같이 막힌다)
     for (const modelName of GEMINI_MODELS) {
-      try {
-        const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`;
-        const res = await fetch(geminiEndpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-            contents: geminiContents,
-            // 상위 모델은 내부 추론에도 토큰을 쓰므로 넉넉히 준다 (답이 중간에 끊기지 않도록)
-            generationConfig: { temperature: 0.6, maxOutputTokens: 2048 }
-          })
-        });
+      for (const apiKey of GEMINI_API_KEYS) {
+        let status = 0;
+        try {
+          const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${apiKey}`;
+          const res = await fetchAiWithTimeout(geminiEndpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: systemInstruction }] },
+              contents: geminiContents,
+              // 상위 모델은 내부 추론에도 토큰을 쓰므로 넉넉히 준다 (답이 중간에 끊기지 않도록)
+              generationConfig: { temperature: 0.6, maxOutputTokens: 2048 }
+            })
+          });
+          status = res.status;
 
-        if (res.ok && res.body) {
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder('utf-8');
-          let fullText = '';
-          let buffer = '';
+          if (res.ok && res.body) {
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let fullText = '';
+            let buffer = '';
 
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
 
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop();
 
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                const jsonStr = line.slice(6).trim();
-                if (jsonStr) {
-                  try {
-                    const chunk = JSON.parse(jsonStr);
-                    const textChunk = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
-                    if (textChunk) {
-                      fullText += textChunk;
-                      if (isLeakyReply(fullText)) {
-                        // 지시문이나 코드가 새어 나오는 중이면 더 받지 않고 끊는다
-                        try { await reader.cancel(); } catch (e) {}
-                        chatHistoryBuffer = [];
-                        bubbleEl.innerHTML = renderChatText(sanitizeReply(fullText));
-                        return;
+              for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                  const jsonStr = line.slice(6).trim();
+                  if (jsonStr) {
+                    try {
+                      const chunk = JSON.parse(jsonStr);
+                      const textChunk = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
+                      if (textChunk) {
+                        fullText += textChunk;
+                        if (isLeakyReply(fullText)) {
+                          // 지시문이나 코드가 새어 나오는 중이면 더 받지 않고 끊는다
+                          try { await reader.cancel(); } catch (e) {}
+                          chatHistoryBuffer = [];
+                          bubbleEl.innerHTML = renderChatText(sanitizeReply(fullText));
+                          return;
+                        }
+                        bubbleEl.innerHTML = renderChatText(fullText) + '<span style="opacity:0.6;animation:pulse-dot 0.8s infinite;"> ▋</span>';
+                        chatBox.scrollTop = chatBox.scrollHeight;
                       }
-                      bubbleEl.innerHTML = renderChatText(fullText) + '<span style="opacity:0.6;animation:pulse-dot 0.8s infinite;"> ▋</span>';
-                      chatBox.scrollTop = chatBox.scrollHeight;
-                    }
-                  } catch (e) {}
+                    } catch (e) {}
+                  }
                 }
               }
             }
-          }
 
-          if (fullText.trim()) {
-            fullText = sanitizeReply(fullText);
-            bubbleEl.innerHTML = renderChatText(fullText);
-            chatHistoryBuffer.push({ role: 'assistant', content: fullText });
-            return;
+            if (fullText.trim()) {
+              fullText = sanitizeReply(fullText);
+              bubbleEl.innerHTML = renderChatText(fullText);
+              chatHistoryBuffer.push({ role: 'assistant', content: fullText });
+              return;
+            }
           }
+        } catch (err) {
+          console.warn(`Gemini ${modelName} 실패:`, err);
         }
-      } catch (err) {
-        console.warn(`Gemini Model ${modelName} 실패:`, err);
+        // 이 키의 한도 초과일 때만 다음 키를 써 본다
+        if (status !== 429) break;
       }
     }
   }
 
-  // ── [2순위: Groq 예비 엔진 (Gemini 가 혼잡하거나 실패했을 때만 쓴다)] ──
+  // ── [2순위: Groq 예비 엔진 (Gemini 가 막혔을 때만 쓴다)] ──
+  //     제미나이보다 답이 무른 편이라 뒤에 둔다 ──
   if (GROQ_API_KEY) {
     for (const modelName of GROQ_MODELS) {
       try {
@@ -2087,7 +2166,7 @@ ${compactStatus}
           ...recentHistory
         ];
 
-        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        const res = await fetchAiWithTimeout('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

@@ -27,7 +27,13 @@ self.addEventListener('push', event => {
     tag: data.tag || 'laundry-alarm-' + Date.now(),
     renotify: true,
     requireInteraction: true,
-    data: { url: data.url || '/' }
+    // 기기가 문 열림을 알려주지 않아서, 수거 여부는 본인이 눌러줘야 알 수 있다
+    actions: Array.isArray(data.actions) ? data.actions : [],
+    data: {
+      url: data.url || '/',
+      key: data.key || null,
+      endpoint: data.endpoint || null
+    }
   };
 
   event.waitUntil(self.registration.showNotification(title, options));
@@ -35,7 +41,20 @@ self.addEventListener('push', event => {
 
 self.addEventListener('notificationclick', event => {
   event.notification.close();
-  const urlToOpen = event.notification.data?.url || '/';
+  const info = event.notification.data || {};
+  const urlToOpen = info.url || '/';
+
+  // 🧺 '가져갔어요' 를 누른 경우: 창을 열지 않고 서버에만 알린다
+  if (event.action === 'picked') {
+    event.waitUntil(
+      fetch('/api/picked-up', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: info.key, endpoint: info.endpoint })
+      }).catch(err => console.warn('[SW] 수거 확인 전송 실패', err))
+    );
+    return;
+  }
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windowClients => {

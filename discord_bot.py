@@ -5,9 +5,10 @@ import io
 import unicodedata
 import json
 import asyncio
+import time
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -28,6 +29,32 @@ except Exception:
     pass
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 서버가 어느 시간대에 있든 한국 시간으로 답하도록 고정한다
+KST = timezone(timedelta(hours=9))
+
+# 웹 대시보드와 같은 시간대별 예상 혼잡도 (jungle_kb 의 [세탁실 혼잡 시간대] 와 같은 값)
+BUSY_SLOTS = [
+    (2, 8, "새벽 야간 골든타임", 15, "매우 여유"),
+    (8, 12, "오전 학습 시작 시간", 28, "여유"),
+    (12, 18, "오후 틈새 타임", 45, "보통"),
+    (18, 21, "저녁 식사·복귀 시간", 68, "혼잡"),
+    (21, 2, "몰입 종료 심야 피크", 88, "매우 혼잡"),
+]
+
+
+def now_kst():
+    return datetime.now(KST)
+
+
+def current_busy_slot(hour=None):
+    """지금이 어느 혼잡 구간인지 돌려준다."""
+    h = now_kst().hour if hour is None else hour
+    for start, end, label, rate, badge in BUSY_SLOTS:
+        inside = (start <= h < end) if start < end else (h >= start or h < end)
+        if inside:
+            return label, rate, badge
+    return BUSY_SLOTS[2][2], BUSY_SLOTS[2][3], BUSY_SLOTS[2][4]
 
 # =========================================================
 # 설정 및 환경 변수 (.env 및 다양한 경로 자동 탐색)
@@ -824,7 +851,38 @@ async def cmd_info_slash(interaction: discord.Interaction):
 # =========================================================
 # 자연어 비서 (/비서) — "1번 세탁기 알림 걸어줘" 같은 말을 알아듣는다
 # =========================================================
-GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
+def _load_gemini_keys():
+    """제미나이 키를 여러 개 읽는다.
+
+    GEMINI_API_KEY 에 쉼표로 여러 개를 넣어도 되고,
+    GEMINI_API_KEY_2 / _3 ... 처럼 따로 넣어도 된다.
+    ⚠️ 같은 구글 프로젝트에서 만든 키끼리는 한도를 같이 쓰므로 효과가 없다.
+       서로 다른 계정 또는 프로젝트에서 받은 키를 넣어야 한다.
+    """
+    keys, seen = [], set()
+    raw = [os.environ.get("GEMINI_API_KEY") or "", os.environ.get("GEMINI_API_KEYS") or ""]
+    for i in range(2, 9):
+        raw.append(os.environ.get(f"GEMINI_API_KEY_{i}") or "")
+    for chunk in raw:
+        for k in chunk.split(","):
+            k = k.strip()
+            if k and k not in seen:
+                seen.add(k)
+                keys.append(k)
+    return keys
+
+
+GEMINI_API_KEYS = _load_gemini_keys()
+GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
+
+# 예비 엔진. 제미나이가 모두 막혔을 때만 쓴다.
+# 다른 회사라 할당량이 완전히 따로여서, 구글 쪽이 하루 한도에 걸려도 계속 답할 수 있다.
+GROQ_API_KEY = (os.environ.get("GROQ_API_KEY") or "").strip()
+GROQ_MODELS = [
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-20b",
+]
 # 앞에서부터 시도한다. 앞쪽이 더 똑똑하고, 뒤로 갈수록 가볍고 빠르다.
 # (뒤쪽은 앞 모델이 혼잡할 때를 대비한 예비용이다)
 GEMINI_MODELS = [
@@ -977,6 +1035,18 @@ _ROLE_PATTERNS = [
     r"(나는|내가|저는|제가)(이봇의|이|너의|네)?(개발자|관리자|제작자|만든사람|주인|운영자)(야|이야|다|입니다|임)",
     r"(관리자|개발자|디버그|테스트|무제한)(모드|권한)(로|으로)?(전환|바꿔|켜|진입|들어가)",
     r"(sudo|adminmode|overrideyour|bypassyour|systemoverride)",
+    # 영어로 쓴 캐릭터 설정문 (정상 대화에서는 절대 나오지 않는 말들)
+    r"(always|never)?(remain|stay|keep)incharacter",
+    r"break(ing)?character",
+    r"addresstheuseras",
+    r"speakonlyin",
+    r"(respond|reply|answer|talk)(only)?as",
+    r"you(are|re)(now)?(a|an|the)?[a-z]{2,24}from[a-z]",
+    r"fromnowonyouare",
+    r"your(persona|characteris|nameisnow|newname)",
+    r"use[a-z]{0,24}tone",
+    r"(in|with)a[a-z]{0,20}(voice|persona|tone)",
+    r"(system|developer|assistant)(prompt|message|instruction)s?[:=]",
     r"(가정|가상|상상)(해|하고|한다면)?(제한|규칙|필터)",
     r"(하지말라는거|안된다는거|금지된거)(무시|빼고|말고)",
 ]
@@ -993,6 +1063,10 @@ _PERSONA_PATTERNS = [
     r"(너의?|니|네|봇)이름(은|는|을|를)?.{0,10}(로|으로)?(바꿔|바꾸|정해|해라|할래|이야|야)",
     r"(성격|캐릭터|컨셉|컨셉트|페르소나|persona|character|말하는방식)(을|를|은|는)?.{0,8}(바꿔|바꾸|설정|정해|로해|부여)",
     r"(냥체|해체|하오체|사투리|아저씨말투|애교)(로|으로)(말|해|답|써)",
+    r"(캐릭터|설정|컨셉|말투|정체)(을|를)?(계속)?유지",
+    r"(처럼|같이)(말해|말하|답해|행동|굴어)",
+    r"(인|한)척(하|해|행동)",
+    r"(이?라고)(불러줘|불러|부르세요|부를래|부름)",
 ]
 
 _ROLE_RE = [re.compile(p) for p in _ROLE_PATTERNS]
@@ -1038,14 +1112,44 @@ def sanitize_reply(reply):
     return reply
 
 
+# 기기를 가리키는 말 (예: "3번 건조기", "7 세탁기")
+DEVICE_RE = re.compile(r"(\d+)\s*(?:번|호기|호)?\s*(세탁기|건조기|세탁|건조)")
+CANCEL_WORDS = ("해제", "취소", "꺼줘", "끄기", "끄고", "삭제", "빼줘", "지워")
+REGISTER_WORDS = ("알림", "알람", "등록", "설정", "걸어", "켜", "예약", "잡아")
+
+
+def parse_device_segment(seg):
+    """'3번 건조기 알림 취소' 같은 조각 하나를 읽는다. 못 읽으면 None."""
+    m = DEVICE_RE.search(seg)
+    if not m:
+        return None
+    tower_id = int(m.group(1))
+    unit_type = UNIT_WORDS.get(m.group(2))
+    if not (1 <= tower_id <= 9) or not unit_type:
+        return None
+    # '알림 취소' 처럼 두 낱말이 같이 오므로 해제를 먼저 본다
+    if any(k in seg for k in CANCEL_WORDS):
+        return {"action": "cancel", "towerId": tower_id, "unitType": unit_type, "_verb": True}
+    if any(k in seg for k in REGISTER_WORDS):
+        return {"action": "register", "towerId": tower_id, "unitType": unit_type, "_verb": True}
+    # 시킨 말이 없으면 일단 조회로 둔다. ("1번 세탁기랑 2번 건조기 알림 걸어줘" 처럼
+    #  동사가 뒤에만 있으면 나중에 뒤 동사를 물려받는다)
+    return {"action": "unit_status", "towerId": tower_id, "unitType": unit_type, "_verb": False}
+
+
 def parse_by_rules(text, ctx=None):
     """API 를 쓰지 않고 알아들을 수 있는 문장은 여기서 바로 처리한다.
     (빠르고, 무료고, 결과가 항상 같다)"""
     t = text.replace(" ", "")
 
-    if any(k in t for k in ("전부해제", "모두해제", "다해제", "전부취소", "모두취소", "다꺼", "전체해제")):
+    # "전체 예약 취소", "알림 전부 꺼줘" 처럼 말이 조금씩 달라도 잡히게 한다
+    if re.search(r"(전체|전부|모두)(의)?(예약|알림|알람)?(을|를)?(다)?(취소|해제|삭제|끄|꺼|지워|없애)", t):
         return {"action": "cancel_all"}
-    if any(k in t for k in ("내알림", "알림목록", "뭐걸었", "등록한알림")):
+    # "다 취소해줘" 처럼 짧게 말한 경우. 다만 기기 번호가 있으면 그 기기만 뜻하므로 뺀다
+    if not DEVICE_RE.search(t) and re.search(r"다(취소|해제|삭제|꺼|끄|지워)", t):
+        return {"action": "cancel_all"}
+    if any(k in t for k in ("내알림", "내예약", "알림목록", "예약목록", "알림현황", "예약현황",
+                            "알림리스트", "알림상태", "뭐걸었", "등록한알림", "등록한예약")):
         return {"action": "list_alarms"}
 
     if any(k in t for k in ("뭐할수있", "무엇을할수있", "도움말", "사용법", "명령어", "어떻게써")):
@@ -1055,16 +1159,33 @@ def parse_by_rules(text, ctx=None):
     if re.search(r"(건조기|건조).*(현황|상태|목록|보여|알려|있어|없어|남는|남았|비어|사용가능|쓸수있|가능한)", t) and not re.search(r"\d", t):
         return {"action": "unit_list", "unitType": "dryer"}
 
-    m = re.search(r"(\d+)\s*(?:번|호기|호)?\s*(세탁기|건조기|세탁|건조)", t)
-    if m:
-        tower_id = int(m.group(1))
-        unit_type = UNIT_WORDS.get(m.group(2))
-        if 1 <= tower_id <= 9 and unit_type:
-            if any(k in t for k in ("해제", "취소", "꺼줘", "끄기", "끄고", "삭제")):
-                return {"action": "cancel", "towerId": tower_id, "unitType": unit_type}
-            if any(k in t for k in ("알림", "알람", "등록", "설정", "걸어", "켜")):
-                return {"action": "register", "towerId": tower_id, "unitType": unit_type}
-            return {"action": "unit_status", "towerId": tower_id, "unitType": unit_type}
+    # 한 문장에 기기가 여러 번 나오면 각각을 따로 처리한다.
+    # 예) "3번 건조기 알림 취소하고 7번 세탁기 예약"
+    found = list(DEVICE_RE.finditer(t))
+    if len(found) >= 2:
+        steps = []
+        for i, m in enumerate(found):
+            end = found[i + 1].start() if i + 1 < len(found) else len(t)
+            step = parse_device_segment(t[m.start():end])
+            if step:
+                steps.append(step)
+        if len(steps) >= 2:
+            # "1번 세탁기랑 2번 건조기 알림 걸어줘" 처럼 시킨 말이 뒤에만 붙은 경우,
+            # 그 앞에 있는 기기들도 같은 동사로 본다.
+            # 반대로 뒤에 오는 조각은 자기 말이 따로 있는 것이므로 건드리지 않는다.
+            first = next((i for i, st in enumerate(steps) if st.get("_verb")), None)
+            if first:
+                for st in steps[:first]:
+                    if st["action"] == "unit_status":
+                        st["action"] = steps[first]["action"]
+            for st in steps:
+                st.pop("_verb", None)
+            return {"actions": steps}
+
+    one = parse_device_segment(t)
+    if one:
+        one.pop("_verb", None)
+        return one
 
     # 기기 번호 없이 이어서 말한 경우, 그 사람이 직전에 말한 기기를 쓴다.
     # (문맥은 사람별로 따로 보관하므로 다른 사람 요청과 섞이지 않는다)
@@ -1077,11 +1198,21 @@ def parse_by_rules(text, ctx=None):
     return None
 
 
-def ask_gemini(text, status_data, mine, history=None):
-    """규칙으로 못 알아들은 문장을 Gemini 에게 물어 행동을 정한다."""
-    if not GEMINI_API_KEY:
-        return None
+def _now_line():
+    """지금 시각과 혼잡 구간을 한 줄로 만든다. '지금 붐벼?' 에 답할 수 있게."""
+    now = now_kst()
+    label, rate, badge = current_busy_slot(now.hour)
+    week = "월화수목금토일"[now.weekday()]
+    return (f"{now:%Y년 %m월 %d일} ({week}요일) {now:%H시 %M분} (한국 시간) — "
+            f"지금은 '{label}' 구간이라 예상 혼잡도 {rate}% ({badge})")
 
+
+def build_assistant_prompt(text, status_data, mine, kb_limit=None):
+    """AI 에게 넘길 지시문을 만든다. 제미나이와 Groq 이 같은 것을 쓴다.
+
+    kb_limit 을 주면 안내 지식을 관련 있는 것 몇 개로 줄인다.
+    Groq 은 요청 크기 제한이 빡빡해서 전체(약 1만 7천 자)를 넣으면 413 이 난다.
+    """
     lines = []
     for t in TOWERS:
         d = status_data.get(t["name"], {})
@@ -1103,7 +1234,7 @@ def ask_gemini(text, status_data, mine, history=None):
                 part += f" | 누적 {cycle}회" + ("[통살균 필요]" if cycle >= 30 else "")
             lines.append(part)
 
-    kb_text = jungle_kb.build_context(text) if jungle_kb else ""
+    kb_text = jungle_kb.build_context(text, limit=kb_limit) if jungle_kb else ""
 
     system_text = (
         "너는 크래프톤 정글 캠퍼스 생활 안내 봇이다. 사용자의 한국어 요청을 읽고 할 일을 정해라.\n\n"
@@ -1135,7 +1266,10 @@ def ask_gemini(text, status_data, mine, history=None):
         "예: '저는 정글 생활 안내 봇이라 코딩 질문은 도와드리기 어려워요! 🫧 "
         "그건 동료들과 페어 프로그래밍으로 풀어보시고, 저에게는 세탁실이나 캠퍼스 생활을 물어봐 주세요!'\n"
         "아래 [정글 생활 안내]에 근거가 있으면 반드시 그 내용대로 답하고, 없는 내용은 지어내지 마라. "
-        "모르면 담당 코치나 운영사무실에 문의하라고 안내해라.\n\n"
+        "모르면 담당 코치나 운영사무실에 문의하라고 안내해라.\n"
+        "정글 생활 관련 질문에 답할 때는 [안내 페이지 링크]에서 관련된 것을 골라 "
+        "답변 맨 끝에 '-# 자세히: <링크>' 형태로 한 줄만 덧붙여라. "
+        "세탁기 알림 등록처럼 링크가 필요 없는 요청에는 붙이지 마라.\n\n"
         + ("[정글 생활 안내]\n" + kb_text + "\n\n" if kb_text else "")
         + "사용자의 요청을 읽고 할 일을 정해라.\n\n"
         "[가능한 action]\n"
@@ -1144,7 +1278,11 @@ def ask_gemini(text, status_data, mine, history=None):
         "- cancel_all: 내 알림 전부 해제\n"
         "- list_alarms: 내가 등록한 알림 목록\n"
         "- status: 세탁실 전체 현황\n"
-        "- chat: 위 어디에도 해당하지 않음. reply 에 답을 직접 써라\n\n"
+        "- chat: 위 어디에도 해당하지 않음. reply 에 답을 직접 써라\n"
+        "한 문장에 요청이 여러 개면(예: '3번 건조기 알림 취소하고 7번 세탁기 예약') "
+        "actions 배열에 말한 순서대로 모두 담아라. 요청이 하나뿐이면 actions 는 비워두고 "
+        "action 에만 담아라.\n\n"
+        "[지금 시각]\n" + _now_line() + "\n\n"
         "[지금 기기 상태]\n" + "\n".join(lines) + "\n\n"
         "[내가 등록한 알림]\n" + ("\n".join(f"- {a['deviceName']}" for a in mine) if mine else "없음") + "\n\n"
         + LAUNDRY_GUIDE + "\n\n"
@@ -1157,6 +1295,16 @@ def ask_gemini(text, status_data, mine, history=None):
 
     # 긴 주입 문단을 통째로 밀어 넣지 못하게 자른다
     safe_text = (text or "")[:MAX_INPUT_CHARS]
+
+    return system_text, safe_text
+
+
+def ask_gemini(text, status_data, mine, history=None):
+    """규칙으로 못 알아들은 문장을 Gemini 에게 물어 행동을 정한다."""
+    if not GEMINI_API_KEYS:
+        return None
+
+    system_text, safe_text = build_assistant_prompt(text, status_data, mine)
 
     contents = list(history or [])
     contents.append({"role": "user", "parts": [{"text": safe_text}]})
@@ -1177,6 +1325,20 @@ def ask_gemini(text, status_data, mine, history=None):
                                "enum": ["register", "cancel", "cancel_all", "list_alarms", "status", "chat"]},
                     "towerId": {"type": "INTEGER"},
                     "unitType": {"type": "STRING", "enum": ["washer", "dryer"]},
+                    "actions": {
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "action": {"type": "STRING",
+                                           "enum": ["register", "cancel", "cancel_all",
+                                                    "list_alarms", "status", "unit_status"]},
+                                "towerId": {"type": "INTEGER"},
+                                "unitType": {"type": "STRING", "enum": ["washer", "dryer"]},
+                            },
+                            "required": ["action"],
+                        },
+                    },
                     "reply": {"type": "STRING"},
                 },
                 "required": ["action", "reply"],
@@ -1184,26 +1346,114 @@ def ask_gemini(text, status_data, mine, history=None):
         },
     }
 
+    # 키와 모델을 많이 돌리다 보면 오래 걸릴 수 있어 전체 시간에 상한을 둔다
+    deadline = time.monotonic() + 25
+
     for model in GEMINI_MODELS:
+        if time.monotonic() > deadline:
+            print("[Gemini] 시간 초과로 중단")
+            break
+        # 한 모델 안에서 키를 돌려 본다. 한도(429)에 걸린 키만 건너뛰고,
+        # 그 밖의 오류면 이 모델은 포기하고 다음 모델로 넘어간다.
+        for key in GEMINI_API_KEYS:
+            if time.monotonic() > deadline:
+                break
+            try:
+                req = urllib.request.Request(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
+                    data=json.dumps(body).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=15) as res:
+                    data = json.loads(res.read().decode("utf-8"))
+                raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                # 일부 모델이 ```json ... ``` 로 감싸 보낸다. 그대로 파싱하면 실패한다.
+                if raw.startswith("```"):
+                    raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
+                    raw = re.sub(r"\s*```$", "", raw)
+                plan = json.loads(raw)
+                if isinstance(plan, dict):
+                    plan["reply"] = sanitize_reply(plan.get("reply"))
+                return plan
+            except urllib.error.HTTPError as e:
+                # 429 = 이 키의 한도 초과, 다음 키로. 그 밖의 코드는 모델 문제로 본다.
+                print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} HTTP {e.code}")
+                if e.code == 429:
+                    continue
+                break
+            except Exception as e:
+                print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} 실패: {e}")
+                break
+    return None
+
+
+def ask_groq(text, status_data, mine, history=None):
+    """제미나이가 모두 막혔을 때 쓰는 예비 엔진.
+
+    지시문은 제미나이와 같은 것을 쓴다. 다만 responseSchema 가 없으므로
+    어떤 모양의 JSON 을 원하는지 글로 적어 준다.
+    """
+    if not GROQ_API_KEY:
+        return None
+
+    system_text, safe_text = build_assistant_prompt(text, status_data, mine, kb_limit=4)
+    system_text += (
+        "\n\n[답하는 형식 — 반드시 지켜라]\n"
+        "설명을 붙이지 말고 JSON 객체 하나만 답해라. 필드는 다음과 같다.\n"
+        '{"action": "register|cancel|cancel_all|list_alarms|status|chat", '
+        '"towerId": 1~9 (기기를 가리킬 때만), '
+        '"unitType": "washer" 또는 "dryer" (기기를 가리킬 때만), '
+        '"actions": [여러 요청일 때만, {"action","towerId","unitType"} 목록], '
+        '"reply": "사용자에게 보여줄 한국어 답변"}\n'
+        "reply 는 반드시 넣어라."
+    )
+
+    messages = [{"role": "system", "content": system_text}]
+    for turn in (history or []):
+        role = "assistant" if turn.get("role") == "model" else "user"
+        parts = turn.get("parts") or []
+        content = " ".join(p.get("text", "") for p in parts).strip()
+        if content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": safe_text})
+
+    body = json.dumps({
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": 1024,
+        "response_format": {"type": "json_object"},
+    })
+
+    deadline = time.monotonic() + 20
+    for model in GROQ_MODELS:
+        if time.monotonic() > deadline:
+            break
         try:
+            payload = json.loads(body)
+            payload["model"] = model
             req = urllib.request.Request(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}",
-                data=json.dumps(body).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
+                "https://api.groq.com/openai/v1/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    # 이 헤더가 없으면 Cloudflare 가 막는다 (403 error code 1010)
+                    "User-Agent": "JungleWashBot/1.0",
+                },
             )
             with urllib.request.urlopen(req, timeout=15) as res:
                 data = json.loads(res.read().decode("utf-8"))
-            raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            # 일부 모델이 ```json ... ``` 로 감싸 보낸다. 그대로 파싱하면 실패한다.
+            raw = (data["choices"][0]["message"]["content"] or "").strip()
             if raw.startswith("```"):
                 raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
                 raw = re.sub(r"\s*```$", "", raw)
             plan = json.loads(raw)
             if isinstance(plan, dict):
                 plan["reply"] = sanitize_reply(plan.get("reply"))
-            return plan
+                print(f"[Groq] {model} 로 답했습니다")
+                return plan
         except Exception as e:
-            print(f"[Gemini] {model} 실패: {e}")
+            print(f"[Groq] {model} 실패: {e}")
     return None
 
 
@@ -1251,6 +1501,47 @@ async def make_guide_file(info):
         return None
 
 
+class PickedUpView(discord.ui.View):
+    """5분 전 알림과 완료 알림에 붙는 수거 확인 버튼.
+
+    기기 API 에는 문이 열렸는지 알려주는 값이 없다(runState/timer/cycle 뿐).
+    그래서 이미 가져간 사람도 수거 요청을 받게 되는데,
+    이 버튼을 눌러주면 그 사람에게는 수거 요청을 보내지 않는다.
+    완료 알림 자체는 그대로 간다. (5분 전에 눌러도 끝난 건 알려줘야 하니까)
+    """
+
+    def __init__(self, user_id, tower_id, unit_type, stage="done"):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+        self.tower_id = tower_id
+        self.unit_type = unit_type
+        self.stage = stage
+        btn = self.children[0]
+        btn.label = "가져갈게요" if stage == "before" else "가져갔어요"
+
+    @discord.ui.button(label="가져갔어요", emoji="\U0001f9fa", style=discord.ButtonStyle.success)
+    async def picked_up(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("본인 알림에서만 누를 수 있어요.", ephemeral=True)
+            return
+        marked = False
+        for a in active_alarms:
+            if (a.get("userId") == self.user_id
+                    and a.get("towerId") == self.tower_id
+                    and a.get("unitType") == self.unit_type):
+                a["pickedUp"] = True
+                marked = True
+        if marked:
+            save_alarms()
+        button.disabled = True
+        button.label = "확인했어요"
+        note = ("\U0001f9fa 확인했습니다! 수거 요청은 보내지 않을게요. "
+                "완료되면 한 번만 알려드릴게요."
+                if self.stage == "before" else
+                "\U0001f9fa 수거하신 걸로 표시했습니다. 수거 요청은 보내지 않을게요!")
+        await interaction.response.edit_message(content=note, view=self)
+
+
 async def make_board_file():
     """배치도 이미지를 그려 첨부 파일로 만든다. 글보다 한눈에 들어온다."""
     try:
@@ -1285,12 +1576,56 @@ async def _run_assistant_inner(user_id, text):
     if plan is None:
         plan = await asyncio.to_thread(ask_gemini, text, status_data, mine, get_history(user_id))
     if plan is None:
+        # 제미나이 키가 모두 막혔을 때 (하루 한도·모델 혼잡) 예비 엔진으로 넘어간다
+        plan = await asyncio.to_thread(ask_groq, text, status_data, mine, get_history(user_id))
+    if plan is None:
         return ("무슨 말씀인지 파악하지 못했습니다.\n"
                 "-# 예) `3번 건조기 알림 걸어줘` · `내 알림 보여줘` · `전부 해제해줘`"), None
 
     # 다음 말에 맥락이 이어지도록 사람별로 기록해 둔다
     push_history(user_id, "user", text)
 
+    steps = plan.get("actions")
+    if isinstance(steps, list) and len(steps) > 1:
+        return await _run_steps(user_id, steps, plan.get("reply"))
+    if isinstance(steps, list) and len(steps) == 1:
+        plan = dict(steps[0], reply=plan.get("reply"))
+
+    return await _do_step(user_id, plan, status_data, mine)
+
+
+def _norm(result):
+    """(문장, embed, 배치도) 세 칸으로 길이를 맞춘다."""
+    if not isinstance(result, tuple):
+        result = (result,)
+    return (result[0] if len(result) > 0 else "",
+            result[1] if len(result) > 1 else None,
+            result[2] if len(result) > 2 else False)
+
+
+async def _run_steps(user_id, steps, reply=None):
+    """여러 요청을 순서대로 처리하고 결과를 하나로 합친다."""
+    texts, embed, board = [], None, False
+    if reply and reply.strip():
+        texts.append(reply.strip())
+    for step in steps:
+        # 알림 목록은 앞 단계에서 바뀌므로 매번 새로 읽는다
+        status_data = fetch_live_status()
+        if not status_data:
+            texts.append("⚠️ 실시간 데이터를 가져오지 못했습니다.")
+            break
+        mine = [a for a in active_alarms if a.get("userId") == user_id]
+        t, e, b = _norm(await _do_step(user_id, step, status_data, mine))
+        if t:
+            texts.append(t)
+        if e is not None and embed is None:
+            embed = e
+        if b and not board:
+            board = b
+    return "\n".join(texts), embed, board
+
+
+async def _do_step(user_id, plan, status_data, mine):
     action = plan.get("action")
     reply = (plan.get("reply") or "").strip()
 
@@ -1519,7 +1854,10 @@ async def check_laundry_alarms():
                 try:
                     await user.send(
                         f"🧺 **[5분 전 알림] {item['deviceName']}** 가동이 약 **5분 뒤** 완료됩니다!\n"
-                        f"👉 빨래 바구니를 챙겨 세탁실로 이동할 준비를 해주세요! 🏃💨"
+                        f"👉 빨래 바구니를 챙겨 세탁실로 이동할 준비를 해주세요! 🏃💨\n"
+                        f"-# 바로 가져가실 거면 아래 버튼을 눌러주세요. 수거 요청을 보내지 않습니다.",
+                        view=PickedUpView(item["userId"], item["towerId"],
+                                          item["unitType"], stage="before")
                     )
                 except Exception as e:
                     print(f"[DM Send Error] {e}")
@@ -1534,7 +1872,13 @@ async def check_laundry_alarms():
                 try:
                     await user.send(
                         f"🏁 **[세탁 완료] {item['deviceName']}** 가동이 모두 끝났습니다!\n"
-                        f"👉 다음 정글러를 위해 세탁실에서 빨래를 즉시 수거해 주세요! 🫧"
+                        f"👉 다음 정글러를 위해 세탁실에서 빨래를 즉시 수거해 주세요! 🫧\n"
+                        + ("-# 아까 확인해 주셔서 수거 요청은 보내지 않습니다."
+                           if item.get("pickedUp") else
+                           f"-# 이미 가져가셨다면 아래 버튼을 눌러주세요. "
+                           f"안 누르면 {STALE_PICKUP_SEC // 60}분 뒤에 한 번 더 알려드려요."),
+                        view=None if item.get("pickedUp") else PickedUpView(
+                            item["userId"], item["towerId"], item["unitType"])
                     )
                 except Exception as e:
                     print(f"[DM Send Error] {e}")
@@ -1548,6 +1892,12 @@ async def check_laundry_alarms():
                 continue
 
             if item.get("notifiedStale"):
+                to_remove.append(item)
+                continue
+
+            # 본인이 가져갔다고 눌렀으면 수거 요청을 보내지 않는다
+            if item.get("pickedUp"):
+                print(f"[Alarm] 수거 확인됨: {item.get('deviceName', '?')}")
                 to_remove.append(item)
                 continue
 
