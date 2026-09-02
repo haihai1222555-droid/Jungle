@@ -930,9 +930,9 @@ def parse_by_rules(text, ctx=None):
 
     if any(k in t for k in ("뭐할수있", "무엇을할수있", "도움말", "사용법", "명령어", "어떻게써")):
         return {"action": "info"}
-    if re.search(r"(세탁기|세탁).*(현황|상태|목록|보여|알려)", t) and not re.search(r"\d", t):
+    if re.search(r"(세탁기|세탁).*(현황|상태|목록|보여|알려|있어|없어|남는|남았|비어|사용가능|쓸수있|가능한)", t) and not re.search(r"\d", t):
         return {"action": "unit_list", "unitType": "washer"}
-    if re.search(r"(건조기|건조).*(현황|상태|목록|보여|알려)", t) and not re.search(r"\d", t):
+    if re.search(r"(건조기|건조).*(현황|상태|목록|보여|알려|있어|없어|남는|남았|비어|사용가능|쓸수있|가능한)", t) and not re.search(r"\d", t):
         return {"action": "unit_list", "unitType": "dryer"}
 
     m = re.search(r"(\d+)\s*(?:번|호기|호)?\s*(세탁기|건조기|세탁|건조)", t)
@@ -951,7 +951,8 @@ def parse_by_rules(text, ctx=None):
     if ctx:
         if any(k in t for k in ("해제", "취소", "꺼줘", "끄기", "끄고", "삭제")):
             return {"action": "cancel", "towerId": ctx["towerId"], "unitType": ctx["unitType"], "fromContext": True}
-        if any(k in t for k in ("알림", "알람", "등록", "설정", "걸어", "켜줘", "해줘")):
+        # 질문("알림 있어?")이 아니라 명령일 때만 등록한다
+        if any(k in t for k in ("등록", "설정", "걸어", "걸어줘", "켜줘", "해줘", "알림해", "알람해")):
             return {"action": "register", "towerId": ctx["towerId"], "unitType": ctx["unitType"], "fromContext": True}
     return None
 
@@ -1135,8 +1136,6 @@ async def _run_assistant_inner(user_id, text):
         set_context(user_id, tower_id, unit_type)
         state_label = STATE_LABELS.get(info["state"], info["state"])
 
-        # 번호 없이 이어서 말한 경우엔 어떤 기기인지 분명히 밝혀준다
-        echo = f"({info['name']}) " if plan.get("fromContext") else ""
 
         if action == "unit_status":
             tail = f"**{info['minutes']}분** 남음" if info["minutes"] else "사용 가능"
@@ -1168,7 +1167,7 @@ async def _run_assistant_inner(user_id, text):
                 if (u.get("runState") or {}).get("currentState", "POWER_OFF") in FREE_STATES:
                     free += 1
         head = (reply + "\n") if reply else ""
-        return head + f"-# 지금 비어 있는 기기: **{free}대**", None
+        return head + f"-# 지금 비어 있는 기기: **{free}대**", None, True
 
     return (reply or "무슨 말씀인지 파악하지 못했습니다."), None
 
