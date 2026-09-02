@@ -815,7 +815,44 @@ async def cmd_info_slash(interaction: discord.Interaction):
 # 자연어 비서 (/비서) — "1번 세탁기 알림 걸어줘" 같은 말을 알아듣는다
 # =========================================================
 GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
-GEMINI_MODELS = ["gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-flash-latest"]
+# 앞에서부터 시도한다. 앞쪽이 더 똑똑하고, 뒤로 갈수록 가볍고 빠르다.
+# (뒤쪽은 앞 모델이 혼잡할 때를 대비한 예비용이다)
+GEMINI_MODELS = [
+    "gemini-3.7-flash",
+    "gemini-3.5-flash",
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
+]
+
+# 사람별 대화 기억. 공용 채널에서 여러 명이 말해도 섞이면 안 되므로
+# 반드시 사용자 ID 를 열쇠로 쓴다.
+CHAT_HISTORY = {}
+CHAT_TTL_SEC = 10 * 60      # 이보다 오래된 대화는 잊는다
+CHAT_MAX_TURNS = 8          # 최근 8개만 기억 (토큰 절약)
+
+
+def get_history(user_id):
+    h = CHAT_HISTORY.get(user_id)
+    if not h:
+        return []
+    if datetime.now().timestamp() - h.get("at", 0) > CHAT_TTL_SEC:
+        CHAT_HISTORY.pop(user_id, None)
+        return []
+    return h.get("turns", [])
+
+
+def push_history(user_id, role, text):
+    if not text:
+        return
+    h = CHAT_HISTORY.setdefault(user_id, {"turns": [], "at": 0})
+    h["turns"].append({"role": role, "parts": [{"text": text[:1500]}]})
+    h["turns"] = h["turns"][-CHAT_MAX_TURNS:]
+    h["at"] = datetime.now().timestamp()
+
+
+def clear_history(user_id):
+    CHAT_HISTORY.pop(user_id, None)
+    LAST_CONTEXT.pop(user_id, None)
 
 UNIT_WORDS = {"세탁기": "washer", "세탁": "washer", "건조기": "dryer", "건조": "dryer"}
 
@@ -897,7 +934,7 @@ def parse_by_rules(text, ctx=None):
     return None
 
 
-def ask_gemini(text, status_data, mine):
+def ask_gemini(text, status_data, mine, history=None):
     """규칙으로 못 알아들은 문장을 Gemini 에게 물어 행동을 정한다."""
     if not GEMINI_API_KEY:
         return None
@@ -913,7 +950,7 @@ def ask_gemini(text, status_data, mine):
             lines.append(f"{t['id']}번 {label}({t['zoneName']}): {STATE_LABELS.get(st, st)}"
                          + (f", {mnt}분 남음" if mnt else ""))
 
-    prompt = (
+    system_text = (
         "너는 크래프톤 정글 기숙사 세탁실 봇이다. 사용자의 한국어 요청을 읽고 할 일을 정해라.\n\n"
         "[가능한 action]\n"
         "- register: 특정 기기 완료 5분 전 알림 등록 (towerId 1~9, unitType washer/dryer 필요)\n"
@@ -925,14 +962,21 @@ def ask_gemini(text, status_data, mine):
         "[지금 기기 상태]\n" + "\n".join(lines) + "\n\n"
         "[내가 등록한 알림]\n" + ("\n".join(f"- {a['deviceName']}" for a in mine) if mine else "없음") + "\n\n"
         "reply 에는 사용자에게 보여줄 한국어 한두 문장을 담아라.\n"
-        f"[사용자 요청]\n{text}"
+        "이전 대화가 있으면 그 맥락을 이어서 이해해라. "
+        "예를 들어 사용자가 앞서 3번 건조기를 말했고 이번에 '그거 해제해줘' 라고 하면 3번 건조기를 뜻한다."
     )
 
+    contents = list(history or [])
+    contents.append({"role": "user", "parts": [{"text": text}]})
+
     body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "systemInstruction": {"parts": [{"text": system_text}]},
+        "contents": contents,
         "generationConfig": {
             "temperature": 0.2,
-            "maxOutputTokens": 400,
+            # 3.7 같은 상위 모델은 내부 추론에도 토큰을 쓴다.
+            # 한도가 낮으면 JSON 이 중간에 잘려 파싱에 실패한다.
+            "maxOutputTokens": 2048,
             "responseMimeType": "application/json",
             "responseSchema": {
                 "type": "OBJECT",
@@ -957,7 +1001,12 @@ def ask_gemini(text, status_data, mine):
             )
             with urllib.request.urlopen(req, timeout=15) as res:
                 data = json.loads(res.read().decode("utf-8"))
-            return json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
+            raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            # 일부 모델이 ```json ... ``` 로 감싸 보낸다. 그대로 파싱하면 실패한다.
+            if raw.startswith("```"):
+                raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw)
+            return json.loads(raw)
         except Exception as e:
             print(f"[Gemini] {model} 실패: {e}")
     return None
@@ -965,6 +1014,14 @@ def ask_gemini(text, status_data, mine):
 
 async def run_assistant(user_id, text):
     """자연어 요청 하나를 처리한다. 항상 (보여줄 문장, embed 또는 None) 을 돌려준다."""
+    result = await _run_assistant_inner(user_id, text)
+    # 봇의 답도 기억에 남겨야 "아까 뭐라고 했지" 같은 말을 이해할 수 있다
+    if result and result[0]:
+        push_history(user_id, "model", result[0])
+    return result
+
+
+async def _run_assistant_inner(user_id, text):
     status_data = fetch_live_status()
     if not status_data:
         return "⚠️ 실시간 데이터를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.", None
@@ -972,12 +1029,20 @@ async def run_assistant(user_id, text):
     mine = [a for a in active_alarms if a.get("userId") == user_id]
 
     # 규칙으로 알아들을 수 있으면 API 를 쓰지 않는다 (빠르고 무료고 결과가 항상 같다)
+    # "새로 시작" 같은 말이면 기억을 비운다
+    if any(k in text.replace(" ", "") for k in ("대화초기화", "새로시작", "기억지워", "리셋")):
+        clear_history(user_id)
+        return "🧹 대화 기억을 지웠습니다. 처음부터 다시 말씀해 주세요.", None
+
     plan = parse_by_rules(text, get_context(user_id))
     if plan is None:
-        plan = await asyncio.to_thread(ask_gemini, text, status_data, mine)
+        plan = await asyncio.to_thread(ask_gemini, text, status_data, mine, get_history(user_id))
     if plan is None:
         return ("무슨 말씀인지 파악하지 못했습니다.\n"
                 "-# 예) `3번 건조기 알림 걸어줘` · `내 알림 보여줘` · `전부 해제해줘`"), None
+
+    # 다음 말에 맥락이 이어지도록 사람별로 기록해 둔다
+    push_history(user_id, "user", text)
 
     action = plan.get("action")
     reply = (plan.get("reply") or "").strip()

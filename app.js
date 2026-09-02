@@ -1808,7 +1808,9 @@ function appendChatMessage(sender, htmlText) {
 const GROQ_API_KEY = '***REMOVED***';
 const GROQ_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'groq/compound'];
 const GEMINI_API_KEY = '***REMOVED***';
-const GEMINI_MODELS = ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.7-flash', 'gemini-flash-latest'];
+// 앞에서부터 시도한다. 앞쪽이 더 똑똑하고, 뒤로 갈수록 가볍고 빠르다.
+// (앞 모델이 혼잡(503)하면 자동으로 뒤로 넘어간다)
+const GEMINI_MODELS = ['gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-flash-latest', 'gemini-flash-lite-latest'];
 
 // ⚡ 토큰 수 80% 압축: LLM 처리 속도 극대화 + 동적 시간 변동 센서 정보 주입
 function getCompactContextSummary() {
@@ -1881,7 +1883,73 @@ ${compactStatus}
   // 최근 6개 대화 히스토리 슬라이스
   const recentHistory = chatHistoryBuffer.slice(-6);
 
-  // ── [1순위: 초고속 Groq LPU 120B / Qwen 엔진 (문맥 기억 스트리밍)] ──
+  // ── [1순위: Gemini (문맥 기억 스트리밍) ──
+  //     상위 모델부터 시도하고, 혼잡하면 아래 Groq 으로 넘어간다 ──
+  if (GEMINI_API_KEY) {
+    const geminiContents = recentHistory.map(msg => ({
+      role: msg.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: msg.content }]
+    }));
+
+    for (const modelName of GEMINI_MODELS) {
+      try {
+        const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`;
+        const res = await fetch(geminiEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            contents: geminiContents,
+            // 상위 모델은 내부 추론에도 토큰을 쓰므로 넉넉히 준다 (답이 중간에 끊기지 않도록)
+            generationConfig: { temperature: 0.6, maxOutputTokens: 2048 }
+          })
+        });
+
+        if (res.ok && res.body) {
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder('utf-8');
+          let fullText = '';
+          let buffer = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const jsonStr = line.slice(6).trim();
+                if (jsonStr) {
+                  try {
+                    const chunk = JSON.parse(jsonStr);
+                    const textChunk = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (textChunk) {
+                      fullText += textChunk;
+                      bubbleEl.innerHTML = renderChatText(fullText) + '<span style="opacity:0.6;animation:pulse-dot 0.8s infinite;"> ▋</span>';
+                      chatBox.scrollTop = chatBox.scrollHeight;
+                    }
+                  } catch (e) {}
+                }
+              }
+            }
+          }
+
+          if (fullText.trim()) {
+            bubbleEl.innerHTML = renderChatText(fullText);
+            chatHistoryBuffer.push({ role: 'assistant', content: fullText });
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn(`Gemini Model ${modelName} 실패:`, err);
+      }
+    }
+  }
+
+  // ── [2순위: Groq 예비 엔진 (Gemini 가 혼잡하거나 실패했을 때만 쓴다)] ──
   if (GROQ_API_KEY) {
     for (const modelName of GROQ_MODELS) {
       try {
@@ -1945,70 +2013,6 @@ ${compactStatus}
         }
       } catch (err) {
         console.warn(`Groq Model ${modelName} 호출 실패:`, err);
-      }
-    }
-  }
-
-  // ── [2순위: Gemini Flash 백업 엔진 (문맥 기억 스트리밍)] ──
-  if (GEMINI_API_KEY) {
-    const geminiContents = recentHistory.map(msg => ({
-      role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.content }]
-    }));
-
-    for (const modelName of GEMINI_MODELS) {
-      try {
-        const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`;
-        const res = await fetch(geminiEndpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-            contents: geminiContents,
-            generationConfig: { temperature: 0.6, maxOutputTokens: 600 }
-          })
-        });
-
-        if (res.ok && res.body) {
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder('utf-8');
-          let fullText = '';
-          let buffer = '';
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
-
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                const jsonStr = line.slice(6).trim();
-                if (jsonStr) {
-                  try {
-                    const chunk = JSON.parse(jsonStr);
-                    const textChunk = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
-                    if (textChunk) {
-                      fullText += textChunk;
-                      bubbleEl.innerHTML = renderChatText(fullText) + '<span style="opacity:0.6;animation:pulse-dot 0.8s infinite;"> ▋</span>';
-                      chatBox.scrollTop = chatBox.scrollHeight;
-                    }
-                  } catch (e) {}
-                }
-              }
-            }
-          }
-
-          if (fullText.trim()) {
-            bubbleEl.innerHTML = renderChatText(fullText);
-            chatHistoryBuffer.push({ role: 'assistant', content: fullText });
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn(`Gemini Model ${modelName} 실패:`, err);
       }
     }
   }
