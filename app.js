@@ -1821,20 +1821,28 @@ function appendChatMessage(sender, htmlText) {
 
 // ⚡ 최상위 고지능 초대형 LLM (Groq 120B & Gemini 3.7/3.6 Flash)
 const GROQ_API_KEY = '***REMOVED***';
-const GROQ_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'groq/compound'];
+// 실측: 120b 1.24초 / qwen3.8 1.12초 / 20b 1.02초, 셋 다 정답.
+// groq/compound 는 요청 크기 제한에 걸리고 9초 넘게 걸려 뺐다.
+const GROQ_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'];
 // 제미나이 키는 여러 개를 넣을 수 있다.
 // 한 키가 한도(429)에 걸리면 다음 키로 넘어간다.
 // ⚠️ 같은 구글 프로젝트에서 만든 키끼리는 한도를 같이 쓰므로 효과가 없다.
 //    반드시 서로 다른 계정 또는 프로젝트에서 받은 키를 넣어야 한다.
 const GEMINI_API_KEYS = [
-  '***REMOVED***',
-  '***REMOVED***',   // 두 번째 키를 여기에
-  '***REMOVED***',   // 세 번째 키를 여기에
+  // 앞에서부터 쓴다. 한도가 남아 있는 키를 앞에 둔다.
+  // ⚠️ 같은 구글 프로젝트에서 만든 키끼리는 한도를 같이 쓰므로 효과가 없다.
+  '***REMOVED***',   // 3번 키
+  '***REMOVED***',   // 2번 키
+  '***REMOVED***',   // 1번 키 (한도 소진)
 ].filter(k => k && k.trim());
 const GEMINI_API_KEY = GEMINI_API_KEYS[0] || '';
 // 앞에서부터 시도한다. 앞쪽이 더 똑똑하고, 뒤로 갈수록 가볍고 빠르다.
 // (앞 모델이 혼잡(503)하면 자동으로 뒤로 넘어간다)
-const GEMINI_MODELS = ['gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-flash-latest', 'gemini-flash-lite-latest'];
+const GEMINI_MODELS = [
+  'gemini-flash-lite-latest',   // 실측 1.6초, 정확도 동일 — 가장 빠르다
+  'gemini-3.5-flash-lite',      // 위와 같은 급, 버전 고정판
+  'gemini-3.5-flash',           // 실측 3.6초. 앞 둘이 막혔을 때
+];
 
 // ⚡ 토큰 수 80% 압축: LLM 처리 속도 극대화 + 동적 시간 변동 센서 정보 주입
 function getCompactContextSummary() {

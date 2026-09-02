@@ -27,7 +27,7 @@ SUBS_FILE = os.environ.get('SUBS_FILE') or os.path.join(BASE_DIR, 'push_subscrip
 try:
     from py_vapid import Vapid
     from cryptography.hazmat.primitives import serialization
-    from pywebpush import webpush, WebPushException
+    from pywebpush import webpush
     HAS_WEBPUSH = True
 except Exception as e:
     HAS_WEBPUSH = False
@@ -64,7 +64,6 @@ if HAS_WEBPUSH:
     VAPID_PUBLIC_KEY_B64 = base64.urlsafe_b64encode(raw_pub).decode('utf-8').rstrip('=')
 
 CACHED_STATUS = {}
-CACHED_STATS = {}
 
 # 이보다 오래된 알림 등록은 지난 빨래로 보고 정리한다 (한 사이클은 길어야 2시간)
 MAX_ALARM_AGE_SEC = 4 * 60 * 60
@@ -117,7 +116,7 @@ def send_push_notification(subscription_info, payload_data):
         print(f"[WebPush Error] {e}")
 
 def background_push_worker():
-    global CACHED_STATUS, CACHED_STATS
+    global CACHED_STATUS
     while True:
         try:
             time.sleep(5)

@@ -833,13 +833,13 @@ def build_info_embed(user_id=None):
 @bot.tree.command(name="세탁기", description="세탁기 9대의 현재 상태를 확인합니다.")
 async def cmd_washer_slash(interaction: discord.Interaction):
     await interaction.response.defer()
-    await interaction.followup.send(embed=build_unit_list_embed("washer"))
+    await interaction.followup.send(embed=await asyncio.to_thread(build_unit_list_embed, "washer"))
 
 
 @bot.tree.command(name="건조기", description="건조기 9대의 현재 상태를 확인합니다.")
 async def cmd_dryer_slash(interaction: discord.Interaction):
     await interaction.response.defer()
-    await interaction.followup.send(embed=build_unit_list_embed("dryer"))
+    await interaction.followup.send(embed=await asyncio.to_thread(build_unit_list_embed, "dryer"))
 
 
 @bot.tree.command(name="정보", description="봇 사용법과 알림 규칙을 확인합니다.")
@@ -886,10 +886,9 @@ GROQ_MODELS = [
 # 앞에서부터 시도한다. 앞쪽이 더 똑똑하고, 뒤로 갈수록 가볍고 빠르다.
 # (뒤쪽은 앞 모델이 혼잡할 때를 대비한 예비용이다)
 GEMINI_MODELS = [
-    "gemini-3.7-flash",
-    "gemini-3.5-flash",
-    "gemini-flash-latest",
-    "gemini-flash-lite-latest",
+    "gemini-flash-lite-latest",   # 실측 1.6초, 정확도 동일 — 가장 빠르다
+    "gemini-3.5-flash-lite",      # 위와 같은 급, 버전 고정판
+    "gemini-3.5-flash",           # 실측 3.6초. 앞 둘이 막혔을 때
 ]
 
 # 사람별 대화 기억. 공용 채널에서 여러 명이 말해도 섞이면 안 되므로
@@ -1560,7 +1559,8 @@ BOARD_ACTIONS = ("unit_list", "status")
 
 
 async def _run_assistant_inner(user_id, text):
-    status_data = fetch_live_status()
+    # urllib 은 이벤트 루프를 멈추므로 별도 스레드에서 부른다
+    status_data = await asyncio.to_thread(fetch_live_status)
     if not status_data:
         return "⚠️ 실시간 데이터를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.", None
 
@@ -1587,7 +1587,7 @@ async def _run_assistant_inner(user_id, text):
 
     steps = plan.get("actions")
     if isinstance(steps, list) and len(steps) > 1:
-        return await _run_steps(user_id, steps, plan.get("reply"))
+        return await _run_steps(user_id, steps, plan.get("reply"), status_data)
     if isinstance(steps, list) and len(steps) == 1:
         plan = dict(steps[0], reply=plan.get("reply"))
 
@@ -1603,17 +1603,16 @@ def _norm(result):
             result[2] if len(result) > 2 else False)
 
 
-async def _run_steps(user_id, steps, reply=None):
-    """여러 요청을 순서대로 처리하고 결과를 하나로 합친다."""
+async def _run_steps(user_id, steps, reply, status_data):
+    """여러 요청을 순서대로 처리하고 결과를 하나로 합친다.
+
+    기기 상태는 알림을 걸었다고 바뀌지 않으므로 한 번 읽은 것을 그대로 쓴다.
+    단계마다 달라지는 건 메모리에 있는 알림 목록뿐이라 그것만 다시 센다.
+    """
     texts, embed, board = [], None, False
     if reply and reply.strip():
         texts.append(reply.strip())
     for step in steps:
-        # 알림 목록은 앞 단계에서 바뀌므로 매번 새로 읽는다
-        status_data = fetch_live_status()
-        if not status_data:
-            texts.append("⚠️ 실시간 데이터를 가져오지 못했습니다.")
-            break
         mine = [a for a in active_alarms if a.get("userId") == user_id]
         t, e, b = _norm(await _do_step(user_id, step, status_data, mine))
         if t:
@@ -1634,7 +1633,8 @@ async def _do_step(user_id, plan, status_data, mine):
 
     if action == "unit_list":
         # 글 목록 + 배치도 그림을 같이 준다 (한눈에 보이도록)
-        return "", build_unit_list_embed(plan.get("unitType") or "washer"), True
+        embed = await asyncio.to_thread(build_unit_list_embed, plan.get("unitType") or "washer")
+        return "", embed, True
 
     if action == "cancel_all":
         removed = len(mine)
@@ -1753,7 +1753,7 @@ async def cmd_assistant(interaction: discord.Interaction, 말: str):
 @bot.tree.command(name="내알림", description="내가 등록한 알림을 확인하고 켜거나 끕니다.")
 async def cmd_myalarm_slash(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
-    status_data = fetch_live_status()
+    status_data = await asyncio.to_thread(fetch_live_status)
     values = [o.value for o in get_running_options(status_data)] if status_data else []
     await interaction.followup.send(
         view=MyAlarmPanel(interaction.user.id, values),
@@ -1767,10 +1767,11 @@ async def cmd_myalarm_slash(interaction: discord.Interaction):
 @bot.tree.command(name="알림", description="실시간 세탁실 현실 배치도를 확인하고 가동 중인 기기 5분 전 DM 알림을 등록합니다.")
 async def cmd_alarm_slash(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)
-    status_data = fetch_live_status()
+    status_data = await asyncio.to_thread(fetch_live_status)
     running_options = get_running_options(status_data)
 
-    img_buf = render_floorplan_image(status_data)
+    # 이미지 그리기도 무거우므로 스레드로 넘긴다
+    img_buf = await asyncio.to_thread(render_floorplan_image, status_data)
     discord_file = discord.File(img_buf, filename="floorplan.png")
     embed = build_floorplan_embed()
 
@@ -1793,7 +1794,8 @@ async def check_laundry_alarms():
     if not active_alarms:
         return
 
-    status_data = fetch_live_status()
+    # 10초마다 도는 작업이라 여기서 멈추면 봇 전체가 끊긴다
+    status_data = await asyncio.to_thread(fetch_live_status)
     if not status_data:
         return
 
