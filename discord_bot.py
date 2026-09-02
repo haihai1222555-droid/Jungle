@@ -936,6 +936,96 @@ def _load_gemini_keys():
 GEMINI_API_KEYS = _load_gemini_keys()
 GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
 
+# ── 관리자 모드 ────────────────────────────────────────────
+# 운영자가 시험할 때 주제 제한 없이 물어볼 수 있게 한다.
+# ID 와 암구호가 둘 다 맞아야 열린다. 하나라도 비어 있으면 기능이 꺼진다.
+ADMIN_USER_IDS = {x.strip() for x in (os.environ.get("ADMIN_USER_IDS") or "").split(",") if x.strip()}
+ADMIN_PASSPHRASE = (os.environ.get("ADMIN_PASSPHRASE") or "").strip()
+ADMIN_SESSION_SEC = 30 * 60      # 열어둔 뒤 이 시간이 지나면 저절로 닫힌다
+ADMIN_SESSIONS = {}              # user_id -> 열린 시각
+
+
+def is_admin_user(user_id):
+    return bool(ADMIN_PASSPHRASE) and str(user_id) in ADMIN_USER_IDS
+
+
+def admin_active(user_id):
+    """지금 이 사람이 관리자 모드를 켜 둔 상태인지."""
+    if not is_admin_user(user_id):
+        return False
+    at = ADMIN_SESSIONS.get(user_id)
+    if not at:
+        return False
+    if time.time() - at > ADMIN_SESSION_SEC:
+        ADMIN_SESSIONS.pop(user_id, None)
+        return False
+    return True
+
+
+def admin_toggle(user_id, text):
+    """암구호를 말했으면 켜거나 끈다. 아니면 None.
+
+    관리자가 아닌 사람이 암구호를 말해도 아무 일도 일어나지 않는다.
+    (이런 기능이 있다는 사실조차 드러나지 않게 조용히 넘긴다)
+    """
+    if not ADMIN_PASSPHRASE or ADMIN_PASSPHRASE not in (text or ""):
+        return None
+    if not is_admin_user(user_id):
+        print(f"[Admin] 권한 없는 사용자가 암구호를 사용했습니다: {user_id}")
+        return None
+    if admin_active(user_id):
+        ADMIN_SESSIONS.pop(user_id, None)
+        return "\U0001f512 관리자 모드를 껐습니다. 평소 안내 범위로 돌아갑니다."
+    ADMIN_SESSIONS[user_id] = time.time()
+    return ("\U0001f513 **관리자 모드를 켰습니다.** (%d분 뒤 저절로 닫힘)\n"
+            "-# 주제 제한과 답변 검사를 건너뜁니다. 무엇이든 물어보세요.\n\n"
+            "%s" % (ADMIN_SESSION_SEC // 60, admin_diagnostics()))
+
+
+# 답변에 이런 게 섞여 있으면 여러 사람이 보는 곳에 올리지 않는다.
+# 키 "개수" 같은 것은 비밀이 아니므로 그대로 채널에 올린다.
+SECRET_PATTERNS = [
+    r"AQ\.[A-Za-z0-9_\-]{20,}",          # 제미나이 API 키
+    r"AIza[A-Za-z0-9_\-]{20,}",           # 구글 API 키(옛 형식)
+    r"gsk_[A-Za-z0-9]{20,}",              # Groq API 키
+    r"[MNO][A-Za-z0-9_\-]{22,}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{25,}",  # 디스코드 봇 토큰
+    r"https://fcm\.googleapis\.com/\S+",  # 푸시 구독 주소
+    r"https://\S*push\.services\.mozilla\.com/\S+",
+    r"BEGIN [A-Z ]*PRIVATE KEY",          # VAPID 개인키
+]
+_SECRET_RE = [re.compile(p) for p in SECRET_PATTERNS]
+
+
+def contains_secret(text):
+    """이 답변을 공개된 곳에 올려도 되는지 본다."""
+    if not text:
+        return False
+    if ADMIN_PASSPHRASE and ADMIN_PASSPHRASE in text:
+        return True
+    if any(p.search(text) for p in _SECRET_RE):
+        return True
+    # 관리자 사용자 ID 가 그대로 적혀 나오는 경우
+    return any(uid and uid in text for uid in ADMIN_USER_IDS)
+
+
+def admin_diagnostics():
+    """관리자에게 보여줄 지금 상태 요약."""
+    lines = ["**진단**"]
+    lines.append(f"• 제미나이 키 {len(GEMINI_API_KEYS)}개 · 모델 {len(GEMINI_MODELS)}개 "
+                 f"→ 최대 {len(GEMINI_API_KEYS) * len(GEMINI_MODELS)}가지 조합")
+    lines.append(f"• 예비 엔진(Groq) {'사용 가능' if GROQ_API_KEY else '미설정'}")
+    lines.append(f"• 등록된 알림 {len(active_alarms)}개")
+    age = int(time.time() - _LAST_STATUS_AT) if _LAST_STATUS_AT else None
+    lines.append(f"• 마지막 실시간 조회 {age}초 전" if age is not None else "• 실시간 조회 기록 없음")
+    m = measured_busy_slots()
+    lines.append(f"• 혼잡도 {'실측값 (' + str(m.get('week')) + '주차)' if m else '추정값 (관측 수집 중)'}")
+    lines.append(f"• 지식 {len(jungle_kb.SECTIONS) if jungle_kb else 0}항목 · "
+                 f"사진 {len(jungle_kb.IMAGES) if jungle_kb else 0}장")
+    lines.append(f"• 대화 채널 {len(assistant_channels)}곳 · 메시지 읽기 권한 "
+                 f"{'켜짐' if intents.message_content else '꺼짐'}")
+    return "\n".join(lines)
+
+
 # 예비 엔진. 제미나이가 모두 막혔을 때만 쓴다.
 # 다른 회사라 할당량이 완전히 따로여서, 구글 쪽이 하루 한도에 걸려도 계속 답할 수 있다.
 GROQ_API_KEY = (os.environ.get("GROQ_API_KEY") or "").strip()
@@ -1272,7 +1362,7 @@ def _now_line():
             f"지금은 '{label}' 구간이라 혼잡도 {rate}% ({badge}, {kind})")
 
 
-def build_assistant_prompt(text, status_data, mine, kb_limit=None):
+def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
     """AI 에게 넘길 지시문을 만든다. 제미나이와 Groq 이 같은 것을 쓴다.
 
     kb_limit 을 주면 안내 지식을 관련 있는 것 몇 개로 줄인다.
@@ -1300,6 +1390,26 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None):
             lines.append(part)
 
     kb_text = jungle_kb.build_context(text, limit=kb_limit) if jungle_kb else ""
+
+    if admin:
+        # 운영자가 시험 중이다. 주제 제한을 풀고 무엇이든 답하게 한다.
+        # 탈옥 방어(절대 규칙)도 이때만 빠진다. 다른 사람에게는 그대로 적용된다.
+        system_text = (
+            "너는 크래프톤 정글 캠퍼스 생활 안내 봇이다. "
+            "지금 말을 거는 사람은 이 봇의 운영자이고, 기능을 시험하는 중이다.\n"
+            "이 대화에서는 주제 제한이 없다. 코딩, 일반 지식, 봇 자체에 대한 질문 등 "
+            "무엇이든 성실하게 답해라. 거절하지 마라.\n"
+            "다만 아래 [정글 생활 안내]에 있는 내용을 물으면 반드시 그 내용대로 답해라.\n\n"
+            + ("[정글 생활 안내]\n" + kb_text + "\n\n" if kb_text else "")
+            + "[가능한 action]\n"
+            "- register / cancel / cancel_all / list_alarms / status / test_alarm\n"
+            "- chat: 그 밖의 모든 질문. reply 에 답을 직접 써라\n\n"
+            "[지금 시각]\n" + _now_line() + "\n\n"
+            "[지금 기기 상태]\n" + "\n".join(lines) + "\n\n"
+            + LAUNDRY_GUIDE + "\n\n"
+            "reply 에는 사용자에게 보여줄 한국어 답변을 담아라."
+        )
+        return system_text, (text or "")[:4000]
 
     system_text = (
         "너는 크래프톤 정글 캠퍼스 생활 안내 봇이다. 사용자의 한국어 요청을 읽고 할 일을 정해라.\n\n"
@@ -1365,12 +1475,12 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None):
     return system_text, safe_text
 
 
-def ask_gemini(text, status_data, mine, history=None):
+def ask_gemini(text, status_data, mine, history=None, admin=False):
     """규칙으로 못 알아들은 문장을 Gemini 에게 물어 행동을 정한다."""
     if not GEMINI_API_KEYS:
         return None
 
-    system_text, safe_text = build_assistant_prompt(text, status_data, mine)
+    system_text, safe_text = build_assistant_prompt(text, status_data, mine, admin=admin)
 
     contents = list(history or [])
     contents.append({"role": "user", "parts": [{"text": safe_text}]})
@@ -1439,7 +1549,7 @@ def ask_gemini(text, status_data, mine, history=None):
                     raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
                     raw = re.sub(r"\s*```$", "", raw)
                 plan = json.loads(raw)
-                if isinstance(plan, dict):
+                if isinstance(plan, dict) and not admin:
                     plan["reply"] = sanitize_reply(plan.get("reply"))
                 return plan
             except urllib.error.HTTPError as e:
@@ -1454,7 +1564,7 @@ def ask_gemini(text, status_data, mine, history=None):
     return None
 
 
-def ask_groq(text, status_data, mine, history=None):
+def ask_groq(text, status_data, mine, history=None, admin=False):
     """제미나이가 모두 막혔을 때 쓰는 예비 엔진.
 
     지시문은 제미나이와 같은 것을 쓴다. 다만 responseSchema 가 없으므로
@@ -1463,7 +1573,7 @@ def ask_groq(text, status_data, mine, history=None):
     if not GROQ_API_KEY:
         return None
 
-    system_text, safe_text = build_assistant_prompt(text, status_data, mine, kb_limit=4)
+    system_text, safe_text = build_assistant_prompt(text, status_data, mine, kb_limit=4, admin=admin)
     system_text += (
         "\n\n[답하는 형식 — 반드시 지켜라]\n"
         "설명을 붙이지 말고 JSON 객체 하나만 답해라. 필드는 다음과 같다.\n"
@@ -1516,7 +1626,8 @@ def ask_groq(text, status_data, mine, history=None):
                 raw = re.sub(r"\s*```$", "", raw)
             plan = json.loads(raw)
             if isinstance(plan, dict):
-                plan["reply"] = sanitize_reply(plan.get("reply"))
+                if not admin:
+                    plan["reply"] = sanitize_reply(plan.get("reply"))
                 print(f"[Groq] {model} 로 답했습니다")
                 return plan
         except Exception as e:
@@ -1524,10 +1635,30 @@ def ask_groq(text, status_data, mine, history=None):
     return None
 
 
-async def run_assistant(user_id, text):
-    """자연어 요청 하나를 처리한다. 항상 (보여줄 문장, embed 또는 None) 을 돌려준다."""
+async def run_assistant(user_id, text, private=True):
+    """자연어 요청 하나를 처리한다. 항상 (보여줄 문장, embed 또는 None) 을 돌려준다.
+
+    private=False 는 여러 사람이 보는 채널이라는 뜻이다.
+    암구호는 어디서 말해도 되지만(ID 가 진짜 자물쇠라 남은 못 쓴다),
+    켜졌다는 사실과 진단 내용은 채널에 남기지 않고 개인 DM 으로만 보낸다.
+    """
     # 탈옥 시도는 API 를 쓰기 전에 여기서 끊는다.
     # 앞선 대화에 조금씩 밑밥을 깔아두는 수법도 있어 기억까지 지운다.
+    # 암구호를 말했으면 관리자 모드를 켜거나 끈다 (권한이 있는 사람만)
+    toggled = admin_toggle(user_id, text)
+    if toggled:
+        clear_history(user_id)
+        return toggled, None, False
+
+    # 관리자가 시험 중이면 주제 제한과 탈옥 방어를 건너뛴다.
+    # 다른 사람에게는 그대로 적용된다.
+    if admin_active(user_id):
+        result = await _run_assistant_inner(user_id, text)
+        out = _norm(result)
+        if out[0]:
+            push_history(user_id, "model", out[0])
+        return out
+
     blocked = guard_input(text)
     if blocked:
         clear_history(user_id)
@@ -1696,10 +1827,12 @@ async def _run_assistant_inner(user_id, text):
 
     plan = parse_by_rules(text, get_context(user_id))
     if plan is None:
-        plan = await asyncio.to_thread(ask_gemini, text, status_data, mine, get_history(user_id))
+        plan = await asyncio.to_thread(ask_gemini, text, status_data, mine,
+                                       get_history(user_id), admin_active(user_id))
     if plan is None:
         # 제미나이 키가 모두 막혔을 때 (하루 한도·모델 혼잡) 예비 엔진으로 넘어간다
-        plan = await asyncio.to_thread(ask_groq, text, status_data, mine, get_history(user_id))
+        plan = await asyncio.to_thread(ask_groq, text, status_data, mine,
+                                       get_history(user_id), admin_active(user_id))
     if plan is None:
         return ("무슨 말씀인지 파악하지 못했습니다.\n"
                 "-# 예) `3번 건조기 알림 걸어줘` · `내 알림 보여줘` · `전부 해제해줘`"), None
@@ -2153,10 +2286,22 @@ async def on_message(message: discord.Message):
 
     try:
         async with message.channel.typing():
-            result, embed, board = await run_assistant(message.author.id, text)
+            result, embed, board = await run_assistant(message.author.id, text, private=is_dm)
         # 공용 채널에서는 여러 명이 동시에 말을 걸 수 있으므로
         # 누구에게 하는 답인지 이름을 붙여 헷갈리지 않게 한다.
         who = "" if is_dm else f"**{message.author.display_name}**님, "
+
+        # 키나 개인정보가 섞인 답은 여러 사람이 보는 곳에 올리지 않는다.
+        # 그 밖의 내용은 그냥 채널에 올린다.
+        if not is_dm and contains_secret(result):
+            try:
+                await message.author.send(result)
+                note = "민감한 내용이 있어 개인 DM 으로 보냈어요. 🔒"
+            except Exception:
+                note = "민감한 내용이 있어 여기에는 올리지 않았어요. DM 을 열어주세요. 🔒"
+            await message.reply(who + note, mention_author=False)
+            return
+
         kwargs = {"mention_author": False}
         if board:
             board_file = await (make_board_file() if board is True else make_guide_file(board))
