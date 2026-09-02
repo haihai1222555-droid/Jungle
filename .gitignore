@@ -21,3 +21,6 @@ data/
 gemini_output.txt
 gpt_120b_reply.txt
 reply_*.txt
+
+# 봇 배치도 렌더 테스트 산출물
+bot_preview.png

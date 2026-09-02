@@ -86,6 +86,7 @@ const STATE_TRANSLATION = {
   INITIAL:      { label: '준비 완료',          isFree: true, isError: false },
   COMPLETE:     { label: '세탁 완료 (수거 대기)', isFree: false, isError: false },
   RUNNING:      { label: '작동 중',             isFree: false, isError: false },
+  DETECTING:    { label: '무게 감지 중',         isFree: false, isError: false },
   WASHING:      { label: '세탁 중',             isFree: false, isError: false },
   RINSING:      { label: '헹굼 중',             isFree: false, isError: false },
   SPINNING:     { label: '탈수 중',             isFree: false, isError: false },
@@ -268,7 +269,7 @@ function isUnitFree(state) {
 }
 
 function isUnitRunning(state) {
-  return ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING', 'WRINKLE_CARE'].includes(state);
+  return ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING', 'WRINKLE_CARE', 'DETECTING'].includes(state);
 }
 
 // 실질적인 세탁/건조 가동 중 여부 (구김 방지, 대기, 에러, 남은시간 0분 제외)
