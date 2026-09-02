@@ -17,21 +17,49 @@ except Exception:
     pass
 
 # =========================================================
-# 설정 및 환경 변수 (.env 파일 자동 감지)
+# 설정 및 환경 변수 (.env 및 다양한 경로 자동 탐색)
 # =========================================================
-_env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-if os.path.exists(_env_file):
-    try:
-        with open(_env_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    k, v = line.split('=', 1)
-                    os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
-    except Exception:
-        pass
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+except Exception:
+    pass
 
-DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN") or ""
+# 수동 .env 파일 탐색 (루트, 현재 폴더, 스크립트 폴더)
+possible_env_paths = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
+    os.path.join(os.getcwd(), ".env"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "token.txt"),
+    os.path.join(os.getcwd(), "token.txt")
+]
+
+for p in possible_env_paths:
+    if os.path.exists(p):
+        try:
+            with open(p, 'r', encoding='utf-8-sig') as f:
+                content = f.read().strip()
+                if '=' in content:
+                    for line in content.splitlines():
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            k, v = line.split('=', 1)
+                            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+                elif len(content) > 30 and ' ' not in content:
+                    # 단독 토큰 파일인 경우
+                    os.environ.setdefault("DISCORD_BOT_TOKEN", content)
+        except Exception:
+            pass
+
+# 다양한 키 이름 지원 (DISCORD_BOT_TOKEN, BOT_TOKEN, DISCORD_TOKEN, TOKEN)
+DISCORD_BOT_TOKEN = (
+    os.environ.get("DISCORD_BOT_TOKEN")
+    or os.environ.get("BOT_TOKEN")
+    or os.environ.get("DISCORD_TOKEN")
+    or os.environ.get("TOKEN")
+    or ""
+).strip().strip('"').strip("'")
+
 STATUS_API_URL = os.environ.get("STATUS_API_URL") or "https://jungle-wash.onrender.com/api/status"
 BOT_DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "discord_alarms.json")
 
@@ -281,18 +309,10 @@ class LaundryFloorplanView(discord.ui.View):
             self.add_item(LaundryAlarmSelect(running_options))
 
 # =========================================================
-# 슬래시 명령어: /알림
+# 가동 기기 옵션 생성 헬퍼
 # =========================================================
-@bot.tree.command(name="알림", description="실시간 세탁실 현실 배치도를 확인하고 가동 중인 기기 5분 전 DM 알림을 등록합니다.")
-async def cmd_alarm(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=False)
-
-    status_data = fetch_live_status()
-    embed = build_floorplan_embed(status_data)
-
-    # 가동 중인 기기만 필터링하여 드롭다운 옵션 생성 (대기 중, 에러, 완료는 제외)
+def get_running_options(status_data):
     running_options = []
-    
     for t in TOWERS:
         data = status_data.get(t["name"], {})
         w = data.get("washer", {})
@@ -306,7 +326,7 @@ async def cmd_alarm(interaction: discord.Interaction):
         w_err = w.get("error") or (w_state == "ERROR")
         d_err = d.get("error") or (d_state == "ERROR")
 
-        # 상단 건조기 검증
+        # 상단 건조기 검증 (에러/대기 제외, 진짜 가동 중인 기기만)
         if not d_err and is_unit_running(d_state, d_min):
             time_str = format_timer(d.get("timer", {}).get("remainHour", 0), d.get("timer", {}).get("remainMinute", 0))
             running_options.append(discord.SelectOption(
@@ -325,6 +345,17 @@ async def cmd_alarm(interaction: discord.Interaction):
                 value=f"{t['id']}_washer_{w_min}_{t['label']} 세탁기",
                 emoji="🫧"
             ))
+    return running_options
+
+# =========================================================
+# 슬래시 명령어 (/알림) & 접두사 명령어 (!알림) 동시 지원
+# =========================================================
+@bot.tree.command(name="알림", description="실시간 세탁실 현실 배치도를 확인하고 가동 중인 기기 5분 전 DM 알림을 등록합니다.")
+async def cmd_alarm_slash(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=False)
+    status_data = fetch_live_status()
+    embed = build_floorplan_embed(status_data)
+    running_options = get_running_options(status_data)
 
     if not running_options:
         embed.add_field(
@@ -334,8 +365,26 @@ async def cmd_alarm(interaction: discord.Interaction):
         )
         await interaction.followup.send(embed=embed)
     else:
-        view = LaundryFloorplanView(running_options[:25])  # 디스코드 옵션 최대 25개 제한
+        view = LaundryFloorplanView(running_options[:25])
         await interaction.followup.send(embed=embed, view=view)
+
+@bot.command(name="알림", aliases=["세탁", "세탁실", "laundry"])
+async def cmd_alarm_prefix(ctx):
+    """디스코드 채팅창에 !알림 또는 !세탁실 입력 시에도 동작"""
+    status_data = fetch_live_status()
+    embed = build_floorplan_embed(status_data)
+    running_options = get_running_options(status_data)
+
+    if not running_options:
+        embed.add_field(
+            name="💡 알림 등록 안내",
+            value="현재 세탁실에 가동 중인 세탁기/건조기가 없습니다. (모든 기기가 대기 중이거나 완료 상태입니다)",
+            inline=False
+        )
+        await ctx.send(embed=embed)
+    else:
+        view = LaundryFloorplanView(running_options[:25])
+        await ctx.send(embed=embed, view=view)
 
 # =========================================================
 # 백그라운드 태스크: 10초마다 실시간 센서 감시 & DM 발송
@@ -427,16 +476,26 @@ async def before_alarm_loop():
     await bot.wait_until_ready()
 
 # =========================================================
-# 봇 준비 완료 이벤트 (Slash Command 동기화)
+# 봇 준비 완료 이벤트 (Slash Command 즉시 동기화)
 # =========================================================
 @bot.event
 async def on_ready():
     load_alarms()
     print(f"🤖 [Discord Bot] {bot.user.name}#{bot.user.discriminator} (ID: {bot.user.id}) 로그인 성공!")
     
+    # 1) 봇이 속한 모든 서버에 1초 만에 즉시 슬래시 명령어 복사 및 동기화 (0초 딜레이)
+    for guild in bot.guilds:
+        try:
+            bot.tree.copy_global_to(guild=guild)
+            await bot.tree.sync(guild=guild)
+            print(f"✅ [Instant Sync] '{guild.name}' 서버에 슬래시 커맨드(/알림) 즉시 등록 완료!")
+        except Exception as e:
+            print(f"⚠️ [Guild Sync] {guild.name}: {e}")
+
+    # 2) 글로벌 동기화도 실행
     try:
         synced = await bot.tree.sync()
-        print(f"✅ [Slash Commands] {len(synced)}개 슬래시 명령어 글로벌 동기화 완료! (/알림)")
+        print(f"✅ [Slash Commands] {len(synced)}개 글로벌 슬래시 명령어 동기화 완료! (/알림)")
     except Exception as e:
         print(f"❌ [Command Sync Error] {e}")
 
