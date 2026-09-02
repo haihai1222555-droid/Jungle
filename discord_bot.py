@@ -159,43 +159,43 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================================================
-# 현실 세탁실 고화질 카드 뷰 이미지 렌더러 (Web UI와 100% 동일)
+# 현실 세탁실 초고화질 카드 뷰 이미지 렌더러 (Web UI 100% 동일)
 # =========================================================
 def render_floorplan_image(status_data):
-    W, H = 1200, 680
+    W, H = 2000, 1150
     img = Image.new("RGB", (W, H), color=(11, 15, 25))
     draw = ImageDraw.Draw(img)
 
-    f_title = get_font(18, bold=True)
-    f_sub = get_font(13, bold=False)
-    f_sec_title = get_font(15, bold=True)
-    f_card_num = get_font(16, bold=True)
-    f_card_tag = get_font(11, bold=True)
-    f_unit_title = get_font(12, bold=False)
-    f_unit_state = get_font(13, bold=True)
-    f_unit_time = get_font(16, bold=True)
-    f_badge = get_font(11, bold=True)
+    f_header = get_font(32, bold=True)
+    f_sub = get_font(22, bold=False)
+    f_sec_title = get_font(26, bold=True)
+    f_card_num = get_font(28, bold=True)
+    f_card_tag = get_font(18, bold=True)
+    f_unit_title = get_font(20, bold=False)
+    f_unit_state = get_font(22, bold=True)
+    f_unit_time = get_font(26, bold=True)
+    f_badge = get_font(18, bold=True)
 
     # 1. Header Bar
-    draw.rounded_rectangle([(20, 15), (W - 20, 58)], radius=8, fill=(17, 24, 39))
-    draw.text((35, 24), "🧺 크래프톤 정글 스마트 세탁실 현실 배치도", fill=(255, 255, 255), font=f_title)
+    draw.rounded_rectangle([(30, 25), (W - 30, 95)], radius=12, fill=(17, 24, 39))
+    draw.text((60, 42), "🧺 크래프톤 정글 스마트 세탁실 현실 배치도", fill=(255, 255, 255), font=f_header)
     
     # Legend
-    draw.ellipse([(W - 460, 31), (W - 450, 41)], fill=(107, 114, 128))
-    draw.text((W - 445, 28), "대기 중", fill=(156, 163, 175), font=f_sub)
+    draw.ellipse([(W - 750, 52), (W - 732, 70)], fill=(107, 114, 128))
+    draw.text((W - 720, 47), "대기 중", fill=(156, 163, 175), font=f_sub)
 
-    draw.ellipse([(W - 370, 31), (W - 360, 41)], fill=(16, 185, 129))
-    draw.text((W - 355, 28), "작동 중", fill=(156, 163, 175), font=f_sub)
+    draw.ellipse([(W - 610, 52), (W - 592, 70)], fill=(16, 185, 129))
+    draw.text((W - 580, 47), "작동 중", fill=(156, 163, 175), font=f_sub)
 
-    draw.ellipse([(W - 280, 31), (W - 270, 41)], fill=(245, 158, 11))
-    draw.text((W - 265, 28), "건조 중", fill=(156, 163, 175), font=f_sub)
+    draw.ellipse([(W - 460, 52), (W - 442, 70)], fill=(245, 158, 11))
+    draw.text((W - 430, 47), "건조 중", fill=(156, 163, 175), font=f_sub)
 
-    draw.ellipse([(W - 190, 31), (W - 180, 41)], fill=(239, 68, 68))
-    draw.text((W - 175, 28), "점검 필요", fill=(156, 163, 175), font=f_sub)
+    draw.ellipse([(W - 310, 52), (W - 292, 70)], fill=(239, 68, 68))
+    draw.text((W - 280, 47), "점검 필요", fill=(156, 163, 175), font=f_sub)
 
-    card_w = 220
-    card_h = 245
-    gap = 15
+    card_w = 365
+    card_h = 420
+    gap = 25
 
     def draw_card(t, x, y):
         data = status_data.get(t["name"], {})
@@ -230,98 +230,96 @@ def render_floorplan_image(status_data):
             status_text = "전체 대기 중"
             status_bg = (31, 41, 55)
 
-        draw.rounded_rectangle([(x, y), (x + card_w, y + card_h)], radius=10, fill=(17, 24, 39), outline=border_col, width=2)
-        draw.text((x + 12, y + 10), t["label"], fill=(255, 255, 255), font=f_card_num)
+        draw.rounded_rectangle([(x, y), (x + card_w, y + card_h)], radius=16, fill=(17, 24, 39), outline=border_col, width=3)
+        draw.text((x + 20, y + 16), t["label"], fill=(255, 255, 255), font=f_card_num)
         
         z_col = (59, 130, 246) if "남성" in t["zoneName"] else ((168, 85, 247) if "공용" in t["zoneName"] else (236, 72, 153))
-        draw.rounded_rectangle([(x + 58, y + 11), (x + 112, y + 27)], radius=4, fill=(z_col[0]//4, z_col[1]//4, z_col[2]//4), outline=z_col, width=1)
-        draw.text((x + 63, y + 13), t["zoneName"], fill=z_col, font=f_card_tag)
+        draw.rounded_rectangle([(x + 90, y + 18), (x + 180, y + 46)], radius=6, fill=(z_col[0]//4, z_col[1]//4, z_col[2]//4), outline=z_col, width=2)
+        draw.text((x + 100, y + 21), t["zoneName"], fill=z_col, font=f_card_tag)
 
-        badge_w = 72
-        draw.rounded_rectangle([(x + card_w - badge_w - 10, y + 9), (x + card_w - 10, y + 27)], radius=4, fill=status_bg)
-        draw.text((x + card_w - badge_w - 2, y + 12), status_text, fill=(255, 255, 255), font=f_badge)
+        badge_w = 115
+        draw.rounded_rectangle([(x + card_w - badge_w - 18, y + 16), (x + card_w - 18, y + 46)], radius=6, fill=status_bg)
+        draw.text((x + card_w - badge_w - 4, y + 21), status_text, fill=(255, 255, 255), font=f_badge)
 
-        draw.line([(x + 8, y + 36), (x + card_w - 8, y + 36)], fill=(31, 41, 55), width=1)
+        draw.line([(x + 14, y + 62), (x + card_w - 14, y + 62)], fill=(31, 41, 55), width=2)
 
-        # 건조기
-        d_y = y + 44
+        # ── UPPER: 건조기 (Dryer) ──
+        d_y = y + 78
         if d_err:
-            draw.ellipse([(x + 12, d_y + 4), (x + 32, d_y + 24)], fill=(239, 68, 68), outline=(254, 202, 202), width=1)
-            draw.text((x + 40, d_y + 2), "건조기", fill=(156, 163, 175), font=f_unit_title)
-            draw.text((x + 40, d_y + 17), "기기 점검/에러", fill=(239, 68, 68), font=f_unit_state)
+            draw.ellipse([(x + 20, d_y + 8), (x + 52, d_y + 40)], fill=(239, 68, 68), outline=(254, 202, 202), width=2)
+            draw.text((x + 65, d_y + 4), "건조기", fill=(156, 163, 175), font=f_unit_title)
+            draw.text((x + 65, d_y + 28), "기기 점검/에러", fill=(239, 68, 68), font=f_unit_state)
             time_txt = format_timer(d.get("timer", {}).get("remainHour", 0), d.get("timer", {}).get("remainMinute", 0))
             bbox = draw.textbbox((0, 0), time_txt, font=f_unit_time)
             tw = bbox[2] - bbox[0]
-            draw.text((x + card_w - tw - 14, d_y + 10), time_txt, fill=(239, 68, 68), font=f_unit_time)
-            draw.rounded_rectangle([(x + 12, d_y + 42), (x + card_w - 12, d_y + 60)], radius=4, fill=(127, 29, 29), outline=(239, 68, 68), width=1)
-            draw.text((x + 20, d_y + 44), "🚫 건조기 배수관 점검", fill=(254, 202, 202), font=f_badge)
+            draw.text((x + card_w - tw - 22, d_y + 16), time_txt, fill=(239, 68, 68), font=f_unit_time)
+            draw.rounded_rectangle([(x + 20, d_y + 70), (x + card_w - 20, d_y + 100)], radius=6, fill=(127, 29, 29), outline=(239, 68, 68), width=1)
+            draw.text((x + 35, d_y + 74), "🚫 건조기 배수관 점검 필요", fill=(254, 202, 202), font=f_badge)
         elif d_min > 0:
-            draw.ellipse([(x + 12, d_y + 4), (x + 32, d_y + 24)], fill=(245, 158, 11), outline=(253, 230, 138), width=1)
-            draw.text((x + 40, d_y + 2), "건조기", fill=(156, 163, 175), font=f_unit_title)
-            draw.text((x + 40, d_y + 17), "작동 중", fill=(245, 158, 11), font=f_unit_state)
+            draw.ellipse([(x + 20, d_y + 8), (x + 52, d_y + 40)], fill=(245, 158, 11), outline=(253, 230, 138), width=2)
+            draw.text((x + 65, d_y + 4), "건조기", fill=(156, 163, 175), font=f_unit_title)
+            draw.text((x + 65, d_y + 28), "작동 중", fill=(245, 158, 11), font=f_unit_state)
             time_txt = format_timer(d.get("timer", {}).get("remainHour", 0), d.get("timer", {}).get("remainMinute", 0))
             bbox = draw.textbbox((0, 0), time_txt, font=f_unit_time)
             tw = bbox[2] - bbox[0]
-            draw.text((x + card_w - tw - 14, d_y + 10), time_txt, fill=(255, 255, 255), font=f_unit_time)
-            draw.rounded_rectangle([(x + 40, d_y + 40), (x + 115, d_y + 56)], radius=4, fill=(31, 41, 55), outline=(75, 85, 99), width=1)
-            draw.text((x + 46, d_y + 42), "🌀 표준 건조", fill=(209, 213, 219), font=f_badge)
+            draw.text((x + card_w - tw - 22, d_y + 16), time_txt, fill=(255, 255, 255), font=f_unit_time)
+            draw.rounded_rectangle([(x + 65, d_y + 66), (x + 185, d_y + 96)], radius=6, fill=(31, 41, 55), outline=(75, 85, 99), width=1)
+            draw.text((x + 75, d_y + 70), "🌀 표준 건조", fill=(209, 213, 219), font=f_badge)
         else:
-            draw.ellipse([(x + 12, d_y + 4), (x + 32, d_y + 24)], fill=(55, 65, 81))
-            draw.text((x + 40, d_y + 2), "건조기", fill=(156, 163, 175), font=f_unit_title)
-            draw.text((x + 40, d_y + 17), "대기 중 (사용 가능)", fill=(107, 114, 128), font=f_unit_state)
-            draw.text((x + card_w - 60, d_y + 10), "대기 중", fill=(107, 114, 128), font=f_unit_state)
+            draw.ellipse([(x + 20, d_y + 8), (x + 52, d_y + 40)], fill=(55, 65, 81))
+            draw.text((x + 65, d_y + 4), "건조기", fill=(156, 163, 175), font=f_unit_title)
+            draw.text((x + 65, d_y + 28), "대기 중 (사용 가능)", fill=(107, 114, 128), font=f_unit_state)
+            draw.text((x + card_w - 95, d_y + 16), "대기 중", fill=(107, 114, 128), font=f_unit_state)
 
-        draw.line([(x + 8, y + 142), (x + card_w - 8, y + 142)], fill=(31, 41, 55), width=1)
+        draw.line([(x + 14, y + 240), (x + card_w - 14, y + 240)], fill=(31, 41, 55), width=2)
 
-        # 세탁기
-        w_y = y + 150
+        # ── LOWER: 세탁기 (Washer) ──
+        w_y = y + 255
         if w_err:
-            draw.ellipse([(x + 12, w_y + 4), (x + 32, w_y + 24)], fill=(239, 68, 68), outline=(254, 202, 202), width=1)
-            draw.text((x + 40, w_y + 2), "세탁기", fill=(156, 163, 175), font=f_unit_title)
-            draw.text((x + 40, w_y + 17), "기기 점검/에러", fill=(239, 68, 68), font=f_unit_state)
+            draw.ellipse([(x + 20, w_y + 8), (x + 52, w_y + 40)], fill=(239, 68, 68), outline=(254, 202, 202), width=2)
+            draw.text((x + 65, w_y + 4), "세탁기", fill=(156, 163, 175), font=f_unit_title)
+            draw.text((x + 65, w_y + 28), "기기 점검/에러", fill=(239, 68, 68), font=f_unit_state)
             time_txt = format_timer(w.get("timer", {}).get("remainHour", 0), w.get("timer", {}).get("remainMinute", 0))
             bbox = draw.textbbox((0, 0), time_txt, font=f_unit_time)
             tw = bbox[2] - bbox[0]
-            draw.text((x + card_w - tw - 14, w_y + 10), time_txt, fill=(239, 68, 68), font=f_unit_time)
+            draw.text((x + card_w - tw - 22, w_y + 16), time_txt, fill=(239, 68, 68), font=f_unit_time)
         elif w_min > 0:
-            draw.ellipse([(x + 12, w_y + 4), (x + 32, w_y + 24)], fill=(59, 130, 246), outline=(191, 219, 254), width=1)
-            draw.text((x + 40, w_y + 2), "세탁기", fill=(156, 163, 175), font=f_unit_title)
-            draw.text((x + 40, w_y + 17), "작동 중", fill=(96, 165, 250), font=f_unit_state)
+            draw.ellipse([(x + 20, w_y + 8), (x + 52, w_y + 40)], fill=(59, 130, 246), outline=(191, 219, 254), width=2)
+            draw.text((x + 65, w_y + 4), "세탁기", fill=(156, 163, 175), font=f_unit_title)
+            draw.text((x + 65, w_y + 28), "작동 중", fill=(96, 165, 250), font=f_unit_state)
             time_txt = format_timer(w.get("timer", {}).get("remainHour", 0), w.get("timer", {}).get("remainMinute", 0))
             bbox = draw.textbbox((0, 0), time_txt, font=f_unit_time)
             tw = bbox[2] - bbox[0]
-            draw.text((x + card_w - tw - 14, w_y + 10), time_txt, fill=(255, 255, 255), font=f_unit_time)
-            draw.rounded_rectangle([(x + 40, w_y + 40), (x + 115, w_y + 56)], radius=4, fill=(31, 41, 55), outline=(75, 85, 99), width=1)
-            draw.text((x + 46, w_y + 42), "🫧 표준 세탁", fill=(209, 213, 219), font=f_badge)
+            draw.text((x + card_w - tw - 22, w_y + 16), time_txt, fill=(255, 255, 255), font=f_unit_time)
+            draw.rounded_rectangle([(x + 65, w_y + 66), (x + 185, w_y + 96)], radius=6, fill=(31, 41, 55), outline=(75, 85, 99), width=1)
+            draw.text((x + 75, w_y + 70), "🫧 표준 세탁", fill=(209, 213, 219), font=f_badge)
         else:
-            draw.ellipse([(x + 12, w_y + 4), (x + 32, w_y + 24)], fill=(55, 65, 81))
-            draw.text((x + 40, w_y + 2), "세탁기", fill=(156, 163, 175), font=f_unit_title)
-            draw.text((x + 40, w_y + 17), "대기 중 (사용 가능)", fill=(107, 114, 128), font=f_unit_state)
-            draw.text((x + card_w - 60, w_y + 10), "대기 중", fill=(107, 114, 128), font=f_unit_state)
+            draw.ellipse([(x + 20, w_y + 8), (x + 52, w_y + 40)], fill=(55, 65, 81))
+            draw.text((x + 65, w_y + 4), "세탁기", fill=(156, 163, 175), font=f_unit_title)
+            draw.text((x + 65, w_y + 28), "대기 중 (사용 가능)", fill=(107, 114, 128), font=f_unit_state)
+            draw.text((x + card_w - 95, w_y + 16), "대기 중", fill=(107, 114, 128), font=f_unit_state)
 
     # 남성 구역 (No.1 ~ No.5)
-    draw.rounded_rectangle([(25, 68), (220, 92)], radius=5, fill=(30, 58, 138))
-    draw.text((35, 72), "🟦 남성 구역 (No.1 ~ No.5)", fill=(191, 219, 254), font=f_sec_title)
-    
+    draw.rounded_rectangle([(35, 115), (340, 155)], radius=8, fill=(30, 58, 138))
+    draw.text((50, 121), "🟦 남성 구역 (No.1 ~ No.5)", fill=(191, 219, 254), font=f_sec_title)
+
     for idx, t in enumerate(TOWERS[:5]):
-        cx = 25 + idx * (card_w + gap)
-        draw_card(t, cx, 100)
+        cx = 35 + idx * (card_w + gap)
+        draw_card(t, cx, 168)
 
     # 공용 & 여성 구역 (No.6 ~ No.9)
-    draw.rounded_rectangle([(25, 363), (395, 387)], radius=5, fill=(88, 28, 135))
-    draw.text((35, 367), "🟪 공용 (No.6~7) & 🟥 여성 구역 (No.8~9)", fill=(233, 213, 255), font=f_sec_title)
+    draw.rounded_rectangle([(35, 620), (590, 660)], radius=8, fill=(88, 28, 135))
+    draw.text((50, 626), "🟪 공용 (No.6~7) & 🟥 여성 구역 (No.8~9)", fill=(233, 213, 255), font=f_sec_title)
 
     for idx, t in enumerate(TOWERS[5:]):
-        cx = 25 + idx * (card_w + gap)
-        draw_card(t, cx, 395)
+        cx = 35 + idx * (card_w + gap)
+        draw_card(t, cx, 675)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf
 
-# =========================================================
-# 가동 중인 기기 선택 드롭다운 (Select Menu View)
 # =========================================================
 # 알림 등록 / 해제 공통 헬퍼
 # =========================================================
@@ -373,92 +371,54 @@ async def register_or_toggle_alarm(interaction: discord.Interaction, tower_id, u
         )
 
 # =========================================================
-# 단일 기기 세탁/건조 선택 팝업 뷰 (둘 다 가동 중일 때)
-# =========================================================
-class MachineUnitChoiceView(discord.ui.View):
-    def __init__(self, tower, dryer_info, washer_info):
-        super().__init__(timeout=60)
-        t_id = tower["id"]
-        t_label = tower["label"]
-
-        if dryer_info and dryer_info.get("running"):
-            d_min = dryer_info["min"]
-            d_time = dryer_info["time_str"]
-            btn_d = discord.ui.Button(
-                label=f"💨 건조기 선택 ({d_time} 남음)",
-                style=discord.ButtonStyle.primary,
-                emoji="💨"
-            )
-            async def cb_d(interaction: discord.Interaction):
-                await register_or_toggle_alarm(interaction, t_id, "dryer", d_min, f"{t_label} 건조기")
-            btn_d.callback = cb_d
-            self.add_item(btn_d)
-
-        if washer_info and washer_info.get("running"):
-            w_min = washer_info["min"]
-            w_time = washer_info["time_str"]
-            btn_w = discord.ui.Button(
-                label=f"🫧 세탁기 선택 ({w_time} 남음)",
-                style=discord.ButtonStyle.success,
-                emoji="🫧"
-            )
-            async def cb_w(interaction: discord.Interaction):
-                await register_or_toggle_alarm(interaction, t_id, "washer", w_min, f"{t_label} 세탁기")
-            btn_w.callback = cb_w
-            self.add_item(btn_w)
-
-# =========================================================
-# 현실 배치도 버튼 그리드 뷰 (1열: 남성 1~5 / 2열: 공용 6~7 & 여성 8~9)
+# 현실 2단 워시타워 매트릭스 버튼 그리드 뷰 (4행 구조)
 # =========================================================
 class LaundryFloorplanButtonsView(discord.ui.View):
     def __init__(self, status_data):
         super().__init__(timeout=300)
 
-        # 1행: 남성 1~5호기 버튼
+        # Row 0: 남성 1~5호기 상단 건조기
         for t in TOWERS[:5]:
-            self.add_tower_button(t, status_data, row=0)
+            self.add_unit_button(t, "dryer", status_data, row=0)
 
-        # 2행: 공용 6~7호기 & 여성 8~9호기 버튼
+        # Row 1: 남성 1~5호기 하단 세탁기
+        for t in TOWERS[:5]:
+            self.add_unit_button(t, "washer", status_data, row=1)
+
+        # Row 2: 공용 6~7 & 여성 8~9 상단 건조기
         for t in TOWERS[5:]:
-            self.add_tower_button(t, status_data, row=1)
+            self.add_unit_button(t, "dryer", status_data, row=2)
 
-    def add_tower_button(self, t, status_data, row):
+        # Row 3: 공용 6~7 & 여성 8~9 하단 세탁기
+        for t in TOWERS[5:]:
+            self.add_unit_button(t, "washer", status_data, row=3)
+
+    def add_unit_button(self, t, unit_type, status_data, row):
         data = status_data.get(t["name"], {})
-        d = data.get("dryer", {})
-        w = data.get("washer", {})
+        unit_data = data.get("dryer", {}) if unit_type == "dryer" else data.get("washer", {})
+        
+        state = unit_data.get("runState", {}).get("currentState", "POWER_OFF")
+        timer = unit_data.get("timer", {})
+        h = timer.get("remainHour", 0)
+        m = timer.get("remainMinute", 0)
+        remain_min = (h * 60) + m
+        is_err = unit_data.get("error") or (state == "ERROR")
+        running = not is_err and is_unit_running(state, remain_min)
+        time_str = format_timer(h, m)
 
-        d_state = d.get("runState", {}).get("currentState", "POWER_OFF")
-        w_state = w.get("runState", {}).get("currentState", "POWER_OFF")
-        d_min = (d.get("timer", {}).get("remainHour", 0) * 60) + d.get("timer", {}).get("remainMinute", 0)
-        w_min = (w.get("timer", {}).get("remainHour", 0) * 60) + w.get("timer", {}).get("remainMinute", 0)
-        d_err = d.get("error") or (d_state == "ERROR")
-        w_err = w.get("error") or (w_state == "ERROR")
+        unit_symbol = "💨" if unit_type == "dryer" else "🫧"
+        device_full_name = f"{t['label']} {'건조기' if unit_type == 'dryer' else '세탁기'}"
 
-        d_running = not d_err and is_unit_running(d_state, d_min)
-        w_running = not w_err and is_unit_running(w_state, w_min)
-
-        d_time = format_timer(d.get("timer", {}).get("remainHour", 0), d.get("timer", {}).get("remainMinute", 0))
-        w_time = format_timer(w.get("timer", {}).get("remainHour", 0), w.get("timer", {}).get("remainMinute", 0))
-
-        # 버튼 라벨 및 상태 지정
-        if d_err or w_err:
-            btn_label = f"{t['label']} ⚠️점검"
+        if is_err:
+            btn_label = f"{t['label']} {unit_symbol} ⚠️점검"
             btn_style = discord.ButtonStyle.danger
             is_disabled = True
-        elif d_running and w_running:
-            btn_label = f"{t['label']} (💨{d_time} 🫧{w_time})"
-            btn_style = discord.ButtonStyle.success
-            is_disabled = False
-        elif d_running:
-            btn_label = f"{t['label']} 💨{d_time}"
-            btn_style = discord.ButtonStyle.primary
-            is_disabled = False
-        elif w_running:
-            btn_label = f"{t['label']} 🫧{w_time}"
-            btn_style = discord.ButtonStyle.primary
+        elif running:
+            btn_label = f"{t['label']} {unit_symbol} {time_str}"
+            btn_style = discord.ButtonStyle.primary if unit_type == "dryer" else discord.ButtonStyle.success
             is_disabled = False
         else:
-            btn_label = f"{t['label']} 대기"
+            btn_label = f"{t['label']} {unit_symbol} 대기"
             btn_style = discord.ButtonStyle.secondary
             is_disabled = True
 
@@ -470,27 +430,11 @@ class LaundryFloorplanButtonsView(discord.ui.View):
         )
 
         if not is_disabled:
-            async def btn_callback(interaction: discord.Interaction):
-                # 1) 건조기와 세탁기 둘 다 돌 때: 팝업 버튼 선택
-                if d_running and w_running:
-                    view = MachineUnitChoiceView(
-                        t,
-                        {"running": True, "min": d_min, "time_str": d_time},
-                        {"running": True, "min": w_min, "time_str": w_time}
-                    )
-                    await interaction.response.send_message(
-                        f"🧺 **[{t['label']}]** 건조기와 세탁기가 모두 가동 중입니다. 알림을 받을 기기를 선택하세요:",
-                        view=view,
-                        ephemeral=True
-                    )
-                # 2) 건조기만 돌 때: 즉시 건조기 알림 등록
-                elif d_running:
-                    await register_or_toggle_alarm(interaction, t["id"], "dryer", d_min, f"{t['label']} 건조기")
-                # 3) 세탁기만 돌 때: 즉시 세탁기 알림 등록
-                elif w_running:
-                    await register_or_toggle_alarm(interaction, t["id"], "washer", w_min, f"{t['label']} 세탁기")
-
-            btn.callback = btn_callback
+            def make_cb(tower_id, u_type, r_min, dev_name):
+                async def btn_callback(interaction: discord.Interaction):
+                    await register_or_toggle_alarm(interaction, tower_id, u_type, r_min, dev_name)
+                return btn_callback
+            btn.callback = make_cb(t["id"], unit_type, remain_min, device_full_name)
 
         self.add_item(btn)
 
