@@ -87,10 +87,9 @@ def is_unit_running(state, remain_min):
     return state in RUNNING_STATES or (remain_min > 0 and state != 'ERROR' and state != 'POWER_OFF')
 
 # =========================================================
-# 디스코드 봇 클라이언트 초기화
+# 디스코드 봇 클라이언트 초기화 (슬래시 커맨드 전용)
 # =========================================================
 intents = discord.Intents.default()
-intents.messages = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================================================
@@ -433,6 +432,24 @@ async def on_ready():
         check_laundry_alarms.start()
         print("⏰ [Alarm Daemon] 10초 주기 실시간 세탁실 센서 감시 루프 가동 시작!")
 
+async def start_bot_with_backoff():
+    delay = 15
+    while True:
+        try:
+            print("🤖 [Discord Bot] Discord Gateway 연결 시도 중...")
+            await bot.start(DISCORD_BOT_TOKEN)
+        except discord.errors.HTTPException as e:
+            if e.status == 429:
+                print(f"⚠️ [Discord Rate Limit] 디스코드 API 글로벌 요청 제한(429) 감지. {delay}초 후 자동 재시도합니다...")
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 120)
+            else:
+                print(f"❌ [Discord HTTP Error] {e} ({delay}초 후 재시도)")
+                await asyncio.sleep(delay)
+        except Exception as e:
+            print(f"❌ [Discord Error] {e} (15초 후 재시도)")
+            await asyncio.sleep(15)
+
 if __name__ == "__main__":
     if not DISCORD_BOT_TOKEN:
         print("=" * 60)
@@ -441,4 +458,4 @@ if __name__ == "__main__":
         print("   실행 예: $env:DISCORD_BOT_TOKEN='YOUR_TOKEN_HERE'; python discord_bot.py")
         print("=" * 60)
     else:
-        bot.run(DISCORD_BOT_TOKEN)
+        asyncio.run(start_bot_with_backoff())
