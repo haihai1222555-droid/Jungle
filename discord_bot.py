@@ -371,80 +371,75 @@ async def register_or_toggle_alarm(interaction: discord.Interaction, tower_id, u
         )
 
 # =========================================================
-# 현실 2단 워시타워 매트릭스 버튼 그리드 뷰 (4행 구조)
+# 가동 기기 옵션 생성 헬퍼
 # =========================================================
-class LaundryFloorplanButtonsView(discord.ui.View):
-    def __init__(self, status_data):
-        super().__init__(timeout=300)
-
-        # Row 0: 남성 1~5호기 상단 건조기
-        for t in TOWERS[:5]:
-            self.add_unit_button(t, "dryer", status_data, row=0)
-
-        # Row 1: 남성 1~5호기 하단 세탁기
-        for t in TOWERS[:5]:
-            self.add_unit_button(t, "washer", status_data, row=1)
-
-        # Row 2: 공용 6~7 & 여성 8~9 상단 건조기
-        for t in TOWERS[5:]:
-            self.add_unit_button(t, "dryer", status_data, row=2)
-
-        # Row 3: 공용 6~7 & 여성 8~9 하단 세탁기
-        for t in TOWERS[5:]:
-            self.add_unit_button(t, "washer", status_data, row=3)
-
-    def add_unit_button(self, t, unit_type, status_data, row):
+def get_running_options(status_data):
+    running_options = []
+    for t in TOWERS:
         data = status_data.get(t["name"], {})
-        unit_data = data.get("dryer", {}) if unit_type == "dryer" else data.get("washer", {})
+        w = data.get("washer", {})
+        d = data.get("dryer", {})
+
+        w_state = w.get("runState", {}).get("currentState", "POWER_OFF")
+        d_state = d.get("runState", {}).get("currentState", "POWER_OFF")
+        w_min = (w.get("timer", {}).get("remainHour", 0) * 60) + w.get("timer", {}).get("remainMinute", 0)
+        d_min = (d.get("timer", {}).get("remainHour", 0) * 60) + d.get("timer", {}).get("remainMinute", 0)
         
-        state = unit_data.get("runState", {}).get("currentState", "POWER_OFF")
-        timer = unit_data.get("timer", {})
-        h = timer.get("remainHour", 0)
-        m = timer.get("remainMinute", 0)
-        remain_min = (h * 60) + m
-        is_err = unit_data.get("error") or (state == "ERROR")
-        running = not is_err and is_unit_running(state, remain_min)
-        time_str = format_timer(h, m)
+        w_err = w.get("error") or (w_state == "ERROR")
+        d_err = d.get("error") or (d_state == "ERROR")
 
-        unit_symbol = "💨" if unit_type == "dryer" else "🫧"
-        device_full_name = f"{t['label']} {'건조기' if unit_type == 'dryer' else '세탁기'}"
+        # 상단 건조기 검증 (에러/대기 제외, 진짜 가동 중인 기기만)
+        if not d_err and is_unit_running(d_state, d_min):
+            time_str = format_timer(d.get("timer", {}).get("remainHour", 0), d.get("timer", {}).get("remainMinute", 0))
+            running_options.append(discord.SelectOption(
+                label=f"[{t['zoneName'][:2]}] {t['label']} 건조기 ({time_str} 남음)",
+                description=f"가동 상태: {d_state} · 완료 5분 전 DM 알림",
+                value=f"{t['id']}_dryer_{d_min}_{t['label']} 건조기",
+                emoji="💨"
+            ))
 
-        if is_err:
-            btn_label = f"{t['label']} {unit_symbol} ⚠️점검"
-            btn_style = discord.ButtonStyle.danger
-            is_disabled = True
-        elif running:
-            btn_label = f"{t['label']} {unit_symbol} {time_str}"
-            btn_style = discord.ButtonStyle.primary if unit_type == "dryer" else discord.ButtonStyle.success
-            is_disabled = False
-        else:
-            btn_label = f"{t['label']} {unit_symbol} 대기"
-            btn_style = discord.ButtonStyle.secondary
-            is_disabled = True
+        # 하단 세탁기 검증
+        if not w_err and is_unit_running(w_state, w_min):
+            time_str = format_timer(w.get("timer", {}).get("remainHour", 0), w.get("timer", {}).get("remainMinute", 0))
+            running_options.append(discord.SelectOption(
+                label=f"[{t['zoneName'][:2]}] {t['label']} 세탁기 ({time_str} 남음)",
+                description=f"가동 상태: {w_state} · 완료 5분 전 DM 알림",
+                value=f"{t['id']}_washer_{w_min}_{t['label']} 세탁기",
+                emoji="🫧"
+            ))
+    return running_options
 
-        btn = discord.ui.Button(
-            label=btn_label,
-            style=btn_style,
-            disabled=is_disabled,
-            row=row
+# =========================================================
+# 가동 중인 기기 선택 드롭다운 (Select Menu View)
+# =========================================================
+class LaundryAlarmSelect(discord.ui.Select):
+    def __init__(self, running_options):
+        super().__init__(
+            placeholder="🔔 5분 전 알림을 받을 가동 중인 기기를 선택하세요...",
+            min_values=1,
+            max_values=1,
+            options=running_options
         )
 
-        if not is_disabled:
-            def make_cb(tower_id, u_type, r_min, dev_name):
-                async def btn_callback(interaction: discord.Interaction):
-                    await register_or_toggle_alarm(interaction, tower_id, u_type, r_min, dev_name)
-                return btn_callback
-            btn.callback = make_cb(t["id"], unit_type, remain_min, device_full_name)
+    async def callback(self, interaction: discord.Interaction):
+        selected_val = self.values[0]  # format: "towerId_unitType_remainMin_deviceName"
+        parts = selected_val.split("_")
+        tower_id = int(parts[0])
+        unit_type = parts[1]
+        remain_min = int(parts[2])
+        device_name = "_".join(parts[3:])
+        await register_or_toggle_alarm(interaction, tower_id, unit_type, remain_min, device_name)
 
-        self.add_item(btn)
+class LaundryFloorplanView(discord.ui.View):
+    def __init__(self, running_options):
+        super().__init__(timeout=300)
+        if running_options:
+            self.add_item(LaundryAlarmSelect(running_options))
 
 def build_floorplan_embed():
     embed = discord.Embed(
         title="🧺 크래프톤 정글 스마트 세탁실 현황 & 알림",
-        description=(
-            "아래 **현실 배치도 카드 뷰**를 확인하고, **원하는 호기 번호 버튼을 직접 클릭**하여 5분 전 DM 알림을 등록하세요!\n"
-            "*(대기 중이거나 점검 중인 기기는 자동으로 비활성화됩니다)*"
-        ),
+        description="아래 **현실 배치도 카드 뷰**를 확인하고, **5분 전 DM 알림을 받을 가동 중인 기기를 선택**하세요!",
         color=discord.Color.from_rgb(16, 185, 129),
         timestamp=datetime.now()
     )
@@ -458,29 +453,47 @@ def build_floorplan_embed():
 # =========================================================
 # 슬래시 명령어 (/알림) & 접두사 명령어 (!알림) 동시 지원
 # =========================================================
-@bot.tree.command(name="알림", description="실시간 세탁실 현실 배치도를 확인하고 원하는 기기 버튼을 눌러 5분 전 DM 알림을 등록합니다.")
+@bot.tree.command(name="알림", description="실시간 세탁실 현실 배치도를 확인하고 가동 중인 기기 5분 전 DM 알림을 등록합니다.")
 async def cmd_alarm_slash(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)
     status_data = fetch_live_status()
+    running_options = get_running_options(status_data)
 
     img_buf = render_floorplan_image(status_data)
     discord_file = discord.File(img_buf, filename="floorplan.png")
     embed = build_floorplan_embed()
-    view = LaundryFloorplanButtonsView(status_data)
 
-    await interaction.followup.send(file=discord_file, embed=embed, view=view)
+    if not running_options:
+        embed.add_field(
+            name="💡 알림 등록 안내",
+            value="현재 세탁실에 가동 중인 세탁기/건조기가 없습니다. (모든 기기가 대기 중이거나 완료 상태입니다)",
+            inline=False
+        )
+        await interaction.followup.send(file=discord_file, embed=embed)
+    else:
+        view = LaundryFloorplanView(running_options[:25])
+        await interaction.followup.send(file=discord_file, embed=embed, view=view)
 
 @bot.command(name="알림", aliases=["세탁", "세탁실", "laundry"])
 async def cmd_alarm_prefix(ctx):
     """디스코드 채팅창에 !알림 또는 !세탁실 입력 시에도 동작"""
     status_data = fetch_live_status()
+    running_options = get_running_options(status_data)
 
     img_buf = render_floorplan_image(status_data)
     discord_file = discord.File(img_buf, filename="floorplan.png")
     embed = build_floorplan_embed()
-    view = LaundryFloorplanButtonsView(status_data)
 
-    await ctx.send(file=discord_file, embed=embed, view=view)
+    if not running_options:
+        embed.add_field(
+            name="💡 알림 등록 안내",
+            value="현재 세탁실에 가동 중인 세탁기/건조기가 없습니다. (모든 기기가 대기 중이거나 완료 상태입니다)",
+            inline=False
+        )
+        await ctx.send(file=discord_file, embed=embed)
+    else:
+        view = LaundryFloorplanView(running_options[:25])
+        await ctx.send(file=discord_file, embed=embed, view=view)
 
 # =========================================================
 # 백그라운드 태스크: 10초마다 실시간 센서 감시 & DM 발송
