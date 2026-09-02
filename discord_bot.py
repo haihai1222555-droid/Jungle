@@ -943,6 +943,7 @@ ADMIN_USER_IDS = {x.strip() for x in (os.environ.get("ADMIN_USER_IDS") or "").sp
 ADMIN_PASSPHRASE = (os.environ.get("ADMIN_PASSPHRASE") or "").strip()
 ADMIN_SESSION_SEC = 30 * 60      # 열어둔 뒤 이 시간이 지나면 저절로 닫힌다
 ADMIN_SESSIONS = {}              # user_id -> 열린 시각
+LAST_ENGINE = "아직 없음"          # 마지막으로 답한 엔진 (관리자 진단용)
 
 
 def is_admin_user(user_id):
@@ -979,7 +980,9 @@ def admin_toggle(user_id, text):
     ADMIN_SESSIONS[user_id] = time.time()
     return ("\U0001f513 **관리자 모드를 켰습니다.** (%d분 뒤 저절로 닫힘)\n"
             "-# 주제 제한과 답변 검사를 건너뜁니다. 무엇이든 물어보세요.\n\n"
-            "%s" % (ADMIN_SESSION_SEC // 60, admin_diagnostics()))
+            "%s\n\n%s" % (ADMIN_SESSION_SEC // 60, admin_diagnostics(),
+                          "-# 실제 값을 보려면 `명령` 을 쳐보세요. "
+                          "API 키나 등록된 알림 같은 건 AI 가 모르니 직접 보여드립니다."))
 
 
 # 답변에 이런 게 섞여 있으면 여러 사람이 보는 곳에 올리지 않는다.
@@ -1008,6 +1011,210 @@ def contains_secret(text):
     return any(uid and uid in text for uid in ADMIN_USER_IDS)
 
 
+def _mask(value, keep=6):
+    """키 같은 값을 앞뒤만 남기고 가린다."""
+    if not value:
+        return "(없음)"
+    if len(value) <= keep * 2:
+        return value[:2] + "…"
+    return f"{value[:keep]}…{value[-4:]} ({len(value)}자)"
+
+
+ADMIN_HELP = (
+    "**관리자 명령** — AI 를 거치지 않고 실제 값을 바로 보여줍니다.\n"
+    "• `진단` — 전체 상태 요약\n"
+    "• `키` — API 키 목록 (가려서 표시) 과 사용 순서\n"
+    "• `설정` — 환경변수 설정 상태\n"
+    "• `알림전체` — 지금 등록된 모든 알림\n"
+    "• `지식` — 안내 지식 항목과 사진 목록\n"
+    "• `관측` — 시간대별 혼잡도 관측 현황\n"
+    "• `원본` — 기기 API 응답 원본\n"
+    "• `사진` — 가진 사진 목록 / `사진 세탁실` 처럼 쓰면 그 사진을 보냄\n"
+    "• `검색 질문` — 인터넷에서 찾아 답함 (관리자 전용)\n"    "• `groq 질문` — 이번 답만 Groq 으로 / `제미나이 질문` — 제미나이로\n"
+    "• `해제` — 관리자 모드 끄기\n"
+    "• `명령` — 이 목록\n"
+    "-# 그 밖의 말은 평소처럼 AI 가 답합니다 (주제 제한 없이)."
+)
+
+
+def search_web(question):
+    """제미나이의 구글 검색 연동으로 답을 찾는다.
+
+    돌려주는 값은 (답, 출처목록) 이거나, 못 했으면 (None, 사유).
+    """
+    if not GEMINI_API_KEYS:
+        return None, "제미나이 키가 없습니다."
+    body = json.dumps({
+        "contents": [{"role": "user", "parts": [{"text": question}]}],
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1500},
+    }).encode("utf-8")
+    quota_hit = False
+    for model in ("gemini-3.5-flash", "gemini-3.5-flash-lite"):
+        for key in GEMINI_API_KEYS:
+            try:
+                req = urllib.request.Request(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
+                    data=body, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=40) as res:
+                    data = json.loads(res.read().decode("utf-8"))
+                cand = data["candidates"][0]
+                answer = "".join(p.get("text", "") for p in cand["content"]["parts"]).strip()
+                chunks = (cand.get("groundingMetadata") or {}).get("groundingChunks") or []
+                sources = []
+                for c in chunks[:4]:
+                    w = c.get("web") or {}
+                    if w.get("title"):
+                        sources.append(w["title"])
+                return answer, sources
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    quota_hit = True
+                    continue
+                print(f"[Search] {model} HTTP {e.code}")
+                break
+            except Exception as e:
+                print(f"[Search] {model} 실패: {e}")
+                break
+    if quota_hit:
+        return None, ("구글 검색 연동은 무료 요금제에 없습니다. "
+                      "구글 클라우드 프로젝트에 결제를 켜면 코드 수정 없이 바로 됩니다.")
+    return None, "검색에 실패했습니다."
+
+
+def admin_command(text, status_data=None):
+    """관리자가 친 명령이면 그 결과를, 아니면 None 을 돌려준다."""
+    t = (text or "").replace(" ", "")
+
+    if t in ("명령", "명령어", "관리자명령", "도움", "help"):
+        return ADMIN_HELP
+
+    if t in ("진단", "상태", "status"):
+        return admin_diagnostics()
+
+    if t in ("키", "api키", "apikey", "키목록"):
+        lines = ["**API 키** (앞뒤만 표시)"]
+        for i, k in enumerate(GEMINI_API_KEYS, 1):
+            lines.append(f"{i}. 제미나이 {_mask(k)}")
+        if not GEMINI_API_KEYS:
+            lines.append("제미나이 키가 없습니다.")
+        lines.append(f"• Groq {_mask(GROQ_API_KEY)}")
+        lines.append("")
+        lines.append("**시도 순서** — 모델을 낮추기 전에 키부터 바꿉니다.")
+        for m in GEMINI_MODELS:
+            lines.append(f"• {m} → 키 1~{len(GEMINI_API_KEYS)}")
+        lines.append(f"• 모두 막히면 Groq: {', '.join(GROQ_MODELS)}")
+        return "\n".join(lines)
+
+    if t in ("설정", "환경변수", "env", "config"):
+        return "\n".join([
+            "**환경변수 상태**",
+            f"• 기기 API: {STATUS_API_URL}",
+            f"• 수거 요청까지 {STALE_PICKUP_SEC // 60}분",
+            f"• 메시지 읽기 권한: {'켜짐' if intents.message_content else '꺼짐'}",
+            f"• 멘션 없이 대화하는 채널: {len(assistant_channels)}곳 {sorted(assistant_channels) or ''}",
+            f"• 관리자 {len(ADMIN_USER_IDS)}명 · 열린 세션 {len(ADMIN_SESSIONS)}개",
+            f"• 관리자 모드 유지 시간: {ADMIN_SESSION_SEC // 60}분",
+        ])
+
+    if t in ("알림전체", "모든알림", "전체알림"):
+        if not active_alarms:
+            return "등록된 알림이 없습니다."
+        lines = [f"**등록된 알림 {len(active_alarms)}개**"]
+        for a in active_alarms[:25]:
+            flags = []
+            if a.get("notified5Min"):
+                flags.append("5분전✔")
+            if a.get("notified0Min"):
+                flags.append("완료✔")
+            if a.get("pickedUp"):
+                flags.append("수거확인✔")
+            uid = str(a.get("userId", "?"))
+            lines.append(f"• {a.get('deviceName','?')} · 사용자 …{uid[-4:]} {' '.join(flags)}")
+        if len(active_alarms) > 25:
+            lines.append(f"-# 외 {len(active_alarms) - 25}개")
+        return "\n".join(lines)
+
+    if t in ("지식", "지식목록", "kb", "섹션"):
+        if not jungle_kb:
+            return "지식 파일을 불러오지 못했습니다."
+        titles = []
+        for sec in jungle_kb.SECTIONS:
+            head = sec["text"].strip().split("\n")[0].strip("[]")
+            titles.append(head)
+        body = ", ".join(titles)
+        return (f"**안내 지식** {len(jungle_kb.SECTIONS)}항목 · "
+                f"{len(jungle_kb.build_context())}자 · 사진 {len(jungle_kb.IMAGES)}장\n{body}")[:1900]
+
+    if t in ("관측", "혼잡", "혼잡도"):
+        m = measured_busy_slots()
+        if not m:
+            lines = ["**혼잡도** — 아직 추정값을 쓰고 있습니다 (관측 수집 중)"]
+            for start, end, label, rate, badge in BUSY_SLOTS:
+                lines.append(f"• {start:02d}~{end:02d} {label} {rate}% ({badge})")
+            return "\n".join(lines)
+        lines = [f"**혼잡도** — 실제 관측값 ({m.get('week')}주차, 관측 {m.get('totalSamples', 0):,}회)"]
+        for sl in m["slots"]:
+            lines.append(f"• {sl['startHour']:02d}~{sl['endHour']:02d} {sl['label']} "
+                         f"{sl['utilizationRate']}% · 비중 {sl['sharePercent']}%")
+        return "\n".join(lines)
+
+    # 관리자 모드 끄기. "관리자 모드 해제해 줘" 처럼 말해도 알아듣는다.
+    # 다만 "3번 건조기 알림 해제" 는 알림을 끄는 말이므로 건드리지 않는다.
+    if not DEVICE_RE.search(t):
+        if t in ("해제", "종료", "끄기", "off", "관리자해제"):
+            return "__ADMIN_OFF__"
+        if ("관리자" in t or "모드" in t) and any(k in t for k in ("해제", "종료", "끄", "꺼", "off", "나가", "나갈", "그만")):
+            return "__ADMIN_OFF__"
+
+    if t == "사진" or t in ("사진목록", "사진들"):
+        if not jungle_kb:
+            return "지식 파일을 불러오지 못했습니다."
+        lines = [f"**가진 사진 {len(jungle_kb.IMAGES)}장** — `사진 세탁실` 처럼 쓰면 보내드립니다."]
+        for img in jungle_kb.IMAGES:
+            mark = "" if os.path.exists(os.path.join(ASSETS_DIR, img["file"])) else " ⚠️없음"
+            lines.append(f"• `{img['file']}` — {img['caption']}{mark}")
+        return "\n".join(lines)[:1900]
+
+    if t.startswith("사진"):
+        want = (text or "").replace("사진", "", 1).strip()
+        hit = find_guide_image(want) if want else None
+        if hit is None and want and jungle_kb:
+            # 파일 이름이나 설명글로도 찾아본다
+            w = want.lower()
+            for img in jungle_kb.IMAGES:
+                if w in img["file"].lower() or w in img["caption"].lower():
+                    path = os.path.join(ASSETS_DIR, img["file"])
+                    if os.path.exists(path):
+                        hit = {"path": path, "caption": img["caption"]}
+                        break
+        if hit:
+            return (f"📷 {hit['caption']}\n-# `{os.path.basename(hit['path'])}`", hit)
+        return f"`{want}` 에 맞는 사진을 찾지 못했습니다. `사진` 으로 목록을 보세요."
+
+    if t.startswith(("검색", "찾아")) and len(t) > 2:
+        q = re.sub(r"^(검색해줘|검색해|검색|찾아줘|찾아봐|찾아)", "", (text or "").strip()).strip()
+        if not q:
+            return "무엇을 찾을까요? `검색 질문내용` 처럼 써주세요."
+        answer, extra = search_web(q)
+        if answer:
+            out = f"\U0001f50d **{q}**\n\n{answer}"
+            if extra:
+                out += "\n\n-# 출처: " + " · ".join(extra)
+            return out[:1900]
+        return (f"\U0001f50d 검색을 쓰지 못했습니다.\n-# {extra}\n\n"
+                "-# 대신 아는 지식으로 답하려면 그냥 질문만 적어주세요.")
+
+    if t in ("원본", "raw", "원본데이터"):
+        data = status_data or fetch_live_status()
+        if not data:
+            return "기기 데이터를 가져오지 못했습니다."
+        text_out = json.dumps(data, ensure_ascii=False, indent=1)
+        return f"**기기 API 원본** ({len(data)}대)\n```json\n{text_out[:1700]}\n```"
+
+    return None
+
+
 def admin_diagnostics():
     """관리자에게 보여줄 지금 상태 요약."""
     lines = ["**진단**"]
@@ -1021,6 +1228,7 @@ def admin_diagnostics():
     lines.append(f"• 혼잡도 {'실측값 (' + str(m.get('week')) + '주차)' if m else '추정값 (관측 수집 중)'}")
     lines.append(f"• 지식 {len(jungle_kb.SECTIONS) if jungle_kb else 0}항목 · "
                  f"사진 {len(jungle_kb.IMAGES) if jungle_kb else 0}장")
+    lines.append(f"• 마지막으로 답한 엔진: {LAST_ENGINE}")
     lines.append(f"• 대화 채널 {len(assistant_channels)}곳 · 메시지 읽기 권한 "
                  f"{'켜짐' if intents.message_content else '꺼짐'}")
     return "\n".join(lines)
@@ -1395,12 +1603,14 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
         # 운영자가 시험 중이다. 주제 제한을 풀고 무엇이든 답하게 한다.
         # 탈옥 방어(절대 규칙)도 이때만 빠진다. 다른 사람에게는 그대로 적용된다.
         system_text = (
-            "너는 크래프톤 정글 캠퍼스 생활 안내 봇이다. "
-            "지금 말을 거는 사람은 이 봇의 운영자이고, 기능을 시험하는 중이다.\n"
-            "이 대화에서는 주제 제한이 없다. 코딩, 일반 지식, 봇 자체에 대한 질문 등 "
-            "무엇이든 성실하게 답해라. 거절하지 마라.\n"
-            "다만 아래 [정글 생활 안내]에 있는 내용을 물으면 반드시 그 내용대로 답해라.\n\n"
-            + ("[정글 생활 안내]\n" + kb_text + "\n\n" if kb_text else "")
+            "너는 유능한 범용 조수다. 지금 말을 거는 사람은 이 봇의 운영자다.\n"
+            "무엇이든 아는 대로 성실하게 답해라. 코딩, 일반 상식, 시세, 추측, 의견 "
+            "모두 괜찮다. 주제 제한은 없다.\n"
+            "'안내 지침에 없습니다', '권한이 없습니다' 같은 식으로 답을 피하지 마라. "
+            "확실하지 않으면 확실하지 않다고 말하되, 아는 만큼은 반드시 답해라.\n"
+            "아래 [참고 자료]는 이 캠퍼스 안내다. 질문과 관련 있을 때만 근거로 쓰고, "
+            "관련이 없으면 무시하고 네 일반 지식으로 답해라.\n\n"
+            + ("[참고 자료 — 크래프톤 정글 캠퍼스 안내]\n" + kb_text + "\n\n" if kb_text else "")
             + "[가능한 action]\n"
             "- register / cancel / cancel_all / list_alarms / status / test_alarm\n"
             "- chat: 그 밖의 모든 질문. reply 에 답을 직접 써라\n\n"
@@ -1549,6 +1759,8 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                     raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
                     raw = re.sub(r"\s*```$", "", raw)
                 plan = json.loads(raw)
+                global LAST_ENGINE
+                LAST_ENGINE = f"{model} (키 {GEMINI_API_KEYS.index(key) + 1}번)"
                 if isinstance(plan, dict) and not admin:
                     plan["reply"] = sanitize_reply(plan.get("reply"))
                 return plan
@@ -1625,6 +1837,8 @@ def ask_groq(text, status_data, mine, history=None, admin=False):
                 raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
                 raw = re.sub(r"\s*```$", "", raw)
             plan = json.loads(raw)
+            global LAST_ENGINE
+            LAST_ENGINE = f"Groq {model}"
             if isinstance(plan, dict):
                 if not admin:
                     plan["reply"] = sanitize_reply(plan.get("reply"))
@@ -1653,6 +1867,35 @@ async def run_assistant(user_id, text, private=True):
     # 관리자가 시험 중이면 주제 제한과 탈옥 방어를 건너뛴다.
     # 다른 사람에게는 그대로 적용된다.
     if admin_active(user_id):
+        # AI 가 모르는 실제 값들은 코드가 직접 답한다
+        direct = await asyncio.to_thread(admin_command, text)
+        if direct == "__ADMIN_OFF__":
+            ADMIN_SESSIONS.pop(user_id, None)
+            clear_history(user_id)
+            return "\U0001f512 관리자 모드를 껐습니다. 평소 안내 범위로 돌아갑니다.", None, False
+        if isinstance(direct, tuple):
+            return direct[0], None, direct[1]
+        if direct:
+            return direct, None, False
+
+        # "groq 질문" / "제미나이 질문" 처럼 엔진을 찍어 물어볼 수 있다
+        forced = None
+        stripped = (text or "").strip()
+        low = stripped.lower()
+        for prefix, engine in (("groq ", "groq"), ("그록 ", "groq"),
+                               ("제미나이 ", "gemini"), ("gemini ", "gemini")):
+            if low.startswith(prefix):
+                forced, stripped = engine, stripped[len(prefix):].strip()
+                break
+        if forced and stripped:
+            status_data = await asyncio.to_thread(fetch_live_status)
+            mine = [a for a in active_alarms if a.get("userId") == user_id]
+            fn = ask_groq if forced == "groq" else ask_gemini
+            plan = await asyncio.to_thread(fn, stripped, status_data, mine, None, True)
+            if not plan:
+                return f"⚠️ {forced} 엔진이 답하지 못했습니다. (한도 초과이거나 혼잡)", None, False
+            return f"{(plan.get('reply') or '').strip()}\n-# {LAST_ENGINE}", None, False
+
         result = await _run_assistant_inner(user_id, text)
         out = _norm(result)
         if out[0]:
