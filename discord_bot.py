@@ -856,6 +856,28 @@ def clear_history(user_id):
 
 UNIT_WORDS = {"세탁기": "washer", "세탁": "washer", "건조기": "dryer", "건조": "dryer"}
 
+# 웹의 에러 진단 가이드를 요약한 것. AI 가 원인과 조치까지 답할 수 있게 넘긴다.
+ERROR_GUIDE = {
+    "EMPTY_WATER_ALERT_ERROR": "건조기 자동 배수 이상. 워시타워는 물통 없는 직배수 구조라 후면 배수 호스가 꺾였거나 필터 먼지 과다일 때 발생. 호스 펴기 + 2중 먼지 필터 청소 후 재가동",
+    "FILTER_CLEAN_ERROR": "건조기 2중 먼지 필터 막힘. 도어 안쪽 하단 필터 2개를 분리해 털고 미온수 세척, 완전히 말린 뒤 장착",
+    "DRAIN_ERROR": "세탁기 배수 펌프 이상(OE). 좌측 하단 서비스 커버를 열고 잔수 제거 후 거름망 이물질 청소",
+    "UNBALANCE_ERROR": "세탁물 뭉침(UE). 도어를 열고 한쪽으로 쏠린 옷감을 고르게 편 뒤 탈수 재시작",
+    "DOOR_OPEN_ERROR": "도어 덜 닫힘(dE). 고무 패킹 틈에 낀 옷감을 확인하고 딸깍 소리가 나게 닫기",
+}
+
+# 웹 챗봇이 쓰는 세탁 지식을 요약한 것
+LAUNDRY_GUIDE = (
+    "[세탁 상식]\n"
+    "- 데일리 빨래: 표준 + 터보샷(약 39분)\n"
+    "- 수건/타월: 타월 코스 + 표준 건조. 섬유유연제 절대 금지(흡수력 저하·냄새 원인)\n"
+    "- 운동복/기능성: 울·섬세 코스 찬물 + 저온 건조 (고온은 옷감 상함)\n"
+    "- 담배/땀 냄새: 온수 40~60도 + 헹굼 3회 추가 + 고온 건조\n"
+    "- 이불: 이불 코스(대용량)\n"
+    "- 세탁조는 누적 30회마다 통살균 권장\n"
+    "- 식초·구연산·베이킹소다 같은 민간요법은 공용 세탁기에 잔여물이 남으므로 권하지 말 것\n"
+    "- 에티켓: 끝나면 즉시 수거, 건조 후 먼지 필터 털기"
+)
+
 # 사람별로 '방금 어떤 기기를 말했는지' 를 따로 기억한다.
 # 공용 채널에서 여러 명이 동시에 말을 걸어도 서로 섞이면 안 되므로
 # 반드시 사용자 ID 를 열쇠로 쓴다.
@@ -942,13 +964,23 @@ def ask_gemini(text, status_data, mine, history=None):
     lines = []
     for t in TOWERS:
         d = status_data.get(t["name"], {})
+        cycle = ((d.get("washer") or {}).get("cycle") or {}).get("cycleCount", 0)
         for ut, label in (("washer", "세탁기"), ("dryer", "건조기")):
             u = d.get(ut) or {}
             st = (u.get("runState") or {}).get("currentState", "POWER_OFF")
             tm = u.get("timer") or {}
             mnt = (tm.get("remainHour", 0) or 0) * 60 + (tm.get("remainMinute", 0) or 0)
-            lines.append(f"{t['id']}번 {label}({t['zoneName']}): {STATE_LABELS.get(st, st)}"
-                         + (f", {mnt}분 남음" if mnt else ""))
+            err = u.get("error")
+
+            part = f"{t['id']}번 {label}({t['zoneName']}): {STATE_LABELS.get(st, st)}"
+            if mnt:
+                part += f", {mnt}분 남음"
+            if err or st == "ERROR":
+                code = err or "UNKNOWN"
+                part += f" | 에러코드 {code} — {ERROR_GUIDE.get(code, '점검 필요')}"
+            if ut == "washer" and cycle:
+                part += f" | 누적 {cycle}회" + ("[통살균 필요]" if cycle >= 30 else "")
+            lines.append(part)
 
     system_text = (
         "너는 크래프톤 정글 기숙사 세탁실 봇이다. 사용자의 한국어 요청을 읽고 할 일을 정해라.\n\n"
@@ -961,7 +993,10 @@ def ask_gemini(text, status_data, mine, history=None):
         "- chat: 위 어디에도 해당하지 않음. reply 에 답을 직접 써라\n\n"
         "[지금 기기 상태]\n" + "\n".join(lines) + "\n\n"
         "[내가 등록한 알림]\n" + ("\n".join(f"- {a['deviceName']}" for a in mine) if mine else "없음") + "\n\n"
-        "reply 에는 사용자에게 보여줄 한국어 한두 문장을 담아라.\n"
+        + LAUNDRY_GUIDE + "\n\n"
+        "에러가 난 기기를 물어보면 위에 적힌 에러코드 해설을 근거로 원인과 조치를 알려줘라.\n"
+        "세탁 방법을 물어보면 위 세탁 상식을 근거로 답하고, action 은 chat 으로 둬라.\n"
+        "reply 에는 사용자에게 보여줄 한국어 답변을 담아라. 필요하면 여러 줄로 써도 된다.\n"
         "이전 대화가 있으면 그 맥락을 이어서 이해해라. "
         "예를 들어 사용자가 앞서 3번 건조기를 말했고 이번에 '그거 해제해줘' 라고 하면 3번 건조기를 뜻한다."
     )
@@ -1015,10 +1050,30 @@ def ask_gemini(text, status_data, mine, history=None):
 async def run_assistant(user_id, text):
     """자연어 요청 하나를 처리한다. 항상 (보여줄 문장, embed 또는 None) 을 돌려준다."""
     result = await _run_assistant_inner(user_id, text)
-    # 봇의 답도 기억에 남겨야 "아까 뭐라고 했지" 같은 말을 이해할 수 있다
-    if result and result[0]:
-        push_history(user_id, "model", result[0])
-    return result
+    # 반환값 길이를 (문장, embed, 배치도필요) 세 개로 맞춘다
+    text_out = result[0] if len(result) > 0 else ""
+    embed_out = result[1] if len(result) > 1 else None
+    board = result[2] if len(result) > 2 else False
+    if text_out:
+        push_history(user_id, "model", text_out)
+    return text_out, embed_out, board
+
+
+async def make_board_file():
+    """배치도 이미지를 그려 첨부 파일로 만든다. 글보다 한눈에 들어온다."""
+    try:
+        status_data = await asyncio.to_thread(fetch_live_status)
+        if not status_data:
+            return None
+        buf = await asyncio.to_thread(render_floorplan_image, status_data)
+        return discord.File(buf, filename="floorplan.png")
+    except Exception as e:
+        print(f"[Board Error] {e}")
+        return None
+
+
+# 이 행동들에 대해서는 배치도 이미지를 함께 보낸다
+BOARD_ACTIONS = ("unit_list", "status")
 
 
 async def _run_assistant_inner(user_id, text):
@@ -1051,7 +1106,8 @@ async def _run_assistant_inner(user_id, text):
         return "", build_info_embed(user_id)
 
     if action == "unit_list":
-        return "", build_unit_list_embed(plan.get("unitType") or "washer")
+        # 글 목록 + 배치도 그림을 같이 준다 (한눈에 보이도록)
+        return "", build_unit_list_embed(plan.get("unitType") or "washer"), True
 
     if action == "cancel_all":
         removed = len(mine)
@@ -1122,15 +1178,20 @@ async def _run_assistant_inner(user_id, text):
 async def cmd_assistant(interaction: discord.Interaction, 말: str):
     await interaction.response.defer(ephemeral=True)
     try:
-        result, embed = await run_assistant(interaction.user.id, 말)
+        result, embed, board = await run_assistant(interaction.user.id, 말)
     except Exception as e:
         print(f"[Assistant Error] {e}")
-        result, embed = "⚠️ 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.", None
+        result, embed, board = "⚠️ 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.", None, False
     header = f"> {말}"
+    kwargs = {"ephemeral": True}
+    if board:
+        board_file = await make_board_file()
+        if board_file is not None:
+            kwargs["file"] = board_file
     if embed is not None:
-        await interaction.followup.send(content=header, embed=embed, ephemeral=True)
+        await interaction.followup.send(content=header, embed=embed, **kwargs)
     else:
-        await interaction.followup.send(header + "\n\n" + result, ephemeral=True)
+        await interaction.followup.send(header + "\n\n" + result, **kwargs)
 
 
 @bot.tree.command(name="내알림", description="내가 등록한 알림을 확인하고 켜거나 끕니다.")
@@ -1348,14 +1409,19 @@ async def on_message(message: discord.Message):
 
     try:
         async with message.channel.typing():
-            result, embed = await run_assistant(message.author.id, text)
+            result, embed, board = await run_assistant(message.author.id, text)
         # 공용 채널에서는 여러 명이 동시에 말을 걸 수 있으므로
         # 누구에게 하는 답인지 이름을 붙여 헷갈리지 않게 한다.
         who = "" if is_dm else f"**{message.author.display_name}**님, "
+        kwargs = {"mention_author": False}
+        if board:
+            board_file = await make_board_file()
+            if board_file is not None:
+                kwargs["file"] = board_file
         if embed is not None:
-            await message.reply(content=(who.strip() or None), embed=embed, mention_author=False)
+            await message.reply(content=(who.strip() or None), embed=embed, **kwargs)
         else:
-            await message.reply(who + result, mention_author=False)
+            await message.reply(who + result, **kwargs)
     except discord.Forbidden:
         pass
     except Exception as e:
