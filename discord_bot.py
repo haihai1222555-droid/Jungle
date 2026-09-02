@@ -1,5 +1,6 @@
 import os
 import sys
+import io
 import json
 import asyncio
 import urllib.request
@@ -8,6 +9,7 @@ from datetime import datetime
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+from PIL import Image, ImageDraw, ImageFont
 
 # 콘솔 출력 버퍼링 해제
 try:
@@ -16,21 +18,23 @@ try:
 except Exception:
     pass
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # =========================================================
 # 설정 및 환경 변수 (.env 및 다양한 경로 자동 탐색)
 # =========================================================
 try:
     from dotenv import load_dotenv
     load_dotenv()
-    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    load_dotenv(os.path.join(BASE_DIR, ".env"))
 except Exception:
     pass
 
 # 수동 .env 파일 탐색 (루트, 현재 폴더, 스크립트 폴더)
 possible_env_paths = [
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
+    os.path.join(BASE_DIR, ".env"),
     os.path.join(os.getcwd(), ".env"),
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "token.txt"),
+    os.path.join(BASE_DIR, "token.txt"),
     os.path.join(os.getcwd(), "token.txt")
 ]
 
@@ -46,7 +50,6 @@ for p in possible_env_paths:
                             k, v = line.split('=', 1)
                             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
                 elif len(content) > 30 and ' ' not in content:
-                    # 단독 토큰 파일인 경우
                     os.environ.setdefault("DISCORD_BOT_TOKEN", content)
         except Exception:
             pass
@@ -61,28 +64,51 @@ DISCORD_BOT_TOKEN = (
 ).strip().strip('"').strip("'")
 
 STATUS_API_URL = os.environ.get("STATUS_API_URL") or "https://jungle-wash.onrender.com/api/status"
-BOT_DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "discord_alarms.json")
+BOT_DATA_FILE = os.path.join(BASE_DIR, "discord_alarms.json")
 
 # 워시타워 9대 메타데이터
 TOWERS = [
-    {"id": 1, "name": "워시타워_1", "zone": "men",    "label": "1호기", "zoneName": "남성 전용"},
-    {"id": 2, "name": "워시타워_2", "zone": "men",    "label": "2호기", "zoneName": "남성 전용"},
-    {"id": 3, "name": "워시타워_3", "zone": "men",    "label": "3호기", "zoneName": "남성 전용"},
-    {"id": 4, "name": "워시타워_4", "zone": "men",    "label": "4호기", "zoneName": "남성 전용"},
-    {"id": 5, "name": "워시타워_5", "zone": "men",    "label": "5호기", "zoneName": "남성 전용"},
-    {"id": 6, "name": "워시타워_6", "zone": "common", "label": "6호기", "zoneName": "공용"},
-    {"id": 7, "name": "워시타워_7", "zone": "common", "label": "7호기", "zoneName": "공용"},
-    {"id": 8, "name": "워시타워_8", "zone": "women",  "label": "8호기", "zoneName": "여성 전용"},
-    {"id": 9, "name": "워시타워_9", "zone": "women",  "label": "9호기", "zoneName": "여성 전용"},
+    {"id": 1, "name": "워시타워_1", "zone": "men",    "label": "No.1", "zoneName": "남성 전용"},
+    {"id": 2, "name": "워시타워_2", "zone": "men",    "label": "No.2", "zoneName": "남성 전용"},
+    {"id": 3, "name": "워시타워_3", "zone": "men",    "label": "No.3", "zoneName": "남성 전용"},
+    {"id": 4, "name": "워시타워_4", "zone": "men",    "label": "No.4", "zoneName": "남성 전용"},
+    {"id": 5, "name": "워시타워_5", "zone": "men",    "label": "No.5", "zoneName": "남성 전용"},
+    {"id": 6, "name": "워시타워_6", "zone": "common", "label": "No.6", "zoneName": "공용"},
+    {"id": 7, "name": "워시타워_7", "zone": "common", "label": "No.7", "zoneName": "공용"},
+    {"id": 8, "name": "워시타워_8", "zone": "women",  "label": "No.8", "zoneName": "여성 전용"},
+    {"id": 9, "name": "워시타워_9", "zone": "women",  "label": "No.9", "zoneName": "여성 전용"},
 ]
 
 # 가동 중인 상태 목록
 RUNNING_STATES = ('RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING')
 
 # =========================================================
+# 폰트 로더 헬퍼
+# =========================================================
+def get_font(size, bold=False):
+    bundled = os.path.join(BASE_DIR, "NanumGothic-Bold.ttf" if bold else "NanumGothic-Regular.ttf")
+    if os.path.exists(bundled):
+        try:
+            return ImageFont.truetype(bundled, size)
+        except Exception:
+            pass
+
+    font_names = [
+        "C:/Windows/Fonts/malgunbd.ttf" if bold else "C:/Windows/Fonts/malgun.ttf",
+        "C:/Windows/Fonts/Pretendard-Bold.ttf" if bold else "C:/Windows/Fonts/Pretendard-Regular.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf" if bold else "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    ]
+    for fn in font_names:
+        try:
+            return ImageFont.truetype(fn, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+# =========================================================
 # 데이터 로드 / 저장 헬퍼
 # =========================================================
-active_alarms = []  # list of dict: { userId, towerId, unitType, deviceName, targetMs, notified5Min, notified0Min, registeredAt }
+active_alarms = []
 
 def load_alarms():
     global active_alarms
@@ -118,7 +144,7 @@ def fetch_live_status():
 
 def format_timer(hour, minute):
     if not hour and not minute:
-        return ""
+        return "대기 중"
     if hour > 0:
         return f"{hour}시간 {minute}분"
     return f"{minute}분"
@@ -133,91 +159,166 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================================================
-# 현실 세탁실 배치도 임베드 생성기 (2단 나란한 2열 레이아웃)
+# 현실 세탁실 고화질 카드 뷰 이미지 렌더러 (Web UI와 100% 동일)
 # =========================================================
-def build_floorplan_embed(status_data):
-    total_avail = 0
-    total_running = 0
-    total_error = 0
+def render_floorplan_image(status_data):
+    W, H = 1200, 680
+    img = Image.new("RGB", (W, H), color=(11, 15, 25))
+    draw = ImageDraw.Draw(img)
 
-    def parse_unit(unit_data):
-        nonlocal total_avail, total_running, total_error
-        state = unit_data.get("runState", {}).get("currentState", "POWER_OFF")
-        timer = unit_data.get("timer", {})
-        h = timer.get("remainHour", 0)
-        m = timer.get("remainMinute", 0)
-        remain_min = (h * 60) + m
-        is_err = unit_data.get("error") or (state == "ERROR")
+    f_title = get_font(18, bold=True)
+    f_sub = get_font(13, bold=False)
+    f_sec_title = get_font(15, bold=True)
+    f_card_num = get_font(16, bold=True)
+    f_card_tag = get_font(11, bold=True)
+    f_unit_title = get_font(12, bold=False)
+    f_unit_state = get_font(13, bold=True)
+    f_unit_time = get_font(16, bold=True)
+    f_badge = get_font(11, bold=True)
 
-        if is_err:
-            total_error += 1
-            return "`⚠️점검`"
-        elif is_unit_running(state, remain_min):
-            total_running += 1
-            time_str = format_timer(h, m)
-            return f"`{time_str}`"
+    # 1. Header Bar
+    draw.rounded_rectangle([(20, 15), (W - 20, 58)], radius=8, fill=(17, 24, 39))
+    draw.text((35, 24), "🧺 크래프톤 정글 스마트 세탁실 현실 배치도", fill=(255, 255, 255), font=f_title)
+    
+    # Legend
+    draw.ellipse([(W - 460, 31), (W - 450, 41)], fill=(107, 114, 128))
+    draw.text((W - 445, 28), "대기 중", fill=(156, 163, 175), font=f_sub)
+
+    draw.ellipse([(W - 370, 31), (W - 360, 41)], fill=(16, 185, 129))
+    draw.text((W - 355, 28), "작동 중", fill=(156, 163, 175), font=f_sub)
+
+    draw.ellipse([(W - 280, 31), (W - 270, 41)], fill=(245, 158, 11))
+    draw.text((W - 265, 28), "건조 중", fill=(156, 163, 175), font=f_sub)
+
+    draw.ellipse([(W - 190, 31), (W - 180, 41)], fill=(239, 68, 68))
+    draw.text((W - 175, 28), "점검 필요", fill=(156, 163, 175), font=f_sub)
+
+    card_w = 220
+    card_h = 245
+    gap = 15
+
+    def draw_card(t, x, y):
+        data = status_data.get(t["name"], {})
+        d = data.get("dryer", {})
+        w = data.get("washer", {})
+
+        d_state = d.get("runState", {}).get("currentState", "POWER_OFF")
+        w_state = w.get("runState", {}).get("currentState", "POWER_OFF")
+        d_min = (d.get("timer", {}).get("remainHour", 0) * 60) + d.get("timer", {}).get("remainMinute", 0)
+        w_min = (w.get("timer", {}).get("remainHour", 0) * 60) + w.get("timer", {}).get("remainMinute", 0)
+        d_err = d.get("error") or (d_state == "ERROR")
+        w_err = w.get("error") or (w_state == "ERROR")
+
+        if d_err or w_err:
+            border_col = (239, 68, 68)
+            status_text = "점검 필요"
+            status_bg = (127, 29, 29)
+        elif d_min > 0 and w_min > 0:
+            border_col = (16, 185, 129)
+            status_text = "전체 가동 중"
+            status_bg = (6, 95, 70)
+        elif d_min > 0:
+            border_col = (245, 158, 11)
+            status_text = "건조 가동 중"
+            status_bg = (120, 53, 15)
+        elif w_min > 0:
+            border_col = (59, 130, 246)
+            status_text = "세탁 가동 중"
+            status_bg = (30, 58, 138)
         else:
-            total_avail += 1
-            return "`대기`"
+            border_col = (55, 65, 81)
+            status_text = "전체 대기 중"
+            status_bg = (31, 41, 55)
 
-    # 1) 좌측 라인 (남성 1~5호기)
-    men_lines = []
-    for t in TOWERS[:5]:
-        data = status_data.get(t["name"], {})
-        d_badge = parse_unit(data.get("dryer", {}))
-        w_badge = parse_unit(data.get("washer", {}))
-        men_lines.append(f"• **{t['label']}** 💨{d_badge} 🫧{w_badge}")
+        draw.rounded_rectangle([(x, y), (x + card_w, y + card_h)], radius=10, fill=(17, 24, 39), outline=border_col, width=2)
+        draw.text((x + 12, y + 10), t["label"], fill=(255, 255, 255), font=f_card_num)
+        
+        z_col = (59, 130, 246) if "남성" in t["zoneName"] else ((168, 85, 247) if "공용" in t["zoneName"] else (236, 72, 153))
+        draw.rounded_rectangle([(x + 58, y + 11), (x + 112, y + 27)], radius=4, fill=(z_col[0]//4, z_col[1]//4, z_col[2]//4), outline=z_col, width=1)
+        draw.text((x + 63, y + 13), t["zoneName"], fill=z_col, font=f_card_tag)
 
-    # 2) 우측 라인 (공용 6~7호기 + 여성 8~9호기)
-    right_lines = []
-    for t in TOWERS[5:7]:
-        data = status_data.get(t["name"], {})
-        d_badge = parse_unit(data.get("dryer", {}))
-        w_badge = parse_unit(data.get("washer", {}))
-        right_lines.append(f"• **{t['label']}** 💨{d_badge} 🫧{w_badge} *(공용)*")
+        badge_w = 72
+        draw.rounded_rectangle([(x + card_w - badge_w - 10, y + 9), (x + card_w - 10, y + 27)], radius=4, fill=status_bg)
+        draw.text((x + card_w - badge_w - 2, y + 12), status_text, fill=(255, 255, 255), font=f_badge)
 
-    right_lines.append("────────────────")
+        draw.line([(x + 8, y + 36), (x + card_w - 8, y + 36)], fill=(31, 41, 55), width=1)
 
-    for t in TOWERS[7:]:
-        data = status_data.get(t["name"], {})
-        d_badge = parse_unit(data.get("dryer", {}))
-        w_badge = parse_unit(data.get("washer", {}))
-        right_lines.append(f"• **{t['label']}** 💨{d_badge} 🫧{w_badge} *(여성)*")
+        # 건조기
+        d_y = y + 44
+        if d_err:
+            draw.ellipse([(x + 12, d_y + 4), (x + 32, d_y + 24)], fill=(239, 68, 68), outline=(254, 202, 202), width=1)
+            draw.text((x + 40, d_y + 2), "건조기", fill=(156, 163, 175), font=f_unit_title)
+            draw.text((x + 40, d_y + 17), "기기 점검/에러", fill=(239, 68, 68), font=f_unit_state)
+            time_txt = format_timer(d.get("timer", {}).get("remainHour", 0), d.get("timer", {}).get("remainMinute", 0))
+            bbox = draw.textbbox((0, 0), time_txt, font=f_unit_time)
+            tw = bbox[2] - bbox[0]
+            draw.text((x + card_w - tw - 14, d_y + 10), time_txt, fill=(239, 68, 68), font=f_unit_time)
+            draw.rounded_rectangle([(x + 12, d_y + 42), (x + card_w - 12, d_y + 60)], radius=4, fill=(127, 29, 29), outline=(239, 68, 68), width=1)
+            draw.text((x + 20, d_y + 44), "🚫 건조기 배수관 점검", fill=(254, 202, 202), font=f_badge)
+        elif d_min > 0:
+            draw.ellipse([(x + 12, d_y + 4), (x + 32, d_y + 24)], fill=(245, 158, 11), outline=(253, 230, 138), width=1)
+            draw.text((x + 40, d_y + 2), "건조기", fill=(156, 163, 175), font=f_unit_title)
+            draw.text((x + 40, d_y + 17), "작동 중", fill=(245, 158, 11), font=f_unit_state)
+            time_txt = format_timer(d.get("timer", {}).get("remainHour", 0), d.get("timer", {}).get("remainMinute", 0))
+            bbox = draw.textbbox((0, 0), time_txt, font=f_unit_time)
+            tw = bbox[2] - bbox[0]
+            draw.text((x + card_w - tw - 14, d_y + 10), time_txt, fill=(255, 255, 255), font=f_unit_time)
+            draw.rounded_rectangle([(x + 40, d_y + 40), (x + 115, d_y + 56)], radius=4, fill=(31, 41, 55), outline=(75, 85, 99), width=1)
+            draw.text((x + 46, d_y + 42), "🌀 표준 건조", fill=(209, 213, 219), font=f_badge)
+        else:
+            draw.ellipse([(x + 12, d_y + 4), (x + 32, d_y + 24)], fill=(55, 65, 81))
+            draw.text((x + 40, d_y + 2), "건조기", fill=(156, 163, 175), font=f_unit_title)
+            draw.text((x + 40, d_y + 17), "대기 중 (사용 가능)", fill=(107, 114, 128), font=f_unit_state)
+            draw.text((x + card_w - 60, d_y + 10), "대기 중", fill=(107, 114, 128), font=f_unit_state)
 
-    embed = discord.Embed(
-        title="🧺 크래프톤 정글 스마트 세탁실 현황",
-        description=(
-            f"🟢 **이용 가능: {total_avail}대**  ·  🌀 **가동 중: {total_running}대**  ·  ⚠️ **점검: {total_error}대**\n"
-            f"*기호 안내: 💨 상단 건조기 ｜ 🫧 하단 세탁기*"
-        ),
-        color=discord.Color.from_rgb(16, 185, 129),
-        timestamp=datetime.now()
-    )
+        draw.line([(x + 8, y + 142), (x + card_w - 8, y + 142)], fill=(31, 41, 55), width=1)
 
-    # 2열 나란히 배치 (inline=True)
-    embed.add_field(
-        name="🟦 좌측 통로 (남성 1~5호기)",
-        value="\n".join(men_lines) if men_lines else "데이터 없음",
-        inline=True
-    )
+        # 세탁기
+        w_y = y + 150
+        if w_err:
+            draw.ellipse([(x + 12, w_y + 4), (x + 32, w_y + 24)], fill=(239, 68, 68), outline=(254, 202, 202), width=1)
+            draw.text((x + 40, w_y + 2), "세탁기", fill=(156, 163, 175), font=f_unit_title)
+            draw.text((x + 40, w_y + 17), "기기 점검/에러", fill=(239, 68, 68), font=f_unit_state)
+            time_txt = format_timer(w.get("timer", {}).get("remainHour", 0), w.get("timer", {}).get("remainMinute", 0))
+            bbox = draw.textbbox((0, 0), time_txt, font=f_unit_time)
+            tw = bbox[2] - bbox[0]
+            draw.text((x + card_w - tw - 14, w_y + 10), time_txt, fill=(239, 68, 68), font=f_unit_time)
+        elif w_min > 0:
+            draw.ellipse([(x + 12, w_y + 4), (x + 32, w_y + 24)], fill=(59, 130, 246), outline=(191, 219, 254), width=1)
+            draw.text((x + 40, w_y + 2), "세탁기", fill=(156, 163, 175), font=f_unit_title)
+            draw.text((x + 40, w_y + 17), "작동 중", fill=(96, 165, 250), font=f_unit_state)
+            time_txt = format_timer(w.get("timer", {}).get("remainHour", 0), w.get("timer", {}).get("remainMinute", 0))
+            bbox = draw.textbbox((0, 0), time_txt, font=f_unit_time)
+            tw = bbox[2] - bbox[0]
+            draw.text((x + card_w - tw - 14, w_y + 10), time_txt, fill=(255, 255, 255), font=f_unit_time)
+            draw.rounded_rectangle([(x + 40, w_y + 40), (x + 115, w_y + 56)], radius=4, fill=(31, 41, 55), outline=(75, 85, 99), width=1)
+            draw.text((x + 46, w_y + 42), "🫧 표준 세탁", fill=(209, 213, 219), font=f_badge)
+        else:
+            draw.ellipse([(x + 12, w_y + 4), (x + 32, w_y + 24)], fill=(55, 65, 81))
+            draw.text((x + 40, w_y + 2), "세탁기", fill=(156, 163, 175), font=f_unit_title)
+            draw.text((x + 40, w_y + 17), "대기 중 (사용 가능)", fill=(107, 114, 128), font=f_unit_state)
+            draw.text((x + card_w - 60, w_y + 10), "대기 중", fill=(107, 114, 128), font=f_unit_state)
 
-    embed.add_field(
-        name="🟪 우측 통로 (공용 & 여성)",
-        value="\n".join(right_lines) if right_lines else "데이터 없음",
-        inline=True
-    )
+    # 남성 구역 (No.1 ~ No.5)
+    draw.rounded_rectangle([(25, 68), (220, 92)], radius=5, fill=(30, 58, 138))
+    draw.text((35, 72), "🟦 남성 구역 (No.1 ~ No.5)", fill=(191, 219, 254), font=f_sec_title)
+    
+    for idx, t in enumerate(TOWERS[:5]):
+        cx = 25 + idx * (card_w + gap)
+        draw_card(t, cx, 100)
 
-    embed.add_field(
-        name="🔔 5분 전 개인 DM 알림",
-        value=f"현재 가동 중인 기기가 **{total_running}대** 있습니다. 아래 선택창에서 내 기기를 고르시면 완료 5분 전에 DM을 보내드립니다!",
-        inline=False
-    )
+    # 공용 & 여성 구역 (No.6 ~ No.9)
+    draw.rounded_rectangle([(25, 363), (395, 387)], radius=5, fill=(88, 28, 135))
+    draw.text((35, 367), "🟪 공용 (No.6~7) & 🟥 여성 구역 (No.8~9)", fill=(233, 213, 255), font=f_sec_title)
 
-    embed.set_footer(
-        text="크래프톤 정글 스마트 세탁실 · Realtime LG ThinQ Data",
-        icon_url="https://raw.githubusercontent.com/haihai1222555-droid/Jungle_Wash/master/jungle-logo-192.png"
-    )
-    return embed
+    for idx, t in enumerate(TOWERS[5:]):
+        cx = 25 + idx * (card_w + gap)
+        draw_card(t, cx, 395)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
 
 # =========================================================
 # 가동 중인 기기 선택 드롭다운 (Select Menu View)
@@ -334,6 +435,20 @@ def get_running_options(status_data):
             ))
     return running_options
 
+def build_floorplan_embed(running_count):
+    embed = discord.Embed(
+        title="🧺 크래프톤 정글 스마트 세탁실 현황 & 알림",
+        description="아래 **현실 배치도 카드 뷰**를 확인하고, 5분 전 DM 알림을 받을 가동 중인 기기를 선택하세요!",
+        color=discord.Color.from_rgb(16, 185, 129),
+        timestamp=datetime.now()
+    )
+    embed.set_image(url="attachment://floorplan.png")
+    embed.set_footer(
+        text="크래프톤 정글 스마트 세탁실 · Realtime LG ThinQ Data",
+        icon_url="https://raw.githubusercontent.com/haihai1222555-droid/Jungle_Wash/master/jungle-logo-192.png"
+    )
+    return embed
+
 # =========================================================
 # 슬래시 명령어 (/알림) & 접두사 명령어 (!알림) 동시 지원
 # =========================================================
@@ -341,8 +456,11 @@ def get_running_options(status_data):
 async def cmd_alarm_slash(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=False)
     status_data = fetch_live_status()
-    embed = build_floorplan_embed(status_data)
     running_options = get_running_options(status_data)
+
+    img_buf = render_floorplan_image(status_data)
+    discord_file = discord.File(img_buf, filename="floorplan.png")
+    embed = build_floorplan_embed(len(running_options))
 
     if not running_options:
         embed.add_field(
@@ -350,17 +468,20 @@ async def cmd_alarm_slash(interaction: discord.Interaction):
             value="현재 세탁실에 가동 중인 세탁기/건조기가 없습니다. (모든 기기가 대기 중이거나 완료 상태입니다)",
             inline=False
         )
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(file=discord_file, embed=embed)
     else:
         view = LaundryFloorplanView(running_options[:25])
-        await interaction.followup.send(embed=embed, view=view)
+        await interaction.followup.send(file=discord_file, embed=embed, view=view)
 
 @bot.command(name="알림", aliases=["세탁", "세탁실", "laundry"])
 async def cmd_alarm_prefix(ctx):
     """디스코드 채팅창에 !알림 또는 !세탁실 입력 시에도 동작"""
     status_data = fetch_live_status()
-    embed = build_floorplan_embed(status_data)
     running_options = get_running_options(status_data)
+
+    img_buf = render_floorplan_image(status_data)
+    discord_file = discord.File(img_buf, filename="floorplan.png")
+    embed = build_floorplan_embed(len(running_options))
 
     if not running_options:
         embed.add_field(
@@ -368,10 +489,10 @@ async def cmd_alarm_prefix(ctx):
             value="현재 세탁실에 가동 중인 세탁기/건조기가 없습니다. (모든 기기가 대기 중이거나 완료 상태입니다)",
             inline=False
         )
-        await ctx.send(embed=embed)
+        await ctx.send(file=discord_file, embed=embed)
     else:
         view = LaundryFloorplanView(running_options[:25])
-        await ctx.send(embed=embed, view=view)
+        await ctx.send(file=discord_file, embed=embed, view=view)
 
 # =========================================================
 # 백그라운드 태스크: 10초마다 실시간 센서 감시 & DM 발송
