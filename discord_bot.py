@@ -1499,6 +1499,17 @@ async def on_ready():
     if assistant_channels:
         print(f"[Settings] 대화 채널 {len(assistant_channels)}개 등록됨")
     print(f"🤖 [Discord Bot] {bot.user.name}#{bot.user.discriminator} (ID: {bot.user.id}) 로그인 성공!")
+
+    # 어느 서버에 들어가 있는지 분명히 남긴다.
+    # 0개면 초대가 안 된 것이다 (DM 은 이전 대화방이 남아 있어 계속 동작할 수 있다).
+    if bot.guilds:
+        print(f"🏠 [Guilds] {len(bot.guilds)}개 서버: " + ", ".join(g.name for g in bot.guilds))
+    else:
+        print("=" * 60)
+        print("⚠️ [Guilds] 봇이 들어가 있는 서버가 없습니다!")
+        print("   OAuth2 초대 링크로 서버에 추가해야 합니다.")
+        print("   scope 에 bot 과 applications.commands 가 모두 있어야 슬래시 명령어가 보입니다.")
+        print("=" * 60)
     
     # 1) 봇이 속한 모든 서버에 1초 만에 즉시 슬래시 명령어 복사 및 동기화 (0초 딜레이)
     for guild in bot.guilds:
