@@ -266,6 +266,14 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
+    def do_HEAD(self):
+        req_path = self.path.split('?')[0]
+        if req_path in ('/api/health', '/api/status', '/api/stats', '/'):
+            self.send_response(200)
+            self.end_headers()
+            return
+        super().do_HEAD()
+
     def do_GET(self):
         req_path = self.path.split('?')[0]
         # UptimeRobot 등이 주기적으로 두드려 서비스가 잠들지 않게 하는 용도
