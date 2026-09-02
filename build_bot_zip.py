@@ -16,11 +16,14 @@ OUT = os.path.join(BASE_DIR, "jungle_bot_discloud.zip")
 REQUIRED = [
     "discloud.config",
     "discord_bot.py",
+    "jungle_kb.py",
     "requirements.txt",
     "NanumGothic-Bold.ttf",
     "NanumGothic-Regular.ttf",
 ]
 OPTIONAL = [".env"]
+# assets 폴더 안의 안내 사진들도 함께 담는다 (README 는 제외)
+ASSETS = "assets"
 
 
 def main():
@@ -36,6 +39,18 @@ def main():
             if os.path.exists(path):
                 z.write(path, name)
                 included.append(name)
+
+        assets_dir = os.path.join(BASE_DIR, ASSETS)
+        if os.path.isdir(assets_dir):
+            pics = 0
+            for fn in sorted(os.listdir(assets_dir)):
+                if fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                    z.write(os.path.join(assets_dir, fn), f"{ASSETS}/{fn}")
+                    pics += 1
+            if pics:
+                included.append(f"{ASSETS}/ (사진 {pics}장)")
+            else:
+                print("assets 폴더에 사진이 없습니다. assets/README.md 를 참고해 넣어주세요.")
 
     print("만들었습니다: %s (%d KB)" % (os.path.basename(OUT), os.path.getsize(OUT) // 1024))
     for name in included:
