@@ -475,19 +475,9 @@ if __name__ == '__main__':
     else:
         print("[WebPush] 라이브러리 없음 - 백그라운드 알림 비활성")
 
-    # DISCORD_BOT_TOKEN 설정 시 디스코드 봇 자동 동시 실행
-    discord_token = os.environ.get('DISCORD_BOT_TOKEN')
-    if discord_token:
-        try:
-            import subprocess
-            subprocess.Popen([sys.executable, os.path.join(BASE_DIR, 'discord_bot.py')])
-            print("[Discord Bot] DISCORD_BOT_TOKEN 감지 ➔ 디스코드 봇 백그라운드 구동 시작!")
-        except Exception as e:
-            print(f"[Discord Bot Start Error] {e}")
-
     with ThreadedTCPServer(("", PORT), RobustHandler) as httpd:
         print("============================================================")
-        print("  Jungle Laundry 2.0 Local Server Running!")
+        print("  Jungle Laundry 2.0 Web Server Running!")
         print(f"  URL: http://localhost:{PORT}")
         print("============================================================")
         httpd.serve_forever()
