@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import io
 import json
@@ -169,158 +170,200 @@ def is_unit_running(state, remain_min):
 # 디스코드 봇 클라이언트 초기화 (슬래시 커맨드 전용)
 # =========================================================
 intents = discord.Intents.default()
+
+# 멘션과 DM 은 이 인텐트 없이도 내용을 읽을 수 있다 (디스코드가 그 두 경우는 예외로 준다).
+# 멘션 없이 채널에 그냥 쓴 말까지 읽으려면 message_content 인텐트가 필요한데,
+# 이건 '특권 인텐트'라 개발자 포털에서 먼저 켜야 하고
+# 포털에서 켜지 않은 채 여기서 요청하면 봇이 접속 자체를 못 한다.
+# 그래서 포털에서 켠 뒤 ENABLE_MESSAGE_CONTENT=1 을 줬을 때만 활성화한다.
+if str(os.environ.get("ENABLE_MESSAGE_CONTENT", "")).lower() in ("1", "true", "yes", "on"):
+    intents.message_content = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================================================
 # 현실 세탁실 초고화질 카드 뷰 이미지 렌더러 (Web UI 100% 동일)
 # =========================================================
 def render_floorplan_image(status_data):
-    MARGIN, GAP = 35, 25
+    """웹의 '현실 배치 뷰' 카드를 그대로 옮겨 그린다.
+
+    나눔고딕에는 이모지 글리프가 없어 🔔 🌀 같은 문자는 빈 칸으로 나온다.
+    그래서 아이콘은 전부 도형(원·사각형)으로 직접 그린다.
+    """
+    MARGIN, GAP = 35, 24
     W = 2000
-    CARD_H = 330
-    ROW1_Y, ROW2_Y = 168, 573
+    CARD_H = 300
+    ROW1_Y, ROW2_Y = 168, 543
     H = ROW2_Y + CARD_H + MARGIN
 
     usable = W - MARGIN * 2
-    CARD_W5 = (usable - GAP * 4) // 5   # 1열: 5장
-    CARD_W4 = (usable - GAP * 3) // 4   # 2열: 4장 (폭을 꽉 채운다)
+    CARD_W5 = (usable - GAP * 4) // 5
+    CARD_W4 = (usable - GAP * 3) // 4
 
-    img = Image.new("RGB", (W, H), color=(11, 15, 25))
+    BG = (10, 13, 20)
+    CARD_BG = (17, 23, 36)
+    LINE = (32, 41, 58)
+    TXT_DIM = (148, 163, 184)
+    TXT_MUTED = (100, 116, 139)
+
+    img = Image.new("RGB", (W, H), color=BG)
     draw = ImageDraw.Draw(img)
 
-    f_header = get_font(32, bold=True)
-    f_sub = get_font(22, bold=False)
-    f_sec_title = get_font(26, bold=True)
-    f_card_num = get_font(28, bold=True)
-    f_card_tag = get_font(18, bold=True)
-    f_unit_title = get_font(20, bold=False)
-    f_unit_state = get_font(22, bold=True)
-    f_unit_time = get_font(26, bold=True)
-    f_badge = get_font(18, bold=True)
+    f_header = get_font(34, bold=True)
+    f_sub = get_font(21, bold=False)
+    f_sec = get_font(25, bold=True)
+    f_num = get_font(30, bold=True)
+    f_tag = get_font(17, bold=True)
+    f_unit = get_font(19, bold=False)
+    f_state = get_font(21, bold=True)
+    f_time = get_font(26, bold=True)
+    f_badge = get_font(17, bold=True)
 
-    def text_w(txt, font):
+    def tw(txt, font):
         b = draw.textbbox((0, 0), txt, font=font)
         return b[2] - b[0]
 
-    # ── 헤더 ──
-    draw.rounded_rectangle([(MARGIN, 25), (W - MARGIN, 95)], radius=12, fill=(17, 24, 39))
-    draw.text((MARGIN + 25, 42), "크래프톤 정글 스마트 세탁실 현실 배치도", fill=(255, 255, 255), font=f_header)
+    def pill(x1, y1, x2, y2, fill=None, outline=None, width=1, radius=7):
+        draw.rounded_rectangle([(x1, y1), (x2, y2)], radius=radius, fill=fill, outline=outline, width=width)
 
-    # 범례 (오른쪽 정렬로 계산해 겹치지 않게)
-    legend = [((107, 114, 128), "대기 중"), ((16, 185, 129), "작동 중"),
-              ((245, 158, 11), "건조 중"), ((239, 68, 68), "점검 필요")]
-    lx = W - MARGIN - 25
+    def dim(c, f):
+        return (int(c[0] * f), int(c[1] * f), int(c[2] * f))
+
+    # ── 헤더 ──
+    pill(MARGIN, 24, W - MARGIN, 96, fill=(15, 21, 33), radius=14)
+    draw.text((MARGIN + 26, 44), "크래프톤 정글 스마트 세탁실 현실 배치도", fill=(240, 245, 255), font=f_header)
+
+    # 카드 테두리/상태 뱃지와 같은 색을 쓴다
+    legend = [((100, 116, 139), "사용 가능"), ((16, 185, 129), "전체 가동 중"),
+              ((59, 130, 246), "세탁 가동 중"), ((245, 158, 11), "건조 가동 중"),
+              ((239, 68, 68), "점검 필요")]
+    lx = W - MARGIN - 28
     for col, label in reversed(legend):
-        lw = text_w(label, f_sub)
-        draw.text((lx - lw, 47), label, fill=(156, 163, 175), font=f_sub)
-        draw.ellipse([(lx - lw - 30, 52), (lx - lw - 12, 70)], fill=col)
-        lx -= lw + 30 + 32
+        lw = tw(label, f_sub)
+        draw.text((lx - lw, 50), label, fill=TXT_DIM, font=f_sub)
+        draw.ellipse([(lx - lw - 28, 55), (lx - lw - 12, 71)], fill=col)
+        lx -= lw + 28 + 30
+
+    def draw_unit(x, uy, cw, name, unit, state, minutes, err, is_dryer):
+        """기기 한 칸: 도어 원 + [이름 ... 시간] + [상태 · 코스 · 알림뱃지]"""
+        if err:
+            accent = (239, 68, 68)
+            state_txt = "기기 점검/에러"
+        elif state in ("WRINKLE_CARE", "COMPLETE", "END"):
+            accent = (56, 189, 248)
+            state_txt = "구김 방지 중" if state == "WRINKLE_CARE" else "완료 · 수거 가능"
+        elif minutes > 0:
+            accent = (245, 158, 11) if is_dryer else (59, 130, 246)
+            state_txt = "작동 중"
+        elif state in FREE_STATES:
+            accent = (71, 85, 105)
+            state_txt = "대기 중 (사용 가능)"
+        else:
+            accent = (234, 179, 8)
+            state_txt = STATE_LABELS.get(state, state)
+
+        # 드럼 도어 (바깥 링 + 안쪽 원) — 세탁기 도어처럼 보이게
+        cxp, cyp, r = x + 44, uy + 34, 25
+        draw.ellipse([(cxp - r, cyp - r), (cxp + r, cyp + r)],
+                     outline=accent, width=3, fill=dim(accent, 0.18))
+        draw.ellipse([(cxp - 13, cyp - 13), (cxp + 13, cyp + 13)], fill=dim(accent, 0.42))
+        draw.ellipse([(cxp - 5, cyp - 9), (cxp + 1, cyp - 3)], fill=dim(accent, 0.85))
+
+        tx = x + 82
+
+        # 1행: 기기 이름 + 남은 시간(오른쪽)
+        draw.text((tx, uy + 4), name, fill=TXT_DIM, font=f_unit)
+        if minutes > 0:
+            t = format_timer(unit.get("timer", {}).get("remainHour", 0),
+                             unit.get("timer", {}).get("remainMinute", 0))
+            draw.text((x + cw - tw(t, f_time) - 20, uy), t,
+                      fill=accent if err else (255, 255, 255), font=f_time)
+        else:
+            lbl = "점검 필요" if err else "대기 중"
+            draw.text((x + cw - tw(lbl, f_state) - 20, uy + 4), lbl,
+                      fill=accent if err else TXT_MUTED, font=f_state)
+
+        # 2행: 상태
+        draw.text((tx, uy + 30), state_txt, fill=accent, font=f_state)
+
+        # 3행: 에러 안내 / 코스 뱃지 + 5분전 알림 뱃지
+        by = uy + 62
+        if err:
+            pill(x + 20, by, x + cw - 20, by + 30, fill=(69, 16, 16), outline=(185, 28, 28))
+            draw.text((x + 34, by + 5), ("건조기" if is_dryer else "세탁기") + " 배수관 점검 필요",
+                      fill=(254, 202, 202), font=f_badge)
+        elif minutes > 0:
+            course = "표준 건조" if is_dryer else "표준 세탁"
+            cw_ = tw(course, f_badge)
+            pill(tx, by, tx + cw_ + 26, by + 30, fill=(30, 41, 59), outline=(51, 65, 85))
+            draw.ellipse([(tx + 10, by + 11), (tx + 18, by + 19)], fill=accent)
+            draw.text((tx + 24, by + 5), course, fill=(203, 213, 225), font=f_badge)
+
 
     def draw_card(t, x, y, cw):
         data = status_data.get(t["name"], {})
-        d = data.get("dryer", {})
-        w = data.get("washer", {})
-
+        d, w = data.get("dryer", {}), data.get("washer", {})
         d_state = d.get("runState", {}).get("currentState", "POWER_OFF")
         w_state = w.get("runState", {}).get("currentState", "POWER_OFF")
         d_min = (d.get("timer", {}).get("remainHour", 0) * 60) + d.get("timer", {}).get("remainMinute", 0)
         w_min = (w.get("timer", {}).get("remainHour", 0) * 60) + w.get("timer", {}).get("remainMinute", 0)
-        d_err = d.get("error") or (d_state == "ERROR")
-        w_err = w.get("error") or (w_state == "ERROR")
+        d_err = bool(d.get("error")) or d_state == "ERROR"
+        w_err = bool(w.get("error")) or w_state == "ERROR"
 
         if d_err or w_err:
-            border_col, status_text, status_bg = (239, 68, 68), "점검 필요", (127, 29, 29)
+            border, label, bg = (239, 68, 68), "점검 필요", (69, 16, 16)
         elif d_min > 0 and w_min > 0:
-            border_col, status_text, status_bg = (16, 185, 129), "전체 가동 중", (6, 95, 70)
+            border, label, bg = (16, 185, 129), "전체 가동 중", (6, 78, 59)
         elif d_min > 0:
-            border_col, status_text, status_bg = (245, 158, 11), "건조 가동 중", (120, 53, 15)
+            border, label, bg = (245, 158, 11), "건조 가동 중", (69, 45, 8)
         elif w_min > 0:
-            border_col, status_text, status_bg = (59, 130, 246), "세탁 가동 중", (30, 58, 138)
+            border, label, bg = (59, 130, 246), "세탁 가동 중", (23, 46, 105)
         else:
-            border_col, status_text, status_bg = (55, 65, 81), "전체 대기 중", (31, 41, 55)
+            border, label, bg = (51, 65, 85), "전체 대기 중", (30, 41, 59)
 
-        draw.rounded_rectangle([(x, y), (x + cw, y + CARD_H)], radius=16,
-                               fill=(17, 24, 39), outline=border_col, width=3)
+        pill(x, y, x + cw, y + CARD_H, fill=CARD_BG, outline=border, width=3, radius=18)
 
-        draw.text((x + 20, y + 16), t["label"], fill=(255, 255, 255), font=f_card_num)
+        draw.text((x + 20, y + 14), t["label"], fill=(255, 255, 255), font=f_num)
+        zc = (59, 130, 246) if "남성" in t["zoneName"] else ((168, 85, 247) if "공용" in t["zoneName"] else (236, 72, 153))
+        zx = x + 22 + tw(t["label"], f_num) + 12
+        zw = tw(t["zoneName"], f_tag)
+        pill(zx, y + 19, zx + zw + 20, y + 45, fill=dim(zc, 0.22), outline=zc, radius=6)
+        draw.text((zx + 10, y + 22), t["zoneName"], fill=zc, font=f_tag)
 
-        z_col = (59, 130, 246) if "남성" in t["zoneName"] else ((168, 85, 247) if "공용" in t["zoneName"] else (236, 72, 153))
-        zw = text_w(t["zoneName"], f_card_tag)
-        draw.rounded_rectangle([(x + 90, y + 18), (x + 90 + zw + 20, y + 46)], radius=6,
-                               fill=(z_col[0] // 4, z_col[1] // 4, z_col[2] // 4), outline=z_col, width=2)
-        draw.text((x + 100, y + 21), t["zoneName"], fill=z_col, font=f_card_tag)
+        sw = tw(label, f_tag)
+        pill(x + cw - sw - 38, y + 19, x + cw - 18, y + 45, fill=bg, outline=border, radius=6)
+        draw.text((x + cw - sw - 28, y + 22), label, fill=(255, 255, 255), font=f_tag)
 
-        sw = text_w(status_text, f_badge)
-        draw.rounded_rectangle([(x + cw - sw - 38, y + 16), (x + cw - 18, y + 46)], radius=6, fill=status_bg)
-        draw.text((x + cw - sw - 28, y + 21), status_text, fill=(255, 255, 255), font=f_badge)
+        draw.line([(x + 16, y + 58), (x + cw - 16, y + 58)], fill=LINE, width=2)
 
-        draw.line([(x + 14, y + 62), (x + cw - 14, y + 62)], fill=(31, 41, 55), width=2)
+        draw_unit(x, y + 70, cw, "건조기", d, d_state, d_min, d_err, True)
 
-        def draw_unit(uy, name, unit, state, minutes, err, is_dryer):
-            """기기 한 칸. 1행 [이름 ... 남은시간] / 2행 [상태] [코스] 로 나눠 겹침을 없앤다."""
-            if err:
-                dot, state_col, state_txt = (239, 68, 68), (239, 68, 68), "기기 점검/에러"
-            elif minutes > 0:
-                dot = (245, 158, 11) if is_dryer else (59, 130, 246)
-                state_col = (245, 158, 11) if is_dryer else (96, 165, 250)
-                state_txt = "작동 중"
-            else:
-                dot, state_col, state_txt = (55, 65, 81), (107, 114, 128), "대기 중 (사용 가능)"
+        # 웹처럼 점 두 개로 구분
+        mid = x + cw // 2
+        draw.line([(x + 16, y + 180), (mid - 22, y + 180)], fill=LINE, width=2)
+        draw.line([(mid + 22, y + 180), (x + cw - 16, y + 180)], fill=LINE, width=2)
+        draw.ellipse([(mid - 10, y + 176), (mid - 2, y + 184)], fill=(71, 85, 105))
+        draw.ellipse([(mid + 2, y + 176), (mid + 10, y + 184)], fill=(71, 85, 105))
 
-            if err or minutes > 0:
-                draw.ellipse([(x + 20, uy + 8), (x + 52, uy + 40)], fill=dot,
-                             outline=(254, 202, 202) if err else (255, 255, 255), width=2)
-            else:
-                draw.ellipse([(x + 20, uy + 8), (x + 52, uy + 40)], fill=dot)
+        draw_unit(x, y + 192, cw, "세탁기", w, w_state, w_min, w_err, False)
 
-            # 1행: 기기 이름 + 남은 시간(오른쪽)
-            draw.text((x + 65, uy + 2), name, fill=(156, 163, 175), font=f_unit_title)
-            if minutes > 0:
-                time_txt = format_timer(unit.get("timer", {}).get("remainHour", 0),
-                                        unit.get("timer", {}).get("remainMinute", 0))
-                tcol = (239, 68, 68) if err else (255, 255, 255)
-                draw.text((x + cw - text_w(time_txt, f_unit_time) - 22, uy - 2), time_txt, fill=tcol, font=f_unit_time)
-            else:
-                idle = "대기 중"
-                draw.text((x + cw - text_w(idle, f_unit_state) - 22, uy + 2), idle, fill=(107, 114, 128), font=f_unit_state)
-
-            # 2행: 상태
-            draw.text((x + 65, uy + 30), state_txt, fill=state_col, font=f_unit_state)
-
-            # 3행: 에러 안내 또는 코스 뱃지
-            if err:
-                msg = ("건조기" if is_dryer else "세탁기") + " 배수관 점검 필요"
-                draw.rounded_rectangle([(x + 20, uy + 66), (x + cw - 20, uy + 96)], radius=6,
-                                       fill=(127, 29, 29), outline=(239, 68, 68), width=1)
-                draw.text((x + 35, uy + 70), msg, fill=(254, 202, 202), font=f_badge)
-            elif minutes > 0:
-                course = "표준 건조" if is_dryer else "표준 세탁"
-                bw = text_w(course, f_badge)
-                draw.rounded_rectangle([(x + 65, uy + 66), (x + 65 + bw + 24, uy + 96)], radius=6,
-                                       fill=(31, 41, 55), outline=(75, 85, 99), width=1)
-                draw.text((x + 77, uy + 70), course, fill=(209, 213, 219), font=f_badge)
-
-        draw_unit(y + 78, "건조기", d, d_state, d_min, d_err, True)
-        draw.line([(x + 14, y + 195), (x + cw - 14, y + 195)], fill=(31, 41, 55), width=2)
-        draw_unit(y + 210, "세탁기", w, w_state, w_min, w_err, False)
-
-    def section_title(y, box_w, fill_bg, chip_cols, text, text_col):
-        draw.rounded_rectangle([(MARGIN, y), (MARGIN + box_w, y + 40)], radius=8, fill=fill_bg)
-        cx = MARGIN + 15
-        for c in chip_cols:   # 이모지 대신 실제로 그려지는 색 사각형을 쓴다
-            draw.rounded_rectangle([(cx, y + 12), (cx + 16, y + 28)], radius=3, fill=c)
+    def section(y, text, chips, bg, fg):
+        wtxt = tw(text, f_sec)
+        box = 30 + len(chips) * 24 + wtxt + 22
+        pill(MARGIN, y, MARGIN + box, y + 40, fill=bg, radius=9)
+        cx = MARGIN + 16
+        for c in chips:
+            pill(cx, y + 12, cx + 16, y + 28, fill=c, radius=4)
             cx += 24
-        draw.text((cx, y + 6), text, fill=text_col, font=f_sec_title)
+        draw.text((cx + 4, y + 7), text, fill=fg, font=f_sec)
 
-    section_title(115, 320, (30, 58, 138), [(59, 130, 246)],
-                  "남성 구역 (No.1 ~ No.5)", (191, 219, 254))
-    for idx, t in enumerate(TOWERS[:5]):
-        draw_card(t, MARGIN + idx * (CARD_W5 + GAP), ROW1_Y, CARD_W5)
+    section(112, "남성 구역 (No.1 ~ No.5)", [(59, 130, 246)], (23, 46, 105), (191, 219, 254))
+    for i, t in enumerate(TOWERS[:5]):
+        draw_card(t, MARGIN + i * (CARD_W5 + GAP), ROW1_Y, CARD_W5)
 
-    section_title(520, 560, (88, 28, 135), [(168, 85, 247), (236, 72, 153)],
-                  "공용 (No.6~7) & 여성 구역 (No.8~9)", (233, 213, 255))
-    for idx, t in enumerate(TOWERS[5:]):
-        draw_card(t, MARGIN + idx * (CARD_W4 + GAP), ROW2_Y, CARD_W4)
+    section(487, "공용 (No.6~7) & 여성 구역 (No.8~9)", [(168, 85, 247), (236, 72, 153)], (69, 26, 106), (233, 213, 255))
+    for i, t in enumerate(TOWERS[5:]):
+        draw_card(t, MARGIN + i * (CARD_W4 + GAP), ROW2_Y, CARD_W4)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -467,18 +510,20 @@ class LaundryAlarmSelect(discord.ui.Select):
 # 즉 공개 메시지의 버튼으로는 "나만" 알림을 걸었는지 표시할 수 없다.
 # 그래서 이 패널은 본인에게만 보이는(ephemeral) 메시지로 띄운다.
 # =========================================================
-class AlarmToggleButton(discord.ui.Button):
-    def __init__(self, user_id, option_value, row):
-        tower_id, unit_type, remain_min, device_name = parse_option_value(option_value)
+class AlarmSectionButton(discord.ui.Button):
+    """기기 한 줄에 붙는 알림 토글 버튼. 아이콘으로 내 등록 여부를 보여준다."""
+
+    def __init__(self, user_id, option_value, all_values):
+        tower_id, unit_type, _remain, device_name = parse_option_value(option_value)
         on = has_alarm(user_id, tower_id, unit_type)
         super().__init__(
-            label=device_name,
+            label="알림 켜짐" if on else "5분전 알림",
             emoji="🔔" if on else "🔕",
             style=discord.ButtonStyle.success if on else discord.ButtonStyle.secondary,
-            row=row,
         )
         self.user_id = user_id
         self.option_value = option_value
+        self.all_values = all_values
 
     async def callback(self, interaction: discord.Interaction):
         tower_id, unit_type, remain_min, device_name = parse_option_value(self.option_value)
@@ -489,41 +534,86 @@ class AlarmToggleButton(discord.ui.Button):
                 await interaction.user.send(
                     f"🔔 **[정글 스마트 세탁실]** `{device_name}` 알림이 등록되었습니다!\n"
                     f"• 현재 잔여 시간: **약 {remain_min}분**\n"
-                    f"• 완료 **5분 전**, **완료 시**, 그리고 오래 안 가져가면 **수거 요청**까지 DM 으로 알려드립니다. 🧺"
+                    f"• 완료 **5분 전**, **완료 시**, 오래 안 가져가면 **수거 요청**까지 DM 으로 알려드립니다. 🧺"
                 )
             except Exception:
                 pass
 
-        # 버튼 아이콘이 바로 바뀌도록 패널을 그 자리에서 다시 그린다
-        view = MyAlarmPanel(self.user_id, self.view.option_values)
-        await interaction.response.edit_message(embed=build_my_panel_embed(self.user_id), view=view)
+        # 버튼 아이콘이 즉시 바뀌도록 패널을 그 자리에서 다시 그린다
+        await interaction.response.edit_message(
+            view=MyAlarmPanel(self.user_id, self.all_values)
+        )
 
 
-class MyAlarmPanel(discord.ui.View):
+# 한 메시지에 들어갈 수 있는 컴포넌트 수가 제한되어 있어(40개) 카드 수를 제한한다.
+MAX_ALARM_CARDS = 11
+
+ZONE_STYLE = {
+    "men": ("👦 남성 전용 (No.1 ~ No.5)", (59, 130, 246)),
+    "common": ("🤝 공용 (No.6 ~ No.7)", (168, 85, 247)),
+    "women": ("👧 여성 전용 (No.8 ~ No.9)", (236, 72, 153)),
+}
+
+
+class MyAlarmPanel(discord.ui.LayoutView):
+    """기기마다 카드 한 줄 + 자기 버튼. 본인에게만 보인다."""
+
     def __init__(self, user_id, option_values):
-        super().__init__(timeout=180)
+        super().__init__(timeout=300)
+        self.user_id = user_id
         self.option_values = option_values
-        # 디스코드 제한: 한 메시지에 버튼 25개(5행 x 5개)
-        for i, val in enumerate(option_values[:25]):
-            self.add_item(AlarmToggleButton(user_id, val, row=i // 5))
 
+        shown = option_values[:MAX_ALARM_CARDS]
+        mine = [a for a in active_alarms if a.get("userId") == user_id]
 
-def build_my_panel_embed(user_id):
-    mine = [a for a in active_alarms if a.get("userId") == user_id]
-    if mine:
-        body = "\n".join(f"🔔 **{a['deviceName']}**" for a in mine)
-    else:
-        body = "아직 등록한 알림이 없습니다."
-    return discord.Embed(
-        title="🔔 내 알림 관리",
-        description=(
-            f"{body}\n\n"
-            "아래 버튼으로 켜고 끌 수 있습니다.\n"
-            "🔔 초록 = 등록됨 · 🔕 회색 = 꺼짐\n"
-            "*이 메시지는 나에게만 보입니다.*"
-        ),
-        color=discord.Color.from_rgb(16, 185, 129),
-    )
+        head = discord.ui.Container(accent_colour=discord.Colour.from_rgb(16, 185, 129))
+        head.add_item(discord.ui.TextDisplay(
+            "## 🔔 내 알림 관리\n"
+            + (f"현재 **{len(mine)}개** 등록됨 — " + ", ".join(f"`{a['deviceName']}`" for a in mine)
+               if mine else "아직 등록한 알림이 없습니다.")
+            + "\n-# 🔔 초록 = 등록됨 · 🔕 회색 = 꺼짐 · 이 메시지는 나에게만 보입니다."
+        ))
+        self.add_item(head)
+
+        if not shown:
+            empty = discord.ui.Container(accent_colour=discord.Colour.from_rgb(100, 116, 139))
+            empty.add_item(discord.ui.TextDisplay(
+                "지금 가동 중인 기기가 없습니다.\n-# 세탁기·건조기가 돌기 시작하면 여기에 나타납니다."
+            ))
+            self.add_item(empty)
+            return
+
+        # 구역별로 묶어서 컨테이너 하나씩
+        for zone_key in ("men", "common", "women"):
+            title, colour = ZONE_STYLE[zone_key]
+            rows = [v for v in shown
+                    if next((t for t in TOWERS if t["id"] == parse_option_value(v)[0]), {}).get("zone") == zone_key]
+            if not rows:
+                continue
+
+            box = discord.ui.Container(accent_colour=discord.Colour.from_rgb(*colour))
+            box.add_item(discord.ui.TextDisplay(f"### {title}"))
+            for v in rows:
+                tower_id, unit_type, remain_min, device_name = parse_option_value(v)
+                icon = "🌀" if unit_type == "dryer" else "🫧"
+                on = has_alarm(user_id, tower_id, unit_type)
+                btn = AlarmSectionButton(user_id, v, option_values)
+                box.add_item(discord.ui.Section(
+                    discord.ui.TextDisplay(
+                        f"{icon} **{device_name}** {'· 🔔 알림 켜짐' if on else ''}\n"
+                        f"-# 작동 중 · 약 **{remain_min}분** 남음"
+                    ),
+                    accessory=btn,
+                ))
+            self.add_item(box)
+
+        if len(option_values) > MAX_ALARM_CARDS:
+            tail = discord.ui.Container(accent_colour=discord.Colour.from_rgb(100, 116, 139))
+            tail.add_item(discord.ui.TextDisplay(
+                f"-# 가동 중인 기기가 많아 {MAX_ALARM_CARDS}개까지만 표시했습니다. "
+                f"나머지는 위 드롭다운으로 등록할 수 있습니다."
+            ))
+            self.add_item(tail)
 
 
 class OpenMyAlarmButton(discord.ui.Button):
@@ -534,7 +624,6 @@ class OpenMyAlarmButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         uid = interaction.user.id
         await interaction.response.send_message(
-            embed=build_my_panel_embed(uid),
             view=MyAlarmPanel(uid, self.option_values),
             ephemeral=True,
         )
@@ -656,10 +745,14 @@ def build_info_embed(user_id=None):
         name="📋 명령어",
         value=(
             "`/알림` · 배치도 확인 + 기기 선택해 알림 등록\n"
+            "🗣️ **봇을 멘션하거나 DM 으로 그냥 말해도 됩니다**\n"
+            "-# 예) `@봇 3번 건조기 알림 걸어줘`\n"
+            "`/비서` · 말로 알림 걸기 (예: 3번 건조기 알림 걸어줘)\n"
+            "`/내알림` · 내가 건 알림 확인 + 켜고 끄기\n"
             "`/세탁기` · 세탁기 9대 현황\n"
             "`/건조기` · 건조기 9대 현황\n"
             "`/정보` · 이 안내\n"
-            "*( `!알림` 처럼 `!` 로도 씁니다 )*"
+            "-# 명령어를 몰라도 그냥 말을 걸면 알아듣습니다."
         ),
         inline=False,
     )
@@ -718,19 +811,272 @@ async def cmd_info_slash(interaction: discord.Interaction):
     await interaction.followup.send(embed=build_info_embed(interaction.user.id))
 
 
-@bot.command(name="세탁기", aliases=["washer"])
-async def cmd_washer_prefix(ctx):
-    await ctx.send(embed=build_unit_list_embed("washer"))
+# =========================================================
+# 자연어 비서 (/비서) — "1번 세탁기 알림 걸어줘" 같은 말을 알아듣는다
+# =========================================================
+GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
+GEMINI_MODELS = ["gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-flash-latest"]
+
+UNIT_WORDS = {"세탁기": "washer", "세탁": "washer", "건조기": "dryer", "건조": "dryer"}
+
+# 사람별로 '방금 어떤 기기를 말했는지' 를 따로 기억한다.
+# 공용 채널에서 여러 명이 동시에 말을 걸어도 서로 섞이면 안 되므로
+# 반드시 사용자 ID 를 열쇠로 쓴다.
+LAST_CONTEXT = {}
+CONTEXT_TTL_SEC = 5 * 60   # 오래된 문맥은 버린다 (엉뚱한 기기를 건드리지 않도록)
 
 
-@bot.command(name="건조기", aliases=["dryer"])
-async def cmd_dryer_prefix(ctx):
-    await ctx.send(embed=build_unit_list_embed("dryer"))
+def get_context(user_id):
+    ctx = LAST_CONTEXT.get(user_id)
+    if not ctx:
+        return None
+    if datetime.now().timestamp() - ctx.get("at", 0) > CONTEXT_TTL_SEC:
+        LAST_CONTEXT.pop(user_id, None)
+        return None
+    return ctx
 
 
-@bot.command(name="정보", aliases=["도움말", "help2", "info"])
-async def cmd_info_prefix(ctx):
-    await ctx.send(embed=build_info_embed(ctx.author.id))
+def set_context(user_id, tower_id, unit_type):
+    LAST_CONTEXT[user_id] = {"towerId": tower_id, "unitType": unit_type,
+                             "at": datetime.now().timestamp()}
+
+
+def find_unit(status_data, tower_id, unit_type):
+    """해당 기기의 현재 상태와 남은 시간을 돌려준다."""
+    tower = next((t for t in TOWERS if t["id"] == tower_id), None)
+    if not tower:
+        return None
+    unit = (status_data.get(tower["name"]) or {}).get(unit_type) or {}
+    timer = unit.get("timer") or {}
+    minutes = (timer.get("remainHour", 0) or 0) * 60 + (timer.get("remainMinute", 0) or 0)
+    state = (unit.get("runState") or {}).get("currentState", "POWER_OFF")
+    return {
+        "tower": tower,
+        "state": state,
+        "minutes": minutes,
+        "error": bool(unit.get("error")) or state == "ERROR",
+        "name": f"{tower['label']} {'건조기' if unit_type == 'dryer' else '세탁기'}",
+    }
+
+
+def parse_by_rules(text, ctx=None):
+    """API 를 쓰지 않고 알아들을 수 있는 문장은 여기서 바로 처리한다.
+    (빠르고, 무료고, 결과가 항상 같다)"""
+    t = text.replace(" ", "")
+
+    if any(k in t for k in ("전부해제", "모두해제", "다해제", "전부취소", "모두취소", "다꺼", "전체해제")):
+        return {"action": "cancel_all"}
+    if any(k in t for k in ("내알림", "알림목록", "뭐걸었", "등록한알림")):
+        return {"action": "list_alarms"}
+
+    if any(k in t for k in ("뭐할수있", "무엇을할수있", "도움말", "사용법", "명령어", "어떻게써")):
+        return {"action": "info"}
+    if re.search(r"(세탁기|세탁).*(현황|상태|목록|보여|알려)", t) and not re.search(r"\d", t):
+        return {"action": "unit_list", "unitType": "washer"}
+    if re.search(r"(건조기|건조).*(현황|상태|목록|보여|알려)", t) and not re.search(r"\d", t):
+        return {"action": "unit_list", "unitType": "dryer"}
+
+    m = re.search(r"(\d+)\s*(?:번|호기|호)?\s*(세탁기|건조기|세탁|건조)", t)
+    if m:
+        tower_id = int(m.group(1))
+        unit_type = UNIT_WORDS.get(m.group(2))
+        if 1 <= tower_id <= 9 and unit_type:
+            if any(k in t for k in ("해제", "취소", "꺼줘", "끄기", "끄고", "삭제")):
+                return {"action": "cancel", "towerId": tower_id, "unitType": unit_type}
+            if any(k in t for k in ("알림", "알람", "등록", "설정", "걸어", "켜")):
+                return {"action": "register", "towerId": tower_id, "unitType": unit_type}
+            return {"action": "unit_status", "towerId": tower_id, "unitType": unit_type}
+
+    # 기기 번호 없이 이어서 말한 경우, 그 사람이 직전에 말한 기기를 쓴다.
+    # (문맥은 사람별로 따로 보관하므로 다른 사람 요청과 섞이지 않는다)
+    if ctx:
+        if any(k in t for k in ("해제", "취소", "꺼줘", "끄기", "끄고", "삭제")):
+            return {"action": "cancel", "towerId": ctx["towerId"], "unitType": ctx["unitType"], "fromContext": True}
+        if any(k in t for k in ("알림", "알람", "등록", "설정", "걸어", "켜줘", "해줘")):
+            return {"action": "register", "towerId": ctx["towerId"], "unitType": ctx["unitType"], "fromContext": True}
+    return None
+
+
+def ask_gemini(text, status_data, mine):
+    """규칙으로 못 알아들은 문장을 Gemini 에게 물어 행동을 정한다."""
+    if not GEMINI_API_KEY:
+        return None
+
+    lines = []
+    for t in TOWERS:
+        d = status_data.get(t["name"], {})
+        for ut, label in (("washer", "세탁기"), ("dryer", "건조기")):
+            u = d.get(ut) or {}
+            st = (u.get("runState") or {}).get("currentState", "POWER_OFF")
+            tm = u.get("timer") or {}
+            mnt = (tm.get("remainHour", 0) or 0) * 60 + (tm.get("remainMinute", 0) or 0)
+            lines.append(f"{t['id']}번 {label}({t['zoneName']}): {STATE_LABELS.get(st, st)}"
+                         + (f", {mnt}분 남음" if mnt else ""))
+
+    prompt = (
+        "너는 크래프톤 정글 기숙사 세탁실 봇이다. 사용자의 한국어 요청을 읽고 할 일을 정해라.\n\n"
+        "[가능한 action]\n"
+        "- register: 특정 기기 완료 5분 전 알림 등록 (towerId 1~9, unitType washer/dryer 필요)\n"
+        "- cancel: 특정 기기 알림 해제\n"
+        "- cancel_all: 내 알림 전부 해제\n"
+        "- list_alarms: 내가 등록한 알림 목록\n"
+        "- status: 세탁실 전체 현황\n"
+        "- chat: 위 어디에도 해당하지 않음. reply 에 답을 직접 써라\n\n"
+        "[지금 기기 상태]\n" + "\n".join(lines) + "\n\n"
+        "[내가 등록한 알림]\n" + ("\n".join(f"- {a['deviceName']}" for a in mine) if mine else "없음") + "\n\n"
+        "reply 에는 사용자에게 보여줄 한국어 한두 문장을 담아라.\n"
+        f"[사용자 요청]\n{text}"
+    )
+
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 400,
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "action": {"type": "STRING",
+                               "enum": ["register", "cancel", "cancel_all", "list_alarms", "status", "chat"]},
+                    "towerId": {"type": "INTEGER"},
+                    "unitType": {"type": "STRING", "enum": ["washer", "dryer"]},
+                    "reply": {"type": "STRING"},
+                },
+                "required": ["action", "reply"],
+            },
+        },
+    }
+
+    for model in GEMINI_MODELS:
+        try:
+            req = urllib.request.Request(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}",
+                data=json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as res:
+                data = json.loads(res.read().decode("utf-8"))
+            return json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
+        except Exception as e:
+            print(f"[Gemini] {model} 실패: {e}")
+    return None
+
+
+async def run_assistant(user_id, text):
+    """자연어 요청 하나를 처리한다. 항상 (보여줄 문장, embed 또는 None) 을 돌려준다."""
+    status_data = fetch_live_status()
+    if not status_data:
+        return "⚠️ 실시간 데이터를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.", None
+
+    mine = [a for a in active_alarms if a.get("userId") == user_id]
+
+    # 규칙으로 알아들을 수 있으면 API 를 쓰지 않는다 (빠르고 무료고 결과가 항상 같다)
+    plan = parse_by_rules(text, get_context(user_id))
+    if plan is None:
+        plan = await asyncio.to_thread(ask_gemini, text, status_data, mine)
+    if plan is None:
+        return ("무슨 말씀인지 파악하지 못했습니다.\n"
+                "-# 예) `3번 건조기 알림 걸어줘` · `내 알림 보여줘` · `전부 해제해줘`"), None
+
+    action = plan.get("action")
+    reply = (plan.get("reply") or "").strip()
+
+    if action == "info":
+        return "", build_info_embed(user_id)
+
+    if action == "unit_list":
+        return "", build_unit_list_embed(plan.get("unitType") or "washer")
+
+    if action == "cancel_all":
+        removed = len(mine)
+        for a in mine:
+            active_alarms.remove(a)
+        if removed:
+            save_alarms()
+        return (f"🔕 알림 **{removed}개**를 모두 해제했습니다." if removed else "해제할 알림이 없습니다."), None
+
+    if action == "list_alarms":
+        if not mine:
+            return "등록된 알림이 없습니다.\n-# `3번 세탁기 알림 걸어줘` 처럼 말해보세요.", None
+        return "🔔 현재 등록된 알림\n" + "\n".join(f"• **{a['deviceName']}**" for a in mine), None
+
+    if action in ("register", "cancel", "unit_status"):
+        tower_id, unit_type = plan.get("towerId"), plan.get("unitType")
+        if not tower_id or not unit_type:
+            return (reply or "어떤 기기인지 알려주세요. 예) `3번 건조기 알림 걸어줘`"), None
+
+        info = find_unit(status_data, tower_id, unit_type)
+        if not info:
+            return f"{tower_id}번 기기를 찾을 수 없습니다. (1~9번만 있습니다)", None
+
+        # 다음 말("그거 해제해줘")을 위해 이 사람의 문맥으로 남긴다
+        set_context(user_id, tower_id, unit_type)
+        state_label = STATE_LABELS.get(info["state"], info["state"])
+
+        # 번호 없이 이어서 말한 경우엔 어떤 기기인지 분명히 밝혀준다
+        echo = f"({info['name']}) " if plan.get("fromContext") else ""
+
+        if action == "unit_status":
+            tail = f"**{info['minutes']}분** 남음" if info["minutes"] else "사용 가능"
+            return f"**{info['name']}** · {state_label} · {tail}", None
+
+        if action == "cancel":
+            if not has_alarm(user_id, tower_id, unit_type):
+                return f"**{info['name']}** 에는 걸어둔 알림이 없습니다.", None
+            toggle_alarm_state(user_id, tower_id, unit_type, info["minutes"], info["name"])
+            return f"🔕 **{info['name']}** 알림을 해제했습니다.", None
+
+        if info["error"]:
+            return f"⚠️ **{info['name']}** 는 지금 점검이 필요한 상태라 알림을 걸 수 없습니다.", None
+        if info["minutes"] <= 0:
+            return (f"**{info['name']}** 는 지금 가동 중이 아닙니다 ({state_label}).\n"
+                    "-# 돌아가기 시작하면 그때 알림을 걸 수 있습니다."), None
+        if has_alarm(user_id, tower_id, unit_type):
+            return f"이미 **{info['name']}** 알림이 걸려 있습니다. (약 {info['minutes']}분 남음)", None
+
+        toggle_alarm_state(user_id, tower_id, unit_type, info["minutes"], info["name"])
+        return (f"🔔 **{info['name']}** 알림을 등록했습니다! (약 **{info['minutes']}분** 남음)\n"
+                "-# 완료 5분 전 · 완료 시 · 오래 안 가져가면 수거 요청까지 DM 으로 보내드립니다."), None
+
+    if action == "status":
+        free = 0
+        for t in TOWERS:
+            for ut in ("washer", "dryer"):
+                u = (status_data.get(t["name"]) or {}).get(ut) or {}
+                if (u.get("runState") or {}).get("currentState", "POWER_OFF") in FREE_STATES:
+                    free += 1
+        head = (reply + "\n") if reply else ""
+        return head + f"-# 지금 비어 있는 기기: **{free}대**", None
+
+    return (reply or "무슨 말씀인지 파악하지 못했습니다."), None
+
+
+@bot.tree.command(name="비서", description="말로 알림을 걸 수 있어요. 예) 3번 건조기 알림 걸어줘")
+@app_commands.describe(말="예) 3번 건조기 알림 걸어줘 / 내 알림 보여줘 / 전부 해제해줘")
+async def cmd_assistant(interaction: discord.Interaction, 말: str):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        result, embed = await run_assistant(interaction.user.id, 말)
+    except Exception as e:
+        print(f"[Assistant Error] {e}")
+        result, embed = "⚠️ 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.", None
+    header = f"> {말}"
+    if embed is not None:
+        await interaction.followup.send(content=header, embed=embed, ephemeral=True)
+    else:
+        await interaction.followup.send(header + "\n\n" + result, ephemeral=True)
+
+
+@bot.tree.command(name="내알림", description="내가 등록한 알림을 확인하고 켜거나 끕니다.")
+async def cmd_myalarm_slash(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    status_data = fetch_live_status()
+    values = [o.value for o in get_running_options(status_data)] if status_data else []
+    await interaction.followup.send(
+        view=MyAlarmPanel(interaction.user.id, values),
+        ephemeral=True,
+    )
 
 
 # =========================================================
@@ -756,27 +1102,6 @@ async def cmd_alarm_slash(interaction: discord.Interaction):
     else:
         view = LaundryFloorplanView(running_options[:25])
         await interaction.followup.send(file=discord_file, embed=embed, view=view)
-
-@bot.command(name="알림", aliases=["세탁", "세탁실", "laundry"])
-async def cmd_alarm_prefix(ctx):
-    """디스코드 채팅창에 !알림 또는 !세탁실 입력 시에도 동작"""
-    status_data = fetch_live_status()
-    running_options = get_running_options(status_data)
-
-    img_buf = render_floorplan_image(status_data)
-    discord_file = discord.File(img_buf, filename="floorplan.png")
-    embed = build_floorplan_embed()
-
-    if not running_options:
-        embed.add_field(
-            name="💡 알림 등록 안내",
-            value="현재 세탁실에 가동 중인 세탁기/건조기가 없습니다. (모든 기기가 대기 중이거나 완료 상태입니다)",
-            inline=False
-        )
-        await ctx.send(file=discord_file, embed=embed)
-    else:
-        view = LaundryFloorplanView(running_options[:25])
-        await ctx.send(file=discord_file, embed=embed, view=view)
 
 # =========================================================
 # 백그라운드 태스크: 10초마다 실시간 센서 감시 & DM 발송
@@ -919,6 +1244,63 @@ async def before_alarm_loop():
 # =========================================================
 # 봇 준비 완료 이벤트 (Slash Command 즉시 동기화)
 # =========================================================
+# =========================================================
+# 그냥 말 걸기 (멘션 / DM / 지정 채널)
+#
+# 디스코드는 특권 인텐트가 없어도 아래 두 경우에는 메시지 내용을 준다.
+#   1) 봇을 멘션한 메시지   2) 봇과의 DM
+# 그래서 멘션과 DM 은 추가 설정 없이 바로 동작한다.
+# 멘션 없이 채널에 그냥 쓴 말까지 읽으려면 개발자 포털에서
+# MESSAGE CONTENT INTENT 를 켜고 ENABLE_MESSAGE_CONTENT=1 을 줘야 한다.
+# =========================================================
+ASSISTANT_CHANNEL_ID = (os.environ.get("ASSISTANT_CHANNEL_ID") or "").strip()
+
+
+def strip_mention(content, me):
+    for token in (f"<@{me.id}>", f"<@!{me.id}>"):
+        content = content.replace(token, " ")
+    return content.strip()
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    # 봇 자신과 다른 봇의 말은 무시한다 (서로 무한 응답하는 것을 막는다)
+    if message.author.bot:
+        return
+
+    is_dm = message.guild is None
+    mentioned = bot.user is not None and bot.user in message.mentions
+    in_assistant_channel = ASSISTANT_CHANNEL_ID and str(message.channel.id) == ASSISTANT_CHANNEL_ID
+
+    # 아무 말에나 끼어들지 않는다. 말을 건 경우에만 답한다.
+    if not (is_dm or mentioned or in_assistant_channel):
+        return
+
+    text = strip_mention(message.content or "", bot.user) if mentioned else (message.content or "").strip()
+
+    if not text:
+        return
+
+    try:
+        async with message.channel.typing():
+            result, embed = await run_assistant(message.author.id, text)
+        # 공용 채널에서는 여러 명이 동시에 말을 걸 수 있으므로
+        # 누구에게 하는 답인지 이름을 붙여 헷갈리지 않게 한다.
+        who = "" if is_dm else f"**{message.author.display_name}**님, "
+        if embed is not None:
+            await message.reply(content=(who.strip() or None), embed=embed, mention_author=False)
+        else:
+            await message.reply(who + result, mention_author=False)
+    except discord.Forbidden:
+        pass
+    except Exception as e:
+        print(f"[on_message Error] {e}")
+        try:
+            await message.reply("⚠️ 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.", mention_author=False)
+        except Exception:
+            pass
+
+
 @bot.event
 async def on_ready():
     load_alarms()
