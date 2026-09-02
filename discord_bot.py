@@ -799,6 +799,7 @@ def build_info_embed(user_id=None):
             "• 완료 **5분 전** DM\n"
             "• **완료** 시 DM\n"
             f"• 완료 후 **{STALE_PICKUP_SEC // 60}분** 지나도 안 가져가면 수거 요청 DM\n"
+            f"• `/알림테스트` — 알림이 잘 오는지 지금 바로 확인\n"
             "• 가동 중 **에러** 발생 시 즉시 DM\n"
             "• 다음 사람이 새로 돌리면 자동으로 해제됩니다"
         ),
@@ -1151,6 +1152,10 @@ def parse_by_rules(text, ctx=None):
                             "알림리스트", "알림상태", "뭐걸었", "등록한알림", "등록한예약")):
         return {"action": "list_alarms"}
 
+    if any(k in t for k in ("알림테스트", "테스트알림", "알림이오는지", "알림확인",
+                            "알림잘오나", "알림와보", "테스트해줘", "테스트좀")):
+        return {"action": "test_alarm"}
+
     if any(k in t for k in ("뭐할수있", "무엇을할수있", "도움말", "사용법", "명령어", "어떻게써")):
         return {"action": "info"}
     if re.search(r"(세탁기|세탁).*(현황|상태|목록|보여|알려|있어|없어|남는|남았|비어|사용가능|쓸수있|가능한)", t) and not re.search(r"\d", t):
@@ -1277,6 +1282,7 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None):
         "- cancel_all: 내 알림 전부 해제\n"
         "- list_alarms: 내가 등록한 알림 목록\n"
         "- status: 세탁실 전체 현황\n"
+        "- test_alarm: 알림이 잘 오는지 시험해 보고 싶다는 요청 (예: '알림 테스트 해줘')\n"
         "- chat: 위 어디에도 해당하지 않음. reply 에 답을 직접 써라\n"
         "한 문장에 요청이 여러 개면(예: '3번 건조기 알림 취소하고 7번 세탁기 예약') "
         "actions 배열에 말한 순서대로 모두 담아라. 요청이 하나뿐이면 actions 는 비워두고 "
@@ -1321,7 +1327,8 @@ def ask_gemini(text, status_data, mine, history=None):
                 "type": "OBJECT",
                 "properties": {
                     "action": {"type": "STRING",
-                               "enum": ["register", "cancel", "cancel_all", "list_alarms", "status", "chat"]},
+                               "enum": ["register", "cancel", "cancel_all", "list_alarms",
+                                        "status", "test_alarm", "chat"]},
                     "towerId": {"type": "INTEGER"},
                     "unitType": {"type": "STRING", "enum": ["washer", "dryer"]},
                     "actions": {
@@ -1399,7 +1406,7 @@ def ask_groq(text, status_data, mine, history=None):
     system_text += (
         "\n\n[답하는 형식 — 반드시 지켜라]\n"
         "설명을 붙이지 말고 JSON 객체 하나만 답해라. 필드는 다음과 같다.\n"
-        '{"action": "register|cancel|cancel_all|list_alarms|status|chat", '
+        '{"action": "register|cancel|cancel_all|list_alarms|status|test_alarm|chat", '
         '"towerId": 1~9 (기기를 가리킬 때만), '
         '"unitType": "washer" 또는 "dryer" (기기를 가리킬 때만), '
         '"actions": [여러 요청일 때만, {"action","towerId","unitType"} 목록], '
@@ -1476,6 +1483,11 @@ async def run_assistant(user_id, text):
         guide = find_guide_image(text)
         if guide:
             attach = guide
+            # AI 가 모두 막혔을 때 "무슨 말씀인지 모르겠다"면서 사진만 보내면
+            # 앞뒤가 안 맞는다. 사진을 찾았다는 사실을 그대로 알려준다.
+            if text_out.startswith("무슨 말씀인지"):
+                text_out = ("자세한 설명은 지금 드리기 어렵지만, 관련 안내 사진을 찾았어요.\n"
+                            f"-# {guide['caption']}")
     if text_out:
         push_history(user_id, "model", text_out)
     return text_out, embed_out, attach
@@ -1539,6 +1551,55 @@ class PickedUpView(discord.ui.View):
                 if self.stage == "before" else
                 "\U0001f9fa 수거하신 걸로 표시했습니다. 수거 요청은 보내지 않을게요!")
         await interaction.response.edit_message(content=note, view=self)
+
+
+# 테스트용 가짜 기기. 번호를 0 으로 둬서 진짜 알림과 절대 겹치지 않게 한다.
+TEST_TOWER_ID = 0
+TEST_DEVICE_NAME = "테스트 기기"
+
+
+async def send_test_notifications(user):
+    """실제와 똑같은 알림 세 가지를 DM 으로 보낸다.
+
+    버튼이 눌리는지도 함께 확인할 수 있다.
+    테스트용이라 눌러도 실제 알림은 건드리지 않는다.
+    돌려주는 값은 사용자에게 보여줄 안내 문구.
+    """
+    if user is None:
+        return "❌ 사용자를 찾지 못했습니다."
+    try:
+        await user.send(
+            "🧪 **알림 테스트를 시작합니다.** 아래 세 가지가 실제로 오는 알림입니다.\n"
+            "-# 버튼도 눌러보세요. 눌러도 실제 알림은 바뀌지 않습니다."
+        )
+        await user.send(
+            f"🧺 **[5분 전 알림] {TEST_DEVICE_NAME}** 가동이 약 **5분 뒤** 완료됩니다!\n"
+            f"👉 빨래 바구니를 챙겨 세탁실로 이동할 준비를 해주세요! 🏃💨\n"
+            f"-# 바로 가져가실 거면 아래 버튼을 눌러주세요. 수거 요청을 보내지 않습니다.",
+            view=PickedUpView(user.id, TEST_TOWER_ID, "washer", stage="before")
+        )
+        await user.send(
+            f"🏁 **[세탁 완료] {TEST_DEVICE_NAME}** 가동이 모두 끝났습니다!\n"
+            f"👉 다음 정글러를 위해 세탁실에서 빨래를 즉시 수거해 주세요! 🫧\n"
+            f"-# 이미 가져가셨다면 아래 버튼을 눌러주세요. "
+            f"안 누르면 {STALE_PICKUP_SEC // 60}분 뒤에 한 번 더 알려드려요.",
+            view=PickedUpView(user.id, TEST_TOWER_ID, "washer")
+        )
+        await user.send(
+            f"🚨 **[수거 요청] {TEST_DEVICE_NAME}** 빨래가 아직 그대로 있어요!\n"
+            f"👉 가동이 끝난 지 **{STALE_PICKUP_SEC // 60}분**이 지났습니다. "
+            f"다음 정글러를 위해 빨래를 수거해 주세요! 🧺\n"
+            f"-# 여기까지가 테스트입니다. 실제로는 이 알림이 마지막입니다."
+        )
+        return ("📬 개인 DM 으로 알림 3개를 보냈습니다! 확인해 주세요.\n"
+                "-# 5분 전 · 완료 · 수거 요청 순서이고, 앞의 두 개에는 버튼이 달려 있습니다.")
+    except discord.Forbidden:
+        return ("❌ DM 을 보낼 수 없습니다.\n"
+                "서버 이름을 오른쪽 클릭 → **개인 정보 보호 설정**에서 "
+                "'서버 멤버가 보내는 DM 허용'을 켜주세요.")
+    except Exception as e:
+        print(f"[Test DM Error] {e}")
+        return f"❌ 알림을 보내지 못했습니다: {e}"
 
 
 async def make_board_file():
@@ -1628,6 +1689,15 @@ async def _do_step(user_id, plan, status_data, mine):
     action = plan.get("action")
     reply = (plan.get("reply") or "").strip()
 
+    if action == "test_alarm":
+        user = bot.get_user(user_id)
+        if user is None:
+            try:
+                user = await bot.fetch_user(user_id)
+            except Exception:
+                user = None
+        return await send_test_notifications(user), None
+
     if action == "info":
         return "", build_info_embed(user_id)
 
@@ -1698,6 +1768,13 @@ async def _do_step(user_id, plan, status_data, mine):
     return (reply or "무슨 말씀인지 파악하지 못했습니다."), None
 
 
+@bot.tree.command(name="알림테스트", description="실제 알림이 잘 오는지 DM 으로 바로 받아봅니다. (버튼도 확인)")
+async def cmd_test_alarm(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    msg = await send_test_notifications(interaction.user)
+    await interaction.followup.send(msg, ephemeral=True)
+
+
 @bot.tree.command(name="채널설정", description="이 채널에서 멘션 없이 봇과 대화할 수 있게 합니다. (다시 누르면 해제)")
 async def cmd_set_channel(interaction: discord.Interaction):
     if interaction.guild is None:
@@ -1744,10 +1821,13 @@ async def cmd_assistant(interaction: discord.Interaction, 말: str):
         board_file = await (make_board_file() if board is True else make_guide_file(board))
         if board_file is not None:
             kwargs["file"] = board_file
+    # embed 와 문장이 같이 나올 수 있다 (여러 요청을 한 번에 처리한 경우).
+    # 예전에는 embed 가 있으면 문장을 버려서 결과 일부가 사라졌다.
+    content = header + (("\n\n" + result) if result else "")
     if embed is not None:
-        await interaction.followup.send(content=header, embed=embed, **kwargs)
+        await interaction.followup.send(content=content, embed=embed, **kwargs)
     else:
-        await interaction.followup.send(header + "\n\n" + result, **kwargs)
+        await interaction.followup.send(content, **kwargs)
 
 
 @bot.tree.command(name="내알림", description="내가 등록한 알림을 확인하고 켜거나 끕니다.")
@@ -2021,10 +2101,12 @@ async def on_message(message: discord.Message):
             board_file = await (make_board_file() if board is True else make_guide_file(board))
             if board_file is not None:
                 kwargs["file"] = board_file
+        # embed 가 있어도 문장을 함께 보낸다 (여러 요청을 한 번에 처리한 경우)
+        body = (who + result) if result else (who.strip() or None)
         if embed is not None:
-            await message.reply(content=(who.strip() or None), embed=embed, **kwargs)
+            await message.reply(content=body, embed=embed, **kwargs)
         else:
-            await message.reply(who + result, **kwargs)
+            await message.reply(body or "…", **kwargs)
     except discord.Forbidden:
         pass
     except Exception as e:
