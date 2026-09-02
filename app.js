@@ -7,6 +7,8 @@
 //   원본 주소가 바뀌면 Render 환경변수 TARGET_BASE 만 바꾸면 된다. 코드는 손댈 필요 없다.
 const API_STATUS = '/api/status';
 const API_STATS  = '/api/stats?days=7';
+// 서버가 5초마다 세어 둔 시간대별 혼잡도 (매주 월요일 갱신)
+const API_CONGESTION = '/api/congestion';
 
 // 🔔 백그라운드 푸시(앱을 꺼도 오는 알림) 백엔드 주소.
 //    비워두면 같은 출처를 쓴다 → 로컬 start_server.py 에서 그대로 동작.
@@ -372,6 +374,22 @@ function loadLastGoodSnapshot() {
   }
 }
 
+// 서버가 실제로 세어 둔 시간대별 혼잡도.
+// 매주 월요일에 지난 주 관측으로 갱신된다.
+// 관측이 모자라면 null 로 두고 아래의 추정값을 그대로 쓴다.
+let congestionProfile = null;
+
+async function loadCongestionProfile() {
+  try {
+    const res = await fetchWithTimeout(API_CONGESTION);
+    if (!res.ok) return;
+    const data = await res.json();
+    congestionProfile = (data && data.ready && Array.isArray(data.slots) && data.slots.length) ? data : null;
+  } catch (e) {
+    // 실패해도 추정값으로 계속 돌아간다
+  }
+}
+
 // 2. 메인 데이터 로더 (실시간 API -> 마지막 성공 데이터 -> 내장 스냅샷 3중 안전망)
 async function loadDashboardData() {
   // 앞선 요청이 아직 진행 중이면 건너뛴다 (느린 응답에 요청이 쌓이는 것 방지)
@@ -382,7 +400,9 @@ async function loadDashboardData() {
   try {
     const [statusRes, statsRes] = await Promise.all([
       fetchWithTimeout(API_STATUS),
-      fetchWithTimeout(API_STATS)
+      fetchWithTimeout(API_STATS),
+      // 실패해도 화면을 막지 않는다
+      loadCongestionProfile()
     ]);
     if (!statusRes.ok || !statsRes.ok) throw new Error('API unavailable');
 
@@ -1125,6 +1145,30 @@ function analyzeStatisticalPatterns(statsData) {
     }
   ];
 
+  // 서버가 실제로 세어 둔 값이 있으면 추정값 대신 그것을 쓴다.
+  // 구간(시각 범위)은 그대로 두고 숫자와 설명만 갈아끼운다.
+  const measured = congestionProfile && congestionProfile.ready;
+  if (measured) {
+    const byId = {};
+    congestionProfile.slots.forEach(s => { byId[s.id] = s; });
+    slots.forEach(s => {
+      const m = byId[s.id];
+      if (!m) return;
+      s.utilizationRate = m.utilizationRate;
+      s.sharePercent = m.sharePercent;
+      s.avgRuns = Math.max(1, Math.round(avgDailyRuns * m.sharePercent / 100));
+      s.level = m.utilizationRate >= 80 ? 'busy'
+              : m.utilizationRate >= 60 ? 'caution'
+              : m.utilizationRate >= 40 ? 'normal'
+              : m.utilizationRate >= 25 ? 'good' : 'best';
+      const badge = { best: ['매우 여유 🔵','badge-blue'], good: ['여유 🟢','badge-green'],
+                      normal: ['보통 🟡','badge-yellow'], caution: ['혼잡 🟠','badge-orange'],
+                      busy: ['매우 혼잡 🔴','badge-red'] }[s.level];
+      s.badgeText = badge[0];
+      s.badgeClass = badge[1];
+    });
+  }
+
   const currentSlot = slots.find(s => s.isCurrent) || slots[2];
 
   return {
@@ -1133,7 +1177,9 @@ function analyzeStatisticalPatterns(statsData) {
     avgDailyRuns,
     currentHour,
     currentSlot,
-    slots
+    slots,
+    measured,
+    measuredAt: measured ? (congestionProfile.publishedAt || null) : null
   };
 }
 
@@ -1157,7 +1203,9 @@ function renderCongestionStatus() {
   }
   if (statsSummaryEl) {
     // 총 가동횟수/일평균은 API 실측값. 시간대별 분포는 생활패턴 기반 추정치이므로 구분해서 표기한다.
-    statsSummaryEl.textContent = `최근 ${statAnalysis.days}일 실측 ${statAnalysis.totalRuns}회 (일평균 ${statAnalysis.avgDailyRuns}회) · 시간대 분포는 추정치`;
+    statsSummaryEl.textContent = statAnalysis.measured
+      ? `최근 ${statAnalysis.days}일 실측 ${statAnalysis.totalRuns}회 (일평균 ${statAnalysis.avgDailyRuns}회) · 시간대별 혼잡도는 실제 관측값${statAnalysis.measuredAt ? ` (${statAnalysis.measuredAt} 갱신)` : ''}`
+      : `최근 ${statAnalysis.days}일 실측 ${statAnalysis.totalRuns}회 (일평균 ${statAnalysis.avgDailyRuns}회) · 시간대 분포는 추정치 (관측 수집 중)`;
   }
 
   // 실시간 여유 대수 계산
@@ -1838,10 +1886,13 @@ const GEMINI_API_KEYS = [
 const GEMINI_API_KEY = GEMINI_API_KEYS[0] || '';
 // 앞에서부터 시도한다. 앞쪽이 더 똑똑하고, 뒤로 갈수록 가볍고 빠르다.
 // (앞 모델이 혼잡(503)하면 자동으로 뒤로 넘어간다)
+// 무료 한도는 모델마다 따로 걸린다. 그래서 서로 '다른' 모델을 늘어놓아야
+// 하나가 막혔을 때 다음 것이 의미가 있다.
+// (gemini-flash-lite-latest 는 gemini-3.5-flash-lite 와 같은 모델이라 뺐다)
 const GEMINI_MODELS = [
-  'gemini-flash-lite-latest',   // 실측 1.6초, 정확도 동일 — 가장 빠르다
-  'gemini-3.5-flash-lite',      // 위와 같은 급, 버전 고정판
-  'gemini-3.5-flash',           // 실측 3.6초. 앞 둘이 막혔을 때
+  'gemini-3.5-flash-lite',   // 실측 2.34초, 정답 5/5 — 가장 빠르다
+  'gemini-3.1-flash-lite',   // 실측 3.92초, 정답 5/5 — 한도가 따로다
+  'gemini-3.5-flash',        // 실측 3.57초 — 또 다른 한도
 ];
 
 // ⚡ 토큰 수 80% 압축: LLM 처리 속도 극대화 + 동적 시간 변동 센서 정보 주입

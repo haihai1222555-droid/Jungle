@@ -47,9 +47,47 @@ def now_kst():
     return datetime.now(KST)
 
 
+# 서버가 실제로 세어 둔 혼잡도. 웹과 같은 값을 쓰기 위해 가끔 받아온다.
+_MEASURED_BUSY = None
+_MEASURED_AT = 0.0
+MEASURED_TTL_SEC = 30 * 60
+
+
+def measured_busy_slots():
+    """서버가 관측한 시간대별 혼잡도를 받아온다. 없으면 None."""
+    global _MEASURED_BUSY, _MEASURED_AT
+    if _MEASURED_BUSY is not None and time.time() - _MEASURED_AT < MEASURED_TTL_SEC:
+        return _MEASURED_BUSY
+    try:
+        url = STATUS_API_URL.replace("/api/status", "/api/congestion")
+        req = urllib.request.Request(url, headers={"User-Agent": "JungleDiscordBot/2.0"})
+        with urllib.request.urlopen(req, timeout=5) as res:
+            data = json.loads(res.read().decode("utf-8"))
+        _MEASURED_AT = time.time()
+        _MEASURED_BUSY = data if data.get("ready") and data.get("slots") else None
+    except Exception as e:
+        print(f"[Congestion] 관측값을 못 받았습니다: {e}")
+        _MEASURED_AT = time.time()
+        _MEASURED_BUSY = None
+    return _MEASURED_BUSY
+
+
 def current_busy_slot(hour=None):
-    """지금이 어느 혼잡 구간인지 돌려준다."""
+    """지금이 어느 혼잡 구간인지 돌려준다.
+
+    서버가 실제로 세어 둔 값이 있으면 그것을 쓰고, 없으면 기본 추정값을 쓴다.
+    """
     h = now_kst().hour if hour is None else hour
+    measured = measured_busy_slots()
+    if measured:
+        for sl in measured["slots"]:
+            start, end = sl["startHour"], sl["endHour"]
+            inside = (start <= h < end) if start < end else (h >= start or h < end)
+            if inside:
+                rate = sl["utilizationRate"]
+                badge = ("매우 혼잡" if rate >= 80 else "혼잡" if rate >= 60
+                         else "보통" if rate >= 40 else "여유" if rate >= 25 else "매우 여유")
+                return sl["label"], rate, badge
     for start, end, label, rate, badge in BUSY_SLOTS:
         inside = (start <= h < end) if start < end else (h >= start or h < end)
         if inside:
@@ -182,15 +220,37 @@ def save_alarms():
     except Exception as e:
         print(f"[Alarm Save Error] {e}")
 
+# 마지막으로 성공한 조회 결과. 한 번씩 나는 실패 때문에
+# "실시간 데이터를 가져오지 못했습니다" 가 뜨는 것을 막는다.
+_LAST_STATUS = {}
+_LAST_STATUS_AT = 0.0
+STATUS_REUSE_SEC = 90   # 이 시간 안이라면 직전 데이터를 그대로 쓴다
+
+
 def fetch_live_status():
-    """Render API 또는 터널에서 실시간 세탁실 데이터 조회"""
-    try:
-        req = urllib.request.Request(STATUS_API_URL, headers={'User-Agent': 'JungleDiscordBot/2.0'})
-        with urllib.request.urlopen(req, timeout=5) as res:
-            if res.status == 200:
-                return json.loads(res.read().decode('utf-8'))
-    except Exception as e:
-        print(f"[API Fetch Error] {e}")
+    """실시간 세탁실 데이터 조회.
+
+    한 번 실패했다고 바로 포기하지 않는다.
+    두 번 시도해 보고, 그래도 안 되면 조금 전에 받아둔 데이터를 쓴다.
+    빨래는 몇 초 사이에 크게 달라지지 않으므로, 아무것도 못 보여주는 것보다 낫다.
+    """
+    global _LAST_STATUS, _LAST_STATUS_AT
+    for attempt in (1, 2):
+        try:
+            req = urllib.request.Request(STATUS_API_URL, headers={'User-Agent': 'JungleDiscordBot/2.0'})
+            with urllib.request.urlopen(req, timeout=6) as res:
+                if res.status == 200:
+                    data = json.loads(res.read().decode('utf-8'))
+                    if data:
+                        _LAST_STATUS = data
+                        _LAST_STATUS_AT = time.time()
+                        return data
+        except Exception as e:
+            print(f"[API Fetch Error] {attempt}회차: {e}")
+    age = time.time() - _LAST_STATUS_AT
+    if _LAST_STATUS and age <= STATUS_REUSE_SEC:
+        print(f"[API] 조회 실패 — {int(age)}초 전 데이터를 대신 씁니다")
+        return _LAST_STATUS
     return {}
 
 def format_timer(hour, minute):
@@ -887,9 +947,9 @@ GROQ_MODELS = [
 # 앞에서부터 시도한다. 앞쪽이 더 똑똑하고, 뒤로 갈수록 가볍고 빠르다.
 # (뒤쪽은 앞 모델이 혼잡할 때를 대비한 예비용이다)
 GEMINI_MODELS = [
-    "gemini-flash-lite-latest",   # 실측 1.6초, 정확도 동일 — 가장 빠르다
-    "gemini-3.5-flash-lite",      # 위와 같은 급, 버전 고정판
-    "gemini-3.5-flash",           # 실측 3.6초. 앞 둘이 막혔을 때
+    "gemini-3.5-flash-lite",   # 실측 2.34초, 정답 5/5 — 가장 빠르다
+    "gemini-3.1-flash-lite",   # 실측 3.92초, 정답 5/5 — 한도가 따로다
+    "gemini-3.5-flash",        # 실측 3.57초 — 또 다른 한도
 ]
 
 # 사람별 대화 기억. 공용 채널에서 여러 명이 말해도 섞이면 안 되므로
@@ -1207,8 +1267,9 @@ def _now_line():
     now = now_kst()
     label, rate, badge = current_busy_slot(now.hour)
     week = "월화수목금토일"[now.weekday()]
+    kind = "실제 관측값" if measured_busy_slots() else "추정값"
     return (f"{now:%Y년 %m월 %d일} ({week}요일) {now:%H시 %M분} (한국 시간) — "
-            f"지금은 '{label}' 구간이라 예상 혼잡도 {rate}% ({badge})")
+            f"지금은 '{label}' 구간이라 혼잡도 {rate}% ({badge}, {kind})")
 
 
 def build_assistant_prompt(text, status_data, mine, kb_limit=None):

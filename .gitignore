@@ -15,6 +15,9 @@ gemini_key.txt
 
 # 런타임 생성 데이터
 push_subscriptions.json
+
+# 서버가 5초마다 쌓는 시간대별 혼잡도 관측 기록 (매주 월요일 갱신)
+congestion_stats.json
 data/
 
 # AI 생성 스크래치 출력물

@@ -7,6 +7,7 @@ import urllib.error
 import json
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 import base64
 
 # 로그를 줄 단위로 즉시 내보낸다.
@@ -64,6 +65,8 @@ if HAS_WEBPUSH:
     VAPID_PUBLIC_KEY_B64 = base64.urlsafe_b64encode(raw_pub).decode('utf-8').rstrip('=')
 
 CACHED_STATUS = {}
+CACHED_STATUS_AT = 0.0     # 마지막으로 받아온 시각
+CACHED_STATUS_MAX_AGE = 20  # 이보다 오래된 것은 못 믿고 직접 물어본다
 
 # 이보다 오래된 알림 등록은 지난 빨래로 보고 정리한다 (한 사이클은 길어야 2시간)
 MAX_ALARM_AGE_SEC = 4 * 60 * 60
@@ -115,8 +118,150 @@ def send_push_notification(subscription_info, payload_data):
     except Exception as e:
         print(f"[WebPush Error] {e}")
 
+# =========================================================
+# 시간대별 혼잡도 관측
+# ---------------------------------------------------------
+# 5초마다 "돌고 있는 기기 수 / 전체 기기 수" 를 시간별로 쌓는다.
+# 주가 바뀌면(= 월요일이 되면) 그 주의 관측치를 확정판으로 올리고 새로 센다.
+# =========================================================
+KST = timezone(timedelta(hours=9))
+CONGESTION_FILE = os.environ.get('CONGESTION_FILE') or os.path.join(BASE_DIR, 'congestion_stats.json')
+CONGESTION_SAVE_SEC = 60          # 디스크에는 1분에 한 번만 쓴다
+CONGESTION_MIN_SAMPLES = 60       # 시간대별 최소 관측 수 (5초 간격이면 5분치)
+CONGESTION_LOCK = threading.Lock()
+
+# 화면에 보여줄 시간대 구간. app.js 와 같은 기준이다.
+CONGESTION_SLOTS = [
+    ("dawn",       2,  8, "새벽 야간 골든타임", "대기 0명! 야간 코딩러 강력 추천"),
+    ("morning",    8, 12, "오전 등교/학습 시간", "등교 전후 여유로운 세탁 가능"),
+    ("afternoon", 12, 18, "오후 틈새 타임", "점심/오후 1~2대 대기 없이 사용 가능"),
+    ("evening",   18, 21, "저녁 식사/복귀 시간", "식사 후 몰림 시작 (잔여시간 확인)"),
+    ("night_peak", 21, 2, "몰입 종료 심야 피크", "코딩 종료 후 샤워&빨래 집중 (대기 필수)"),
+]
+
+CONGESTION = {"week": None, "hours": {}, "published": None}
+_CONGESTION_SAVED_AT = 0.0
+
+
+def _week_key(now=None):
+    y, w, _ = (now or datetime.now(KST)).isocalendar()
+    return "%d-W%02d" % (y, w)
+
+
+def load_congestion():
+    global CONGESTION
+    try:
+        if os.path.exists(CONGESTION_FILE):
+            with open(CONGESTION_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict) and "hours" in data:
+                CONGESTION = data
+                print("[Congestion] 관측 기록을 불러왔습니다 (%s주차)" % CONGESTION.get("week"))
+    except Exception as e:
+        print(f"[Congestion Load Error] {e}")
+
+
+def save_congestion():
+    try:
+        tmp = CONGESTION_FILE + ".tmp"
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(CONGESTION, f, ensure_ascii=False)
+        os.replace(tmp, CONGESTION_FILE)
+    except Exception as e:
+        print(f"[Congestion Save Error] {e}")
+
+
+def record_congestion_sample(status_data):
+    """지금 몇 대가 돌고 있는지 한 번 센다. 주가 바뀌면 확정판을 올린다."""
+    global _CONGESTION_SAVED_AT
+    if not status_data:
+        return
+    busy = total = 0
+    for tower in status_data.values():
+        if not isinstance(tower, dict):
+            continue
+        for unit_type in ("washer", "dryer"):
+            unit = tower.get(unit_type)
+            if not isinstance(unit, dict):
+                continue
+            total += 1
+            state = (unit.get("runState") or {}).get("currentState", "POWER_OFF")
+            if state in RUNNING_STATES:
+                busy += 1
+    if not total:
+        return
+
+    now = datetime.now(KST)
+    week = _week_key(now)
+    with CONGESTION_LOCK:
+        # 주가 바뀌었다 = 월요일이 되었다 -> 지난 주 관측을 확정판으로 올린다
+        if CONGESTION.get("week") != week:
+            if CONGESTION.get("hours") and _has_enough(CONGESTION["hours"]):
+                CONGESTION["published"] = {
+                    "hours": CONGESTION["hours"],
+                    "week": CONGESTION.get("week"),
+                    "at": now.strftime("%Y-%m-%d"),
+                }
+                print("[Congestion] %s주차 관측으로 혼잡도를 갱신했습니다" % CONGESTION.get("week"))
+            CONGESTION["week"] = week
+            CONGESTION["hours"] = {}
+
+        slot = CONGESTION["hours"].setdefault(str(now.hour), {"s": 0, "b": 0})
+        slot["s"] += total
+        slot["b"] += busy
+
+    if time.time() - _CONGESTION_SAVED_AT >= CONGESTION_SAVE_SEC:
+        _CONGESTION_SAVED_AT = time.time()
+        save_congestion()
+
+
+def _has_enough(hours):
+    """24시간이 모두 최소 관측 수를 넘겼는지."""
+    if not hours:
+        return False
+    return all((hours.get(str(h)) or {}).get("s", 0) >= CONGESTION_MIN_SAMPLES for h in range(24))
+
+
+def _rate(hours, start, end):
+    """구간의 가동률(%)과 관측된 가동 횟수를 돌려준다."""
+    span = range(start, end) if start < end else list(range(start, 24)) + list(range(0, end))
+    s = sum((hours.get(str(h)) or {}).get("s", 0) for h in span)
+    b = sum((hours.get(str(h)) or {}).get("b", 0) for h in span)
+    return (round(b * 100 / s) if s else 0), b
+
+
+def build_congestion_profile():
+    """화면에 보여줄 시간대별 혼잡도를 만든다.
+
+    확정판(지난 주 관측)이 있으면 그것을 쓰고,
+    아직 없으면 이번 주에 모은 것을 잠정치로 쓴다.
+    둘 다 모자라면 ready=False 로 알려 화면이 기존 추정값을 쓰게 한다.
+    """
+    with CONGESTION_LOCK:
+        pub = CONGESTION.get("published") or {}
+        hours, source, at, week = pub.get("hours"), "published", pub.get("at"), pub.get("week")
+        if not (hours and _has_enough(hours)):
+            hours, source, at, week = CONGESTION.get("hours"), "current", None, CONGESTION.get("week")
+        hours = dict(hours or {})
+
+    if not _has_enough(hours):
+        return {"ready": False, "source": source, "week": week,
+                "slots": [], "totalSamples": sum(v.get("s", 0) for v in hours.values())}
+
+    slots, busy_total = [], 0
+    for sid, start, end, label, desc in CONGESTION_SLOTS:
+        rate, busy = _rate(hours, start, end)
+        busy_total += busy
+        slots.append({"id": sid, "startHour": start, "endHour": end,
+                      "label": label, "desc": desc, "utilizationRate": rate, "_busy": busy})
+    for sl in slots:
+        sl["sharePercent"] = round(sl.pop("_busy") * 100 / busy_total) if busy_total else 0
+    return {"ready": True, "source": source, "week": week, "publishedAt": at,
+            "slots": slots, "totalSamples": sum(v.get("s", 0) for v in hours.values())}
+
+
 def background_push_worker():
-    global CACHED_STATUS
+    global CACHED_STATUS, CACHED_STATUS_AT
     while True:
         try:
             time.sleep(5)
@@ -124,6 +269,8 @@ def background_push_worker():
                 req = urllib.request.Request(f"{TARGET_BASE}/api/status", headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=3) as res:
                     CACHED_STATUS = json.loads(res.read().decode('utf-8'))
+                    CACHED_STATUS_AT = time.time()
+                    record_congestion_sample(CACHED_STATUS)
             except Exception:
                 pass
 
@@ -301,12 +448,31 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             }).encode('utf-8'))
             return
 
+        if req_path == '/api/congestion':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(json.dumps(build_congestion_profile(), ensure_ascii=False).encode('utf-8'))
+            return
+
         if req_path == '/api/vapid-public-key':
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.end_headers()
             self.wfile.write(json.dumps({"publicKey": VAPID_PUBLIC_KEY_B64}).encode('utf-8'))
             return
+
+        # 배경 작업이 5초마다 받아둔 것을 그대로 돌려준다.
+        # 매번 터널까지 다시 다녀오면 느리고, 그쪽이 늦으면 통째로 실패했다.
+        if req_path == '/api/status' and CACHED_STATUS:
+            if time.time() - CACHED_STATUS_AT <= CACHED_STATUS_MAX_AGE:
+                body = json.dumps(CACHED_STATUS, ensure_ascii=False).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('X-Cache-Age', str(int(time.time() - CACHED_STATUS_AT)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
 
         if req_path.startswith('/api/'):
             target_url = TARGET_BASE + self.path
@@ -322,6 +488,19 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                     self.wfile.write(content)
                     return
             except Exception as e:
+                # 터널이 잠깐 죽어도 502 를 던지기보다, 마지막으로 받아둔 값을
+                # 나이와 함께 돌려준다. 화면은 그 나이를 보고 "N분 전" 이라 알린다.
+                if req_path == '/api/status' and CACHED_STATUS:
+                    age = int(time.time() - CACHED_STATUS_AT)
+                    print(f"[Proxy] 실패 — {age}초 전 데이터로 대신 응답: {e}")
+                    body = json.dumps(CACHED_STATUS, ensure_ascii=False).encode('utf-8')
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('X-Cache-Age', str(age))
+                    self.send_header('X-Cache-Stale', '1')
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 self.send_response(502)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.end_headers()
@@ -511,12 +690,15 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 if __name__ == '__main__':
     os.chdir(BASE_DIR)
+    load_congestion()
+    # 이 작업은 알림 발송만 하는 게 아니라 실시간 데이터 갱신과
+    # 혼잡도 관측도 함께 한다. 그래서 푸시 사용 여부와 상관없이 항상 돌린다.
+    t = threading.Thread(target=background_push_worker, daemon=True)
+    t.start()
     if HAS_WEBPUSH:
-        t = threading.Thread(target=background_push_worker, daemon=True)
-        t.start()
-        print("[WebPush] 백그라운드 알림 워커 시작됨 (5초 주기)")
+        print("[Worker] 백그라운드 작업 시작 (5초 주기: 상태 갱신 · 알림 · 혼잡도 관측)")
     else:
-        print("[WebPush] 라이브러리 없음 - 백그라운드 알림 비활성")
+        print("[Worker] 백그라운드 작업 시작 (푸시 라이브러리 없음 - 알림 발송만 비활성)")
 
     with ThreadedTCPServer(("", PORT), RobustHandler) as httpd:
         print("============================================================")
