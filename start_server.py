@@ -87,12 +87,32 @@ PROXY_CACHE_TTL = {'/api/stats': 60}
 _PROXY_CACHE = {}                    # 경로 -> (만료시각, 상태, 헤더, 본문)
 _PROXY_FETCH_LOCKS = {}              # 경로 -> Lock (같은 것을 두 번 안 가져오게)
 _PROXY_LOCK = threading.Lock()
+# 캐시 키에 쿼리 문자열이 들어가므로 그냥 두면 무한정 늘어난다.
+# 웹은 공개돼 있어서 ?days=1,2,3... 같은 요청만으로도 메모리가 샌다.
+PROXY_CACHE_MAX = 32
+
+
+def _proxy_evict():
+    """오래된 것부터 정리해 캐시가 무한정 늘어나지 않게 한다."""
+    if len(_PROXY_CACHE) <= PROXY_CACHE_MAX:
+        return
+    now = time.time()
+    for k in [k for k, v in _PROXY_CACHE.items() if v[0] <= now]:
+        _PROXY_CACHE.pop(k, None)
+        _PROXY_FETCH_LOCKS.pop(k, None)
+    over = len(_PROXY_CACHE) - PROXY_CACHE_MAX
+    if over > 0:                       # 그래도 많으면 이른 만료순으로 버린다
+        for k, _ in sorted(_PROXY_CACHE.items(), key=lambda kv: kv[1][0])[:over]:
+            _PROXY_CACHE.pop(k, None)
+            _PROXY_FETCH_LOCKS.pop(k, None)
 
 
 def _proxy_lock_for(key):
     with _PROXY_LOCK:
         lk = _PROXY_FETCH_LOCKS.get(key)
         if lk is None:
+            if len(_PROXY_FETCH_LOCKS) > PROXY_CACHE_MAX * 2:
+                _proxy_evict()
             lk = _PROXY_FETCH_LOCKS[key] = threading.Lock()
         return lk
 CACHED_STATUS_MAX_AGE = 20  # 이보다 오래된 것은 못 믿고 직접 물어본다
@@ -555,6 +575,8 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                                                          'content-encoding')]
                             _PROXY_CACHE[self.path] = (time.time() + ttl,
                                                        response.status, hdrs, content)
+                            with _PROXY_LOCK:
+                                _proxy_evict()
                             self.send_response(response.status)
                             for k, v in hdrs:
                                 self.send_header(k, v)
