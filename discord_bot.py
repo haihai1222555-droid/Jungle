@@ -6,6 +6,7 @@ import unicodedata
 import json
 import asyncio
 import time
+import random
 import threading
 import urllib.request
 import urllib.error
@@ -2667,21 +2668,31 @@ async def on_ready():
         print("   scope 에 bot 과 applications.commands 가 모두 있어야 슬래시 명령어가 보입니다.")
         print("=" * 60)
     
-    # 1) 봇이 속한 모든 서버에 1초 만에 즉시 슬래시 명령어 복사 및 동기화 (0초 딜레이)
-    for guild in bot.guilds:
-        try:
-            bot.tree.copy_global_to(guild=guild)
-            await bot.tree.sync(guild=guild)
-            print(f"✅ [Instant Sync] '{guild.name}' 서버에 슬래시 커맨드(/알림) 즉시 등록 완료!")
-        except Exception as e:
-            print(f"⚠️ [Guild Sync] {guild.name}: {e}")
+    # 슬래시 명령어 동기화는 프로세스당 한 번만 한다.
+    # on_ready 는 재연결할 때마다 다시 불린다. 그때마다 동기화하면
+    # 디스코드가 가장 빡빡하게 제한하는 엔드포인트를 계속 두드리게 되고,
+    # 연결이 불안정할수록 스스로 429 를 부르는 악순환이 된다.
+    # 명령어 목록은 디스코드 쪽에 남아 있으므로 다시 보낼 필요가 없다.
+    global _COMMANDS_SYNCED
+    if _COMMANDS_SYNCED:
+        print("↩️ [Slash Commands] 재연결입니다. 이미 등록되어 있어 동기화를 건너뜁니다.")
+    else:
+        # 1) 봇이 속한 모든 서버에 즉시 슬래시 명령어 복사 및 동기화
+        for guild in bot.guilds:
+            try:
+                bot.tree.copy_global_to(guild=guild)
+                await bot.tree.sync(guild=guild)
+                print(f"✅ [Instant Sync] '{guild.name}' 서버에 슬래시 커맨드(/알림) 즉시 등록 완료!")
+            except Exception as e:
+                print(f"⚠️ [Guild Sync] {guild.name}: {e}")
 
-    # 2) 글로벌 동기화도 실행
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ [Slash Commands] {len(synced)}개 글로벌 슬래시 명령어 동기화 완료! (/알림)")
-    except Exception as e:
-        print(f"❌ [Command Sync Error] {e}")
+        # 2) 글로벌 동기화도 실행
+        try:
+            synced = await bot.tree.sync()
+            print(f"✅ [Slash Commands] {len(synced)}개 글로벌 슬래시 명령어 동기화 완료! (/알림)")
+        except Exception as e:
+            print(f"❌ [Command Sync Error] {e}")
+        _COMMANDS_SYNCED = True
 
     if not check_laundry_alarms.is_running():
         check_laundry_alarms.start()
@@ -2698,12 +2709,62 @@ def start_state_sync():
     print(f"[State] 외부 저장소를 사용합니다. (접두어 {STORE_PREFIX})")
 
 
+# 슬래시 명령어를 이미 등록했는지. on_ready 가 재연결마다 불리기 때문에 필요하다.
+_COMMANDS_SYNCED = False
+
+
+async def _reset_bot_session():
+    """다음 재시도를 위해 연결을 정리한다.
+
+    bot.start() 가 중간에 실패하면 aiohttp 세션이 열린 채 남는다.
+    로그에 찍히던 "Unclosed client session" 이 그것이다.
+    정리하지 않고 다시 start() 하면 세션이 하나씩 쌓이고,
+    discord.py 는 닫지 않은 클라이언트의 재사용을 보장하지 않는다.
+    close() 로 정리하고 clear() 로 다시 열 수 있는 상태로 되돌린다.
+
+    커넥터까지 같이 버려야 한다. discord.py 는 세션이 없을 때만 커넥터를
+    새로 만드는데, 세션을 닫으면 그 커넥터도 함께 닫힌다.
+    닫힌 커넥터를 그대로 두면 새로 만든 세션이 태어날 때부터 닫힌 상태가 되어
+    모든 요청이 "Session is closed" 로 실패한다. (직접 돌려서 확인함)
+    """
+    try:
+        await bot.close()
+    except Exception as e:
+        print(f"[Discord] 연결 정리 중: {e}")
+    try:
+        bot.clear()
+        bot.http.connector = discord.utils.MISSING
+    except Exception as e:
+        print(f"[Discord] 상태 초기화 중: {e}")
+
+
+def _retry_after_of(exc):
+    """디스코드가 알려준 대기 시간(초)을 꺼낸다. 없으면 None.
+
+    우리가 임의로 정한 시간보다 디스코드가 알려준 시간이 정확하다.
+    너무 일찍 다시 두드리면 제한이 오히려 길어진다.
+    """
+    v = getattr(exc, "retry_after", None)
+    if isinstance(v, (int, float)) and v > 0:
+        return float(v)
+    res = getattr(exc, "response", None)
+    try:
+        raw = res.headers.get("Retry-After") if res is not None else None
+        if raw:
+            return float(raw)
+    except Exception:
+        pass
+    return None
+
+
 async def start_bot_with_backoff():
     delay = 15
     while True:
+        began = time.monotonic()
         try:
             print("🤖 [Discord Bot] Discord Gateway 연결 시도 중...")
             await bot.start(DISCORD_BOT_TOKEN)
+            print("🛑 [Discord Bot] 연결이 끊겼습니다. 잠시 후 다시 연결합니다.")
 
         except discord.errors.PrivilegedIntentsRequired:
             # 개발자 포털에서 MESSAGE CONTENT INTENT 를 켜지 않은 채
@@ -2718,7 +2779,7 @@ async def start_bot_with_backoff():
             print("=" * 60)
             os.environ["ENABLE_MESSAGE_CONTENT"] = "0"
             intents.message_content = False
-            await bot.close()
+            await _reset_bot_session()
             if EMBEDDED:
                 # 웹 서버와 같은 프로세스다. 통째로 재시작하면 웹까지 끊긴다.
                 # 권한만 끄고 이어서 다시 붙는다.
@@ -2736,15 +2797,27 @@ async def start_bot_with_backoff():
 
         except discord.errors.HTTPException as e:
             if e.status == 429:
-                print(f"⚠️ [Discord Rate Limit] 디스코드 API 글로벌 요청 제한(429) 감지. {delay}초 후 자동 재시도합니다...")
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 120)
-            else:
-                print(f"❌ [Discord HTTP Error] {e} ({delay}초 후 재시도)")
-                await asyncio.sleep(delay)
+                # 디스코드가 알려준 시간을 우선 따른다. 흔들림을 조금 섞어
+                # 여러 인스턴스가 동시에 다시 두드리는 일을 피한다.
+                wait = _retry_after_of(e) or delay
+                wait = min(max(wait, 5.0), 900.0) + random.uniform(0, 5)
+                print(f"⚠️ [Discord Rate Limit] 요청 제한(429). {wait:.0f}초 후 다시 시도합니다.")
+                await _reset_bot_session()
+                await asyncio.sleep(wait)
+                delay = min(delay * 2, 300)
+                continue
+            print(f"❌ [Discord HTTP Error] {e}")
         except Exception as e:
-            print(f"❌ [Discord Error] {e} (15초 후 재시도)")
-            await asyncio.sleep(15)
+            print(f"❌ [Discord Error] {e}")
+
+        # 여기까지 왔다면 다시 붙어야 한다는 뜻이다.
+        # 한참 잘 붙어 있다가 끊긴 것이라면 대기 시간을 처음부터 다시 센다.
+        if time.monotonic() - began > 120:
+            delay = 15
+        print(f"   {delay}초 후 재시도합니다.")
+        await _reset_bot_session()
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 300)
 
 def run_bot(embedded=False):
     """봇을 실행한다.
