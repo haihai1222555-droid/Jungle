@@ -6,6 +6,7 @@ import unicodedata
 import json
 import asyncio
 import time
+import threading
 import urllib.request
 import urllib.error
 from datetime import datetime, timedelta, timezone
@@ -138,7 +139,6 @@ DISCORD_BOT_TOKEN = (
 ).strip().strip('"').strip("'")
 
 STATUS_API_URL = os.environ.get("STATUS_API_URL") or "https://jungle-wash.onrender.com/api/status"
-BOT_DATA_FILE = os.path.join(BASE_DIR, "discord_alarms.json")
 # 안내 사진을 두는 폴더
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
@@ -196,29 +196,121 @@ def get_font(size, bold=False):
 
 # =========================================================
 # 데이터 로드 / 저장 헬퍼
+# ---------------------------------------------------------
+# Render 는 재시작마다 파일이 지워진다. 그러면 배포할 때마다
+# 등록된 알림과 /채널설정 이 사라진다.
+# 그래서 파일에 쓰되, 외부 저장소가 설정되어 있으면 거기에도 남긴다.
+#
+# 외부 저장소는 Upstash Redis 의 HTTP 방식을 쓴다.
+# 따로 설치할 것이 없고(그냥 HTTP 요청이다), 무료 한도로 충분하다.
+# 설정하지 않으면 예전처럼 파일만 쓴다 — 동작은 그대로다.
+# 나중에 다른 곳으로 옮기려면 _remote_get / _remote_set 두 함수만 고치면 된다.
 # =========================================================
+# 웹 서버와 한 프로세스에서 도는 중인지. run_bot(embedded=True) 가 켠다.
+EMBEDDED = False
+
+STORE_URL = (os.environ.get("UPSTASH_REDIS_REST_URL") or "").strip().rstrip("/")
+STORE_TOKEN = (os.environ.get("UPSTASH_REDIS_REST_TOKEN") or "").strip()
+STORE_PREFIX = (os.environ.get("STATE_PREFIX") or "junglewash").strip()
+
+_STATE_DIRTY = {}          # 아직 외부에 못 보낸 것
+_STATE_LOCK = threading.Lock()
+
+
+def store_enabled():
+    return bool(STORE_URL and STORE_TOKEN)
+
+
+def _remote_call(command):
+    req = urllib.request.Request(
+        STORE_URL,
+        data=json.dumps(command).encode("utf-8"),
+        headers={"Authorization": f"Bearer {STORE_TOKEN}",
+                 "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as res:
+        return json.loads(res.read().decode("utf-8")).get("result")
+
+
+def _remote_get(name):
+    return _remote_call(["GET", f"{STORE_PREFIX}:{name}"])
+
+
+def _remote_set(name, raw):
+    return _remote_call(["SET", f"{STORE_PREFIX}:{name}", raw])
+
+
+def _state_path(name):
+    return os.path.join(BASE_DIR, f"{name}.json")
+
+
+def state_load(name, default):
+    """외부 저장소를 먼저 보고, 없으면 파일을 본다."""
+    if store_enabled():
+        try:
+            raw = _remote_get(name)
+            if raw:
+                data = json.loads(raw)
+                print(f"[State] '{name}' 을(를) 외부 저장소에서 불러왔습니다.")
+                return data
+        except Exception as e:
+            print(f"[State] 외부 저장소 읽기 실패({name}): {e} — 파일로 대체합니다.")
+    path = _state_path(name)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[State] 파일 읽기 실패({name}): {e}")
+    return default
+
+
+def state_save(name, value):
+    """파일에 바로 쓰고, 외부 저장소에는 뒤에서 따로 보낸다.
+
+    외부로 보내는 일은 네트워크라 느릴 수 있다.
+    여기서 기다리면 봇 전체가 멈추므로 표시만 해두고 넘어간다.
+    """
+    try:
+        path = _state_path(name)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(value, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[State] 파일 저장 실패({name}): {e}")
+    if store_enabled():
+        with _STATE_LOCK:
+            _STATE_DIRTY[name] = json.dumps(value, ensure_ascii=False)
+
+
+def _state_sync_worker():
+    """밀린 것들을 몇 초에 한 번씩 외부 저장소로 보낸다."""
+    while True:
+        time.sleep(5)
+        with _STATE_LOCK:
+            pending = dict(_STATE_DIRTY)
+            _STATE_DIRTY.clear()
+        for name, raw in pending.items():
+            try:
+                _remote_set(name, raw)
+            except Exception as e:
+                print(f"[State] 외부 저장소 쓰기 실패({name}): {e} — 다음에 다시 시도합니다.")
+                with _STATE_LOCK:      # 실패한 것은 되돌려 다음 차례에 다시 보낸다
+                    _STATE_DIRTY.setdefault(name, raw)
+
+
 active_alarms = []
+
 
 def load_alarms():
     global active_alarms
-    if os.path.exists(BOT_DATA_FILE):
-        try:
-            with open(BOT_DATA_FILE, 'r', encoding='utf-8') as f:
-                active_alarms = json.load(f)
-        except Exception as e:
-            print(f"[Alarm Load Error] {e}")
-            active_alarms = []
+    data = state_load("discord_alarms", [])
+    active_alarms = data if isinstance(data, list) else []
+
 
 def save_alarms():
-    try:
-        tmp = BOT_DATA_FILE + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(active_alarms, f, ensure_ascii=False, indent=2)
-        if os.path.exists(BOT_DATA_FILE):
-            os.remove(BOT_DATA_FILE)
-        os.rename(tmp, BOT_DATA_FILE)
-    except Exception as e:
-        print(f"[Alarm Save Error] {e}")
+    state_save("discord_alarms", active_alarms)
 
 # 마지막으로 성공한 조회 결과. 한 번씩 나는 실패 때문에
 # "실시간 데이터를 가져오지 못했습니다" 가 뜨는 것을 막는다.
@@ -2471,8 +2563,6 @@ async def before_alarm_loop():
 # 멘션 없이 채널에 그냥 쓴 말까지 읽으려면 개발자 포털에서
 # MESSAGE CONTENT INTENT 를 켜고 ENABLE_MESSAGE_CONTENT=1 을 줘야 한다.
 # =========================================================
-SETTINGS_FILE = os.path.join(BASE_DIR, "bot_settings.json")
-
 # 멘션 없이 대화할 채널 목록. /채널설정 으로 디스코드 안에서 바꾼다.
 # (환경변수로도 기본값을 줄 수 있지만, 그건 바꿀 때마다 재배포가 필요하다)
 assistant_channels = set()
@@ -2484,24 +2574,14 @@ def load_settings():
     env_default = (os.environ.get("ASSISTANT_CHANNEL_ID") or "").strip()
     if env_default:
         found.add(env_default)
-    try:
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            found.update(str(c) for c in data.get("assistantChannels", []))
-    except Exception as e:
-        print(f"[Settings Load Error] {e}")
+    data = state_load("bot_settings", {})
+    if isinstance(data, dict):
+        found.update(str(c) for c in data.get("assistantChannels", []))
     assistant_channels = found
 
 
 def save_settings():
-    try:
-        tmp = SETTINGS_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"assistantChannels": sorted(assistant_channels)}, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, SETTINGS_FILE)
-    except Exception as e:
-        print(f"[Settings Save Error] {e}")
+    state_save("bot_settings", {"assistantChannels": sorted(assistant_channels)})
 
 
 def strip_mention(content, me):
@@ -2607,6 +2687,17 @@ async def on_ready():
         check_laundry_alarms.start()
         print("⏰ [Alarm Daemon] 10초 주기 실시간 세탁실 센서 감시 루프 가동 시작!")
 
+def start_state_sync():
+    """외부 저장소로 밀린 내용을 보내는 일꾼을 띄운다. 설정이 없으면 띄우지 않는다."""
+    if not store_enabled():
+        print("[State] 외부 저장소가 설정되지 않았습니다. 파일에만 저장합니다.")
+        print("        (Render 처럼 재시작 시 파일이 지워지는 곳에서는 알림이 사라집니다)")
+        return
+    t = threading.Thread(target=_state_sync_worker, daemon=True)
+    t.start()
+    print(f"[State] 외부 저장소를 사용합니다. (접두어 {STORE_PREFIX})")
+
+
 async def start_bot_with_backoff():
     delay = 15
     while True:
@@ -2626,7 +2717,14 @@ async def start_bot_with_backoff():
             print("   지금은 그 기능 없이 다시 시작합니다. (멘션과 DM 은 정상 동작)")
             print("=" * 60)
             os.environ["ENABLE_MESSAGE_CONTENT"] = "0"
+            intents.message_content = False
             await bot.close()
+            if EMBEDDED:
+                # 웹 서버와 같은 프로세스다. 통째로 재시작하면 웹까지 끊긴다.
+                # 권한만 끄고 이어서 다시 붙는다.
+                print("   (웹 서버와 함께 실행 중이라 프로세스는 유지하고 다시 연결합니다)")
+                await asyncio.sleep(3)
+                continue
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
         except discord.errors.LoginFailure:
@@ -2648,12 +2746,23 @@ async def start_bot_with_backoff():
             print(f"❌ [Discord Error] {e} (15초 후 재시도)")
             await asyncio.sleep(15)
 
-if __name__ == "__main__":
+def run_bot(embedded=False):
+    """봇을 실행한다.
+
+    embedded=True 는 웹 서버와 같은 프로세스에서 돌린다는 뜻이다.
+    그 경우 문제가 생겨도 프로세스를 통째로 재시작하지 않는다.
+    """
+    global EMBEDDED
+    EMBEDDED = embedded
     if not DISCORD_BOT_TOKEN:
         print("=" * 60)
         print("❌ [오류] DISCORD_BOT_TOKEN 환경 변수가 설정되지 않았습니다.")
         print("👉 Discord Developer Portal에서 봇 토큰을 발급받아 환경 변수로 설정해 주세요.")
-        print("   실행 예: $env:DISCORD_BOT_TOKEN='YOUR_TOKEN_HERE'; python discord_bot.py")
         print("=" * 60)
-    else:
-        asyncio.run(start_bot_with_backoff())
+        return
+    start_state_sync()
+    asyncio.run(start_bot_with_backoff())
+
+
+if __name__ == "__main__":
+    run_bot()

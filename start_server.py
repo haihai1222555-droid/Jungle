@@ -688,9 +688,40 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+def start_discord_bot():
+    """디스코드 봇을 같은 프로세스에서 함께 띄운다.
+
+    Render 무료 플랜에는 상주 작업(Background Worker)이 없어서,
+    이미 떠 있는 웹 서비스 안에서 함께 돌린다.
+    토큰이 없으면 조용히 넘어간다 (웹만 쓰는 배포도 있으므로).
+    """
+    if not (os.environ.get('DISCORD_BOT_TOKEN') or '').strip():
+        print("[Bot] DISCORD_BOT_TOKEN 이 없어 봇은 띄우지 않습니다. (웹만 실행)")
+        return
+    if (os.environ.get('RUN_DISCORD_BOT') or '1').strip() in ('0', 'false', 'no'):
+        print("[Bot] RUN_DISCORD_BOT 가 꺼져 있어 봇을 띄우지 않습니다.")
+        return
+    try:
+        import discord_bot
+    except Exception as e:
+        print(f"[Bot] 봇을 불러오지 못했습니다: {e}")
+        return
+
+    def runner():
+        try:
+            discord_bot.run_bot(embedded=True)
+        except Exception as e:
+            print(f"[Bot] 봇이 멈췄습니다: {e}")
+
+    t = threading.Thread(target=runner, daemon=True, name="discord-bot")
+    t.start()
+    print("[Bot] 디스코드 봇을 함께 띄웠습니다.")
+
+
 if __name__ == '__main__':
     os.chdir(BASE_DIR)
     load_congestion()
+    start_discord_bot()
     # 이 작업은 알림 발송만 하는 게 아니라 실시간 데이터 갱신과
     # 혼잡도 관측도 함께 한다. 그래서 푸시 사용 여부와 상관없이 항상 돌린다.
     t = threading.Thread(target=background_push_worker, daemon=True)
