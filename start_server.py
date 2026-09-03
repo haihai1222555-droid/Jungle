@@ -457,8 +457,10 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({
                 "ok": True,
                 "webpush": HAS_WEBPUSH,
-                "alarms": len(load_subscriptions())
-            }).encode('utf-8'))
+                "alarms": len(load_subscriptions()),
+                "store": state_store.store_enabled(),
+                **discord_bot_health(),
+            }, ensure_ascii=False).encode('utf-8'))
             return
 
         if req_path == '/api/congestion':
@@ -701,6 +703,28 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+DISCORD_MODULE = None   # 봇을 띄웠으면 그 모듈. 상태를 물어보는 데 쓴다.
+
+
+def discord_bot_health():
+    """봇 상태를 /api/health 에 실어 보낸다.
+
+    로그를 뒤지지 않고도 밖에서 연결 여부를 알 수 있어야 한다.
+    UptimeRobot 의 키워드 감시로 botOnline:false 를 잡아도 된다.
+    """
+    if DISCORD_MODULE is None:
+        return {"botOnline": False, "bot": "꺼짐"}
+    st = DISCORD_MODULE.BOT_STATUS
+    out = {"botOnline": bool(st.get("online")), "bot": st.get("state")}
+    if st.get("detail"):
+        out["botDetail"] = st["detail"]
+    if st.get("name"):
+        out["botName"] = st["name"]
+        out["botGuilds"] = st.get("guilds", 0)
+    out["botSince"] = int(time.time() - st.get("since", time.time()))
+    return out
+
+
 def start_discord_bot():
     """디스코드 봇을 같은 프로세스에서 함께 띄운다.
 
@@ -714,17 +738,20 @@ def start_discord_bot():
     if (os.environ.get('RUN_DISCORD_BOT') or '1').strip() in ('0', 'false', 'no'):
         print("[Bot] RUN_DISCORD_BOT 가 꺼져 있어 봇을 띄우지 않습니다.")
         return
+    global DISCORD_MODULE
     try:
         import discord_bot
     except Exception as e:
         print(f"[Bot] 봇을 불러오지 못했습니다: {e}")
         return
+    DISCORD_MODULE = discord_bot
 
     def runner():
         try:
             discord_bot.run_bot(embedded=True)
         except Exception as e:
             print(f"[Bot] 봇이 멈췄습니다: {e}")
+            discord_bot.set_bot_status("멈춤", str(e)[:120])
 
     t = threading.Thread(target=runner, daemon=True, name="discord-bot")
     t.start()

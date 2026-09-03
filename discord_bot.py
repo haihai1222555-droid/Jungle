@@ -2617,9 +2617,26 @@ async def on_ready():
             print(f"❌ [Command Sync Error] {e}")
         _COMMANDS_SYNCED = True
 
+    BOT_STATUS.update(name=str(bot.user), guilds=len(bot.guilds))
+    set_bot_status("연결됨", f"{len(bot.guilds)}개 서버", online=True)
+
     if not check_laundry_alarms.is_running():
         check_laundry_alarms.start()
         print("⏰ [Alarm Daemon] 10초 주기 실시간 세탁실 센서 감시 루프 가동 시작!")
+
+# 슬래시 명령어를 이미 등록했는지. on_ready 가 재연결마다 불리기 때문에 필요하다.
+_COMMANDS_SYNCED = False
+
+# 봇이 지금 어떤 상태인지. 웹의 /api/health 가 이것을 읽어서 보여준다.
+# 로그를 뒤지지 않고도 밖에서 연결 상태를 알 수 있어야 한다.
+BOT_STATUS = {"state": "시작 전", "detail": "", "since": time.time(),
+              "online": False, "guilds": 0, "name": None}
+
+
+def set_bot_status(state, detail="", online=False):
+    BOT_STATUS.update(state=state, detail=detail, online=online,
+                      since=time.time())
+
 
 async def _reset_bot_session():
     """다음 재시도를 위해 연결을 정리한다.
@@ -2682,8 +2699,10 @@ async def start_bot_with_backoff():
         began = time.monotonic()
         try:
             print("🤖 [Discord Bot] Discord Gateway 연결 시도 중...")
+            set_bot_status("연결 시도 중")
             await bot.start(DISCORD_BOT_TOKEN)
             print("🛑 [Discord Bot] 연결이 끊겼습니다. 잠시 후 다시 연결합니다.")
+            set_bot_status("연결 끊김")
 
         except discord.errors.PrivilegedIntentsRequired:
             # 개발자 포털에서 MESSAGE CONTENT INTENT 를 켜지 않은 채
@@ -2710,6 +2729,7 @@ async def start_bot_with_backoff():
         except discord.errors.LoginFailure:
             print("=" * 60)
             print("❌ [토큰 오류] 봇 토큰이 올바르지 않습니다. 재시도하지 않고 종료합니다.")
+            set_bot_status("토큰 오류", "DISCORD_BOT_TOKEN 확인 필요")
             print("   DISCORD_BOT_TOKEN 환경변수를 확인해 주세요.")
             print("=" * 60)
             return
@@ -2730,6 +2750,7 @@ async def start_bot_with_backoff():
                 resume = (now_kst() + timedelta(seconds=wait)).strftime("%H:%M:%S")
                 print(f"⚠️ [Discord Rate Limit] 요청 제한(429). {wait:.0f}초 뒤 {resume} 에 다시 시도합니다.")
                 print(f"   근거: {why}")
+                set_bot_status("요청 제한 대기", f"{wait:.0f}초 ({why})")
                 if wait > 600:
                     print("   IP 차단으로 보입니다. 일찍 다시 붙으면 차단이 연장되므로 그대로 기다립니다.")
                     print("   (웹 대시보드는 영향을 받지 않습니다)")
@@ -2738,8 +2759,10 @@ async def start_bot_with_backoff():
                 delay = min(delay * 2, 300)
                 continue
             print(f"❌ [Discord HTTP Error] {e}")
+            set_bot_status("HTTP 오류", str(e)[:120])
         except Exception as e:
             print(f"❌ [Discord Error] {e}")
+            set_bot_status("오류", str(e)[:120])
 
         # 여기까지 왔다면 다시 붙어야 한다는 뜻이다.
         # 한참 잘 붙어 있다가 끊긴 것이라면 대기 시간을 처음부터 다시 센다.
