@@ -464,6 +464,8 @@ def render_floorplan_image(status_data):
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
+    # 그린 이미지는 바로 놓아준다. 2000x878 짜리라 쌓이면 메모리를 크게 먹는다.
+    img.close()
     buf.seek(0)
     return buf
 

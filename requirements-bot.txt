@@ -1,0 +1,7 @@
+# Discord bot only. Packaged into the zip as requirements.txt by build_bot_zip.py.
+# The web server's requirements.txt also has cryptography / pywebpush / py_vapid,
+# which the bot never imports. cryptography needs a Rust build when no prebuilt
+# wheel exists for the running Python, and that failure stops the bot from starting.
+discord.py>=2.3.2
+pillow>=10.0.0
+python-dotenv>=1.0.0

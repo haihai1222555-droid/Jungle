@@ -13,11 +13,14 @@ import zipfile
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE_DIR, "jungle_bot_discloud.zip")
 
+# zip 안에서는 이름을 바꿔 담는 파일 (원본 -> zip 안 이름)
+RENAMED = {"requirements-bot.txt": "requirements.txt"}
+
 REQUIRED = [
     "discloud.config",
     "discord_bot.py",
     "jungle_kb.py",
-    "requirements.txt",
+    "requirements-bot.txt",
     "NanumGothic-Bold.ttf",
     "NanumGothic-Regular.ttf",
 ]
@@ -37,8 +40,9 @@ def main():
         for name in REQUIRED + OPTIONAL:
             path = os.path.join(BASE_DIR, name)
             if os.path.exists(path):
-                z.write(path, name)
-                included.append(name)
+                arcname = RENAMED.get(name, name)
+                z.write(path, arcname)
+                included.append(arcname if arcname == name else f"{name} -> {arcname}")
 
         assets_dir = os.path.join(BASE_DIR, ASSETS)
         if os.path.isdir(assets_dir):
