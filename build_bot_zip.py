@@ -41,7 +41,14 @@ def main():
             path = os.path.join(BASE_DIR, name)
             if os.path.exists(path):
                 arcname = RENAMED.get(name, name)
-                z.write(path, arcname)
+                if name.endswith((".config", ".txt", ".py")):
+                    # 윈도우에서 편집하면 줄바꿈이 CRLF 가 된다.
+                    # 리눅스 쪽 설정 파서는 값 끝에 붙은 CR 때문에 통째로 실패한다.
+                    # (discloud.config 가 CRLF 라서 "환경 구성 오류" 가 났던 적이 있다)
+                    data = open(path, "rb").read().replace(b"\r\n", b"\n")
+                    z.writestr(arcname, data)
+                else:
+                    z.write(path, arcname)
                 included.append(arcname if arcname == name else f"{name} -> {arcname}")
 
         assets_dir = os.path.join(BASE_DIR, ASSETS)
