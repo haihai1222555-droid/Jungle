@@ -76,6 +76,25 @@ if HAS_WEBPUSH:
 
 CACHED_STATUS = {}
 CACHED_STATUS_AT = 0.0     # 마지막으로 받아온 시각
+# 미리 만들어 둔 응답 본문. 요청마다 json.dumps 를 다시 도는 것은 낭비다.
+# 200명이 동시에 볼 때는 이 직렬화 비용이 그대로 지연으로 나타난다.
+CACHED_STATUS_BODY = b'{}'
+
+# 원본 서버로 나가는 요청을 모아 두는 곳.
+# 예전에는 /api/stats 가 요청마다 원본으로 나갔다. 200명이면 200번이다.
+# 같은 것을 여러 명이 물으면 한 번만 다녀와서 나눠 준다.
+PROXY_CACHE_TTL = {'/api/stats': 60}
+_PROXY_CACHE = {}                    # 경로 -> (만료시각, 상태, 헤더, 본문)
+_PROXY_FETCH_LOCKS = {}              # 경로 -> Lock (같은 것을 두 번 안 가져오게)
+_PROXY_LOCK = threading.Lock()
+
+
+def _proxy_lock_for(key):
+    with _PROXY_LOCK:
+        lk = _PROXY_FETCH_LOCKS.get(key)
+        if lk is None:
+            lk = _PROXY_FETCH_LOCKS[key] = threading.Lock()
+        return lk
 CACHED_STATUS_MAX_AGE = 20  # 이보다 오래된 것은 못 믿고 직접 물어본다
 
 # 이보다 오래된 알림 등록은 지난 빨래로 보고 정리한다 (한 사이클은 길어야 2시간)
@@ -274,7 +293,7 @@ def build_congestion_profile():
 
 
 def background_push_worker():
-    global CACHED_STATUS, CACHED_STATUS_AT
+    global CACHED_STATUS, CACHED_STATUS_AT, CACHED_STATUS_BODY
     while True:
         try:
             time.sleep(5)
@@ -282,6 +301,8 @@ def background_push_worker():
                 req = urllib.request.Request(f"{TARGET_BASE}/api/status", headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=3) as res:
                     CACHED_STATUS = json.loads(res.read().decode('utf-8'))
+                    CACHED_STATUS_BODY = json.dumps(
+                        CACHED_STATUS, ensure_ascii=False).encode('utf-8')
                     CACHED_STATUS_AT = time.time()
                     record_congestion_sample(CACHED_STATUS)
             except Exception:
@@ -480,17 +501,87 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
         # 배경 작업이 5초마다 받아둔 것을 그대로 돌려준다.
         # 매번 터널까지 다시 다녀오면 느리고, 그쪽이 늦으면 통째로 실패했다.
         if req_path == '/api/status' and CACHED_STATUS:
-            if time.time() - CACHED_STATUS_AT <= CACHED_STATUS_MAX_AGE:
-                body = json.dumps(CACHED_STATUS, ensure_ascii=False).encode('utf-8')
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json; charset=utf-8')
-                self.send_header('X-Cache-Age', str(int(time.time() - CACHED_STATUS_AT)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
+            # 나이와 상관없이 캐시를 준다. 워커가 5초마다 새로 받아 두기 때문에
+            # 여기서 원본을 기다리면 200명이 동시에 200번 나가게 된다.
+            age = int(time.time() - CACHED_STATUS_AT)
+            body = CACHED_STATUS_BODY
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('X-Cache-Age', str(age))
+            if age > CACHED_STATUS_MAX_AGE:
+                self.send_header('X-Cache-Stale', '1')
+            self.end_headers()
+            self.wfile.write(body)
+            return
 
         if req_path.startswith('/api/'):
             target_url = TARGET_BASE + self.path
+            ttl = PROXY_CACHE_TTL.get(req_path)
+            if ttl:
+                cached = _PROXY_CACHE.get(self.path)
+                if cached and cached[0] > time.time():
+                    _, st, hdrs, content = cached
+                    self.send_response(st)
+                    for k, v in hdrs:
+                        self.send_header(k, v)
+                    self.send_header('Content-Length', str(len(content)))
+                    self.send_header('X-Proxy-Cache', 'HIT')
+                    self.end_headers()
+                    self.wfile.write(content)
+                    return
+                # 캐시가 없으면 한 명만 다녀오고 나머지는 그 결과를 쓴다
+                lk = _proxy_lock_for(self.path)
+                with lk:
+                    cached = _PROXY_CACHE.get(self.path)
+                    if cached and cached[0] > time.time():
+                        _, st, hdrs, content = cached
+                        self.send_response(st)
+                        for k, v in hdrs:
+                            self.send_header(k, v)
+                        self.send_header('Content-Length', str(len(content)))
+                        self.send_header('X-Proxy-Cache', 'HIT')
+                        self.end_headers()
+                        self.wfile.write(content)
+                        return
+                    try:
+                        req = urllib.request.Request(
+                            target_url, headers={'User-Agent': 'Mozilla/5.0'})
+                        with urllib.request.urlopen(req, timeout=6) as response:
+                            content = response.read()
+                            hdrs = [(k, v) for k, v in response.headers.items()
+                                    if k.lower() not in ('transfer-encoding',
+                                                         'content-length',
+                                                         'content-encoding')]
+                            _PROXY_CACHE[self.path] = (time.time() + ttl,
+                                                       response.status, hdrs, content)
+                            self.send_response(response.status)
+                            for k, v in hdrs:
+                                self.send_header(k, v)
+                            self.send_header('Content-Length', str(len(content)))
+                            self.send_header('X-Proxy-Cache', 'MISS')
+                            self.end_headers()
+                            self.wfile.write(content)
+                            return
+                    except Exception as e:
+                        stale = _PROXY_CACHE.get(self.path)
+                        if stale:      # 원본이 죽어도 옛 값이라도 준다
+                            _, st, hdrs, content = stale
+                            self.send_response(st)
+                            for k, v in hdrs:
+                                self.send_header(k, v)
+                            self.send_header('Content-Length', str(len(content)))
+                            self.send_header('X-Proxy-Cache', 'STALE')
+                            self.end_headers()
+                            self.wfile.write(content)
+                            return
+                        print(f"[Proxy] {req_path} 실패: {e}")
+                        self.send_response(502)
+                        self.send_header('Content-Type',
+                                         'application/json; charset=utf-8')
+                        self.end_headers()
+                        self.wfile.write(b'{"error":"upstream"}')
+                        return
             try:
                 req = urllib.request.Request(target_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=6) as response:

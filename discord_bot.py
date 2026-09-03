@@ -148,7 +148,16 @@ DISCORD_BOT_TOKEN = (
     or ""
 ).strip().strip('"').strip("'")
 
-STATUS_API_URL = os.environ.get("STATUS_API_URL") or "https://jungle-wash.onrender.com/api/status"
+# 웹과 같은 프로세스에서 도는 것이 기본이므로 내부 주소를 쓴다.
+# 밖으로 나갔다 오면 느리고, 웹 주소가 바뀔 때마다 봇이 멈춘다.
+# 따로 떨어뜨려 돌릴 때만 STATUS_API_URL 로 바깥 주소를 준다.
+_WEB_PORT = (os.environ.get("PORT") or "8000").strip()
+STATUS_API_URL = (os.environ.get("STATUS_API_URL")
+                  or f"http://127.0.0.1:{_WEB_PORT}/api/status")
+
+# 학생들에게 알려줄 대시보드 주소 (사람이 눌러서 들어갈 곳)
+SITE_URL = (os.environ.get("SITE_URL")
+            or "https://krafton-jungle.duckdns.org").rstrip("/")
 # 안내 사진을 두는 폴더
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
@@ -759,7 +768,7 @@ def build_floorplan_embed():
     embed.set_image(url="attachment://floorplan.png")
     embed.set_footer(
         text="크래프톤 정글 스마트 세탁실 · Realtime LG ThinQ Data",
-        icon_url="https://jungle-wash.onrender.com/jungle-logo-192.png"
+        icon_url=f"{SITE_URL}/jungle-logo-192.png"
     )
     return embed
 
@@ -888,7 +897,7 @@ def build_info_embed(user_id=None):
     )
     embed.add_field(
         name="💻 웹 대시보드",
-        value="https://jungle-wash.onrender.com\n혼잡도·골든타임·AI 비서는 웹에서 볼 수 있습니다.",
+        value=f"{SITE_URL}\n혼잡도·골든타임·AI 비서는 웹에서 볼 수 있습니다.",
         inline=False,
     )
 
