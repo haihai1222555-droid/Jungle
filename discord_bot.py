@@ -2328,6 +2328,8 @@ async def cmd_alarm_slash(interaction: discord.Interaction):
 async def check_laundry_alarms():
     if not active_alarms:
         return
+    if api_blocked():
+        return      # 막힌 동안 알림을 보내려 하면 차단이 길어진다
 
     # 10초마다 도는 작업이라 여기서 멈추면 봇 전체가 끊긴다
     status_data = await asyncio.to_thread(fetch_live_status)
@@ -2514,6 +2516,54 @@ def strip_mention(content, me):
     return content.strip()
 
 
+# 디스코드가 IP 단위로 요청을 막을 때가 있다 (공용 IP 를 쓰는 곳에서 잦다).
+# 막힌 동안 계속 두드리면 차단이 길어지므로, 아예 요청을 보내지 않고 쉰다.
+# 게이트웨이 연결은 멀쩡하므로 봇이 죽는 것은 아니다.
+API_BLOCKED_UNTIL = 0.0
+
+
+def api_blocked():
+    return time.time() < API_BLOCKED_UNTIL
+
+
+def note_api_block(exc, where=""):
+    """429 를 만나면 알려준 시간만큼 요청을 멈춘다."""
+    global API_BLOCKED_UNTIL
+    wait = min(max(_retry_after_of(exc) or 60.0, 5.0), 3600.0)
+    until = time.time() + wait
+    if until > API_BLOCKED_UNTIL:
+        API_BLOCKED_UNTIL = until
+        print(f"⚠️ [Discord API 제한] {where} 에서 429. "
+              f"{wait:.0f}초 동안 요청을 멈춥니다. (게이트웨이 연결은 유지)")
+        set_bot_status("API 제한", f"{wait:.0f}초 뒤 재개", online=True)
+
+
+class QuietTyping:
+    """'입력 중' 표시. 실패해도 무시한다.
+
+    겉치레일 뿐인데 이것 때문에 답을 통째로 못 보내면 안 된다.
+    실제로 여기서 429 가 나 답이 안 나간 적이 있다.
+    """
+
+    def __init__(self, channel):
+        self._cm = channel.typing()
+
+    async def __aenter__(self):
+        try:
+            await self._cm.__aenter__()
+        except Exception:
+            self._cm = None
+        return self
+
+    async def __aexit__(self, *exc):
+        if self._cm is not None:
+            try:
+                await self._cm.__aexit__(*exc)
+            except Exception:
+                pass
+        return False
+
+
 @bot.event
 async def on_message(message: discord.Message):
     # 봇 자신과 다른 봇의 말은 무시한다 (서로 무한 응답하는 것을 막는다)
@@ -2533,8 +2583,12 @@ async def on_message(message: discord.Message):
     if not text:
         return
 
+    # 막혀 있는 동안에는 조용히 넘어간다. 여기서 두드리면 차단이 길어진다.
+    if api_blocked():
+        return
+
     try:
-        async with message.channel.typing():
+        async with QuietTyping(message.channel):
             result, embed, board = await run_assistant(message.author.id, text, private=is_dm)
         # 공용 채널에서는 여러 명이 동시에 말을 걸 수 있으므로
         # 누구에게 하는 답인지 이름을 붙여 헷갈리지 않게 한다.
@@ -2564,6 +2618,16 @@ async def on_message(message: discord.Message):
             await message.reply(body or "…", **kwargs)
     except discord.Forbidden:
         pass
+    except discord.HTTPException as e:
+        if e.status == 429:
+            # 막혔다고 알려주는 말조차 요청이다. 여기서는 아무것도 보내지 않는다.
+            note_api_block(e, "on_message")
+            return
+        print(f"[on_message Error] {e}")
+        try:
+            await message.reply("⚠️ 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.", mention_author=False)
+        except Exception:
+            pass
     except Exception as e:
         print(f"[on_message Error] {e}")
         try:
