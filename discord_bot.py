@@ -2324,6 +2324,33 @@ async def cmd_alarm_slash(interaction: discord.Interaction):
 # =========================================================
 # 백그라운드 태스크: 10초마다 실시간 센서 감시 & DM 발송
 # =========================================================
+_USER_CACHE = {}
+
+
+async def resolve_user(user_id):
+    """알림을 실제로 보낼 때만 사용자를 찾는다.
+
+    예전에는 10초짜리 감시 루프가 알림마다 미리 찾아두었다.
+    그런데 get_user 는 캐시만 보고, 재연결하면 캐시가 비워지며,
+    DM 으로만 대화한 사람은 애초에 캐시에 없다.
+    그래서 사실상 10초마다 알림 수만큼 fetch_user 요청이 나갔다.
+    보낼 알림이 없을 때가 대부분인데도 계속 두드린 셈이고,
+    이것이 디스코드가 IP 를 막은 원인으로 보인다.
+    """
+    user = bot.get_user(user_id)
+    if user is not None:
+        return user
+    user = _USER_CACHE.get(user_id)
+    if user is not None:
+        return user
+    try:
+        user = await bot.fetch_user(user_id)
+    except Exception:
+        return None
+    _USER_CACHE[user_id] = user
+    return user
+
+
 @tasks.loop(seconds=10)
 async def check_laundry_alarms():
     if not active_alarms:
@@ -2365,17 +2392,12 @@ async def check_laundry_alarms():
         remain_min = (timer.get("remainHour", 0) * 60) + timer.get("remainMinute", 0)
         is_error = run_state == "ERROR" or bool(unit_data.get("error"))
 
-        user = bot.get_user(item["userId"])
-        if not user:
-            try:
-                user = await bot.fetch_user(item["userId"])
-            except Exception:
-                user = None
 
         # 🚨 1) 가동 중 에러/중단 발생 시 즉시 알림
         if is_error and not item.get("notifiedError"):
             item["notifiedError"] = True
             changed = True
+            user = await resolve_user(item["userId"])
             if user:
                 try:
                     await user.send(
@@ -2389,6 +2411,7 @@ async def check_laundry_alarms():
         if remain_min <= 5 and remain_min > 0 and not item.get("notified5Min"):
             item["notified5Min"] = True
             changed = True
+            user = await resolve_user(item["userId"])
             if user:
                 try:
                     await user.send(
@@ -2407,6 +2430,7 @@ async def check_laundry_alarms():
             item["completedAt"] = now_ts
             changed = True
             # 여기서 알림을 지우지 않는다. 실제로 빨래를 가져갔는지 계속 지켜본다.
+            user = await resolve_user(item["userId"])
             if user:
                 try:
                     await user.send(
@@ -2453,6 +2477,7 @@ async def check_laundry_alarms():
                 to_remove.append(item)
                 mins = int(waited // 60)
                 print(f"[Alarm] 방치 감지: {item.get('deviceName', '?')} (완료 후 {mins}분 경과)")
+                user = await resolve_user(item["userId"])
                 if user:
                     try:
                         await user.send(
