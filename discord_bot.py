@@ -2638,6 +2638,18 @@ def set_bot_status(state, detail="", online=False):
                       since=time.time())
 
 
+# discord.py 의 close() 는 마지막에 self.loop 를 MISSING 으로 되돌린다.
+# 그런데 login() 은 loop 가 '최초값'(_LoopSentinel)일 때만 asyncio 객체를
+# 다시 만든다. MISSING 은 최초값이 아니라서 그 준비가 통째로 건너뛰어지고,
+# 연결은 되지만 첫 이벤트에서 self.loop.create_task 가 터진다.
+#   AttributeError: '_MissingSentinel' object has no attribute 'create_task'
+# 그래서 최초값으로 정확히 되돌려 놓아야 한다.
+try:
+    from discord.client import _loop as _LOOP_SENTINEL
+except Exception:      # 라이브러리가 바뀌면 아래에서 직접 준비한다
+    _LOOP_SENTINEL = None
+
+
 async def _reset_bot_session():
     """다음 재시도를 위해 연결을 정리한다.
 
@@ -2659,6 +2671,11 @@ async def _reset_bot_session():
     try:
         bot.clear()
         bot.http.connector = discord.utils.MISSING
+        if _LOOP_SENTINEL is not None:
+            # 다음 login() 이 asyncio 객체를 새로 만들도록 최초값으로 되돌린다
+            bot.loop = _LOOP_SENTINEL
+        else:
+            await bot._async_setup_hook()
     except Exception as e:
         print(f"[Discord] 상태 초기화 중: {e}")
 
