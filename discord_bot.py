@@ -2710,6 +2710,35 @@ def _retry_after_of(exc):
     return None
 
 
+# 연결을 시작하고 이 시간 안에 준비가 끝나지 않으면 이상한 것으로 본다.
+READY_TIMEOUT = int(os.environ.get("READY_TIMEOUT") or 180)
+
+
+async def _ready_watchdog(timeout=None):
+    """붙긴 했는데 준비가 안 끝나는 상태를 끊어낸다.
+
+    게이트웨이에는 연결됐지만 내부 상태가 깨져 이벤트를 처리하지 못하면,
+    디스코드가 하트비트 없음을 보고 연결을 끊고 discord.py 는 스스로
+    짧은 간격으로 다시 붙기를 반복한다. 밖에서는 '연결 시도 중' 으로만
+    보이는데 실제로는 IDENTIFY 를 계속 날리는 것이라, 결국 IP 가 막힌다.
+    (실제로 이렇게 한 시간 차단당했다.)
+
+    그럴 바에는 우리가 끊고 넉넉히 쉬었다 다시 붙는 편이 낫다.
+    """
+    timeout = READY_TIMEOUT if timeout is None else timeout
+    await asyncio.sleep(timeout)
+    if BOT_STATUS.get("online"):
+        return
+    print(f"⚠️ [Discord] 연결한 지 {timeout}초가 지나도 준비가 끝나지 않았습니다.")
+    print("   내부 상태가 깨진 것으로 보고 연결을 끊습니다.")
+    print("   이대로 두면 재접속을 반복하다 IP 가 차단됩니다.")
+    set_bot_status("응답 없음", f"{timeout}초 안에 준비되지 않음")
+    try:
+        await bot.close()
+    except Exception as e:
+        print(f"[Discord] 끊는 중: {e}")
+
+
 async def start_bot_with_backoff():
     delay = 15
     while True:
@@ -2717,7 +2746,11 @@ async def start_bot_with_backoff():
         try:
             print("🤖 [Discord Bot] Discord Gateway 연결 시도 중...")
             set_bot_status("연결 시도 중")
-            await bot.start(DISCORD_BOT_TOKEN)
+            watchdog = asyncio.create_task(_ready_watchdog())
+            try:
+                await bot.start(DISCORD_BOT_TOKEN)
+            finally:
+                watchdog.cancel()
             print("🛑 [Discord Bot] 연결이 끊겼습니다. 잠시 후 다시 연결합니다.")
             set_bot_status("연결 끊김")
 
