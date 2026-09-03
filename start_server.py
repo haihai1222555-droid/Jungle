@@ -724,6 +724,7 @@ def discord_bot_health():
     # 등록된 알림 수. 감시 루프가 얼마나 일하는지 가늠하는 데 쓴다.
     try:
         out["botAlarms"] = len(DISCORD_MODULE.active_alarms)
+        out["botApi"] = DISCORD_MODULE.api_call_stats()
     except Exception:
         pass
     out["botSince"] = int(time.time() - st.get("since", time.time()))

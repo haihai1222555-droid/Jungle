@@ -9,6 +9,7 @@ import time
 import random
 import urllib.request
 import urllib.error
+from collections import deque
 from datetime import datetime, timedelta, timezone
 import discord
 from discord import app_commands
@@ -2324,6 +2325,50 @@ async def cmd_alarm_slash(interaction: discord.Interaction):
 # =========================================================
 # 백그라운드 태스크: 10초마다 실시간 센서 감시 & DM 발송
 # =========================================================
+# 디스코드로 나가는 요청을 센다.
+# IP 가 자꾸 막히는데 원인이 우리 봇인지 같은 IP 를 쓰는 남인지
+# 짐작만으로는 알 수 없었다. 실제로 몇 번 보내는지 봐야 한다.
+API_CALL_LOG = deque(maxlen=3000)   # (시각, "METHOD /경로")
+API_CALL_TOTAL = 0
+
+
+def install_request_counter():
+    """디스코드 REST 요청이 지나가는 길목 하나를 감싼다."""
+    http = bot.http
+    if getattr(http, "_counted", False):
+        return
+    original = http.request
+
+    async def counted(route, **kwargs):
+        global API_CALL_TOTAL
+        API_CALL_TOTAL += 1
+        try:
+            key = f"{route.method} {route.path}"
+        except Exception:
+            key = "?"
+        API_CALL_LOG.append((time.time(), key))
+        return await original(route, **kwargs)
+
+    http.request = counted
+    http._counted = True
+
+
+def api_call_stats():
+    """최근 요청 수와 어느 곳을 많이 불렀는지 돌려준다."""
+    now = time.time()
+    recent = [k for t, k in API_CALL_LOG if now - t <= 300]
+    counts = {}
+    for k in recent:
+        counts[k] = counts.get(k, 0) + 1
+    top = sorted(counts.items(), key=lambda kv: -kv[1])[:5]
+    return {
+        "total": API_CALL_TOTAL,
+        "last5min": len(recent),
+        "perMin": round(len(recent) / 5.0, 1),
+        "top": [f"{k} x{v}" for k, v in top],
+    }
+
+
 _USER_CACHE = {}
 
 
@@ -2927,6 +2972,7 @@ def run_bot(embedded=False):
         print("=" * 60)
         return
     start_state_sync()
+    install_request_counter()
     asyncio.run(start_bot_with_backoff())
 
 
