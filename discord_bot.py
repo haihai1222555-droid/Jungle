@@ -7,7 +7,6 @@ import json
 import asyncio
 import time
 import random
-import threading
 import urllib.request
 import urllib.error
 from datetime import datetime, timedelta, timezone
@@ -29,6 +28,15 @@ try:
     sys.stderr.reconfigure(encoding='utf-8', line_buffering=True)
 except Exception:
     pass
+
+# 콘솔이 이모지나 특수문자를 못 찍는 환경(윈도우 cp949 등)에서도
+# print 가 UnicodeEncodeError 로 죽지 않게 한다.
+# 특히 오류를 알리는 print 가 죽으면 그 스레드가 통째로 멈춘다.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except Exception:
+        pass
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -196,118 +204,30 @@ def get_font(size, bold=False):
     return ImageFont.load_default()
 
 # =========================================================
-# 데이터 로드 / 저장 헬퍼
-# ---------------------------------------------------------
-# Render 는 재시작마다 파일이 지워진다. 그러면 배포할 때마다
-# 등록된 알림과 /채널설정 이 사라진다.
-# 그래서 파일에 쓰되, 외부 저장소가 설정되어 있으면 거기에도 남긴다.
-#
-# 외부 저장소는 Upstash Redis 의 HTTP 방식을 쓴다.
-# 따로 설치할 것이 없고(그냥 HTTP 요청이다), 무료 한도로 충분하다.
-# 설정하지 않으면 예전처럼 파일만 쓴다 — 동작은 그대로다.
-# 나중에 다른 곳으로 옮기려면 _remote_get / _remote_set 두 함수만 고치면 된다.
-# =========================================================
-# 웹 서버와 한 프로세스에서 도는 중인지. run_bot(embedded=True) 가 켠다.
-EMBEDDED = False
-
-STORE_URL = (os.environ.get("UPSTASH_REDIS_REST_URL") or "").strip().rstrip("/")
-STORE_TOKEN = (os.environ.get("UPSTASH_REDIS_REST_TOKEN") or "").strip()
-STORE_PREFIX = (os.environ.get("STATE_PREFIX") or "junglewash").strip()
-
-_STATE_DIRTY = {}          # 아직 외부에 못 보낸 것
-_STATE_LOCK = threading.Lock()
-
-
-def store_enabled():
-    return bool(STORE_URL and STORE_TOKEN)
-
-
-def _remote_call(command):
-    req = urllib.request.Request(
-        STORE_URL,
-        data=json.dumps(command).encode("utf-8"),
-        headers={"Authorization": f"Bearer {STORE_TOKEN}",
-                 "Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=10) as res:
-        return json.loads(res.read().decode("utf-8")).get("result")
-
-
-def _remote_get(name):
-    return _remote_call(["GET", f"{STORE_PREFIX}:{name}"])
-
-
-def _remote_set(name, raw):
-    return _remote_call(["SET", f"{STORE_PREFIX}:{name}", raw])
-
-
-def _state_path(name):
-    return os.path.join(BASE_DIR, f"{name}.json")
-
-
-def state_load(name, default):
-    """외부 저장소를 먼저 보고, 없으면 파일을 본다."""
-    if store_enabled():
-        try:
-            raw = _remote_get(name)
-            if raw:
-                data = json.loads(raw)
-                print(f"[State] '{name}' 을(를) 외부 저장소에서 불러왔습니다.")
-                return data
-        except Exception as e:
-            print(f"[State] 외부 저장소 읽기 실패({name}): {e} — 파일로 대체합니다.")
-    path = _state_path(name)
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"[State] 파일 읽기 실패({name}): {e}")
-    return default
-
-
-def state_save(name, value):
-    """파일에 바로 쓰고, 외부 저장소에는 뒤에서 따로 보낸다.
-
-    외부로 보내는 일은 네트워크라 느릴 수 있다.
-    여기서 기다리면 봇 전체가 멈추므로 표시만 해두고 넘어간다.
-    """
-    try:
-        path = _state_path(name)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(value, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-    except Exception as e:
-        print(f"[State] 파일 저장 실패({name}): {e}")
-    if store_enabled():
-        with _STATE_LOCK:
-            _STATE_DIRTY[name] = json.dumps(value, ensure_ascii=False)
-
-
-def _state_sync_worker():
-    """밀린 것들을 몇 초에 한 번씩 외부 저장소로 보낸다."""
-    while True:
-        time.sleep(5)
-        with _STATE_LOCK:
-            pending = dict(_STATE_DIRTY)
-            _STATE_DIRTY.clear()
-        for name, raw in pending.items():
-            try:
-                _remote_set(name, raw)
-            except Exception as e:
-                print(f"[State] 외부 저장소 쓰기 실패({name}): {e} — 다음에 다시 시도합니다.")
-                with _STATE_LOCK:      # 실패한 것은 되돌려 다음 차례에 다시 보낸다
-                    _STATE_DIRTY.setdefault(name, raw)
-
+# 상태 저장은 웹 서버와 같은 것을 쓴다 (state_store.py).
+# Render 는 재시작마다 파일이 지워지므로 바깥에도 남겨야 한다.
+from state_store import (  # noqa: E402
+    state_load, state_save, store_enabled, start_state_sync,
+)
 
 active_alarms = []
 
 
+_ALARMS_LOADED = False
+
+
 def load_alarms():
-    global active_alarms
+    """등록된 알림을 불러온다. 프로세스당 한 번만 한다.
+
+    on_ready 는 재연결마다 다시 불린다. 그때마다 다시 불러오면
+    아직 바깥으로 못 보낸 최근 변경(등록/취소)이 옛 값으로 되돌아간다.
+    """
+    global active_alarms, _ALARMS_LOADED
+    if _ALARMS_LOADED:
+        return
     data = state_load("discord_alarms", [])
     active_alarms = data if isinstance(data, list) else []
+    _ALARMS_LOADED = True
 
 
 def save_alarms():
@@ -1317,6 +1237,9 @@ def admin_diagnostics():
                  f"→ 최대 {len(GEMINI_API_KEYS) * len(GEMINI_MODELS)}가지 조합")
     lines.append(f"• 예비 엔진(Groq) {'사용 가능' if GROQ_API_KEY else '미설정'}")
     lines.append(f"• 등록된 알림 {len(active_alarms)}개")
+    lines.append("• 상태 저장: " + ("외부 저장소 사용 중 (재배포해도 유지)"
+                                    if store_enabled() else
+                                    "파일만 사용 ⚠️ 재배포하면 사라집니다"))
     age = int(time.time() - _LAST_STATUS_AT) if _LAST_STATUS_AT else None
     lines.append(f"• 마지막 실시간 조회 {age}초 전" if age is not None else "• 실시간 조회 기록 없음")
     m = measured_busy_slots()
@@ -2698,21 +2621,6 @@ async def on_ready():
         check_laundry_alarms.start()
         print("⏰ [Alarm Daemon] 10초 주기 실시간 세탁실 센서 감시 루프 가동 시작!")
 
-def start_state_sync():
-    """외부 저장소로 밀린 내용을 보내는 일꾼을 띄운다. 설정이 없으면 띄우지 않는다."""
-    if not store_enabled():
-        print("[State] 외부 저장소가 설정되지 않았습니다. 파일에만 저장합니다.")
-        print("        (Render 처럼 재시작 시 파일이 지워지는 곳에서는 알림이 사라집니다)")
-        return
-    t = threading.Thread(target=_state_sync_worker, daemon=True)
-    t.start()
-    print(f"[State] 외부 저장소를 사용합니다. (접두어 {STORE_PREFIX})")
-
-
-# 슬래시 명령어를 이미 등록했는지. on_ready 가 재연결마다 불리기 때문에 필요하다.
-_COMMANDS_SYNCED = False
-
-
 async def _reset_bot_session():
     """다음 재시도를 위해 연결을 정리한다.
 
@@ -2736,6 +2644,17 @@ async def _reset_bot_session():
         bot.http.connector = discord.utils.MISSING
     except Exception as e:
         print(f"[Discord] 상태 초기화 중: {e}")
+
+
+# 429 로 HTTPException 이 여기까지 올라오는 경우는 사실상 하나뿐이다.
+# discord.py 는 보통의 요청 제한은 안에서 알아서 기다렸다 재시도하고,
+# Via 헤더가 없는 응답(= 클라우드플레어가 막은 것)만 예외로 던진다.
+#   if not response.headers.get('Via') or isinstance(data, str):
+#       raise HTTPException(response, data)   # Banned by Cloudflare more than likely
+# 이 차단은 보통 한 시간짜리다. 우리가 임의로 일찍 두드리면 차단이 연장된다.
+# 그래서 알려준 시간을 깎지 않고 그대로 기다린다.
+# 이 상한은 값이 터무니없을 때(파싱 실수 등)를 막는 안전장치일 뿐이다.
+RATE_LIMIT_MAX_WAIT = 3600
 
 
 def _retry_after_of(exc):
@@ -2797,11 +2716,23 @@ async def start_bot_with_backoff():
 
         except discord.errors.HTTPException as e:
             if e.status == 429:
-                # 디스코드가 알려준 시간을 우선 따른다. 흔들림을 조금 섞어
-                # 여러 인스턴스가 동시에 다시 두드리는 일을 피한다.
-                wait = _retry_after_of(e) or delay
-                wait = min(max(wait, 5.0), 900.0) + random.uniform(0, 5)
-                print(f"⚠️ [Discord Rate Limit] 요청 제한(429). {wait:.0f}초 후 다시 시도합니다.")
+                told = _retry_after_of(e)
+                if told:
+                    # 서버가 알려준 시간은 깎지 않는다. 일찍 두드리면 차단이 길어진다.
+                    wait = min(told, RATE_LIMIT_MAX_WAIT)
+                    why = "디스코드가 알려준 시간"
+                else:
+                    # 알려주지 않았으면 우리 쪽 간격으로 조심스럽게 늘려간다.
+                    wait = delay
+                    why = "디스코드가 시간을 알려주지 않아 우리 쪽 재시도 간격을 씀"
+                # 흔들림을 조금 섞어 여러 곳에서 동시에 다시 두드리는 일을 피한다.
+                wait = max(wait, 5.0) + random.uniform(0, 5)
+                resume = (now_kst() + timedelta(seconds=wait)).strftime("%H:%M:%S")
+                print(f"⚠️ [Discord Rate Limit] 요청 제한(429). {wait:.0f}초 뒤 {resume} 에 다시 시도합니다.")
+                print(f"   근거: {why}")
+                if wait > 600:
+                    print("   IP 차단으로 보입니다. 일찍 다시 붙으면 차단이 연장되므로 그대로 기다립니다.")
+                    print("   (웹 대시보드는 영향을 받지 않습니다)")
                 await _reset_bot_session()
                 await asyncio.sleep(wait)
                 delay = min(delay * 2, 300)

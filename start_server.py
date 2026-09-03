@@ -6,6 +6,7 @@ import urllib.request
 import urllib.error
 import json
 import threading
+import state_store
 import time
 from datetime import datetime, timedelta, timezone
 import base64
@@ -20,6 +21,15 @@ except Exception:
     pass
 
 # Render 등 PaaS 는 실행 포트를 PORT 로 지정해준다. 없으면 로컬 기본값.
+# 콘솔이 이모지나 특수문자를 못 찍는 환경(윈도우 cp949 등)에서도
+# print 가 UnicodeEncodeError 로 죽지 않게 한다.
+# 특히 오류를 알리는 print 가 죽으면 그 스레드가 통째로 멈춘다.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except Exception:
+        pass
+
 PORT = int(os.environ.get('PORT') or 8000)
 TARGET_BASE = os.environ.get('TARGET_BASE') or "https://miracle-beautifully-onto-ser.trycloudflare.com"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -101,6 +111,8 @@ def save_subscriptions(subs):
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(subs, f, ensure_ascii=False, indent=2)
             os.replace(tmp, SUBS_FILE)
+            # 파일은 Render 재시작 때 사라진다. 바깥에도 남겨 둔다.
+            state_store.state_push('push_subscriptions', subs)
         except Exception as e:
             print(f"[Subs Save Error] {e}")
 
@@ -167,6 +179,7 @@ def save_congestion():
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(CONGESTION, f, ensure_ascii=False)
         os.replace(tmp, CONGESTION_FILE)
+        state_store.state_push('congestion_stats', CONGESTION)
     except Exception as e:
         print(f"[Congestion Save Error] {e}")
 
@@ -720,6 +733,11 @@ def start_discord_bot():
 
 if __name__ == '__main__':
     os.chdir(BASE_DIR)
+    # Render 는 재배포마다 파일이 지워진다.
+    # 파일이 없으면 바깥 저장소에서 되살린다. 없으면 그냥 새로 시작한다.
+    state_store.start_state_sync()
+    state_store.restore_file('push_subscriptions', SUBS_FILE, '웹 푸시 구독')
+    state_store.restore_file('congestion_stats', CONGESTION_FILE, '혼잡도 관측 기록')
     load_congestion()
     start_discord_bot()
     # 이 작업은 알림 발송만 하는 게 아니라 실시간 데이터 갱신과

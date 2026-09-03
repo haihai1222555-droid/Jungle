@@ -19,6 +19,7 @@ RENAMED = {"requirements-bot.txt": "requirements.txt"}
 REQUIRED = [
     "discloud.config",
     "discord_bot.py",
+    "state_store.py",
     "jungle_kb.py",
     "requirements-bot.txt",
     "NanumGothic-Bold.ttf",
