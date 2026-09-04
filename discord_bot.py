@@ -1141,6 +1141,15 @@ _QUOTA_LOCK = threading.Lock()
 QUOTA_COOLDOWN_DEFAULT = 60    # 알려주지 않으면 1분 쉬어 본다
 QUOTA_COOLDOWN_MAX = 3600
 
+# 한 번 요청에 이만큼까지만 기다린다. 정상 응답이 2초 안팎이다.
+GEMINI_TIMEOUT = 5
+# 제미나이에 쓸 전체 시간. 이걸 넘기면 미련 없이 Groq 으로 넘어간다.
+# Groq 이 1.5~2초에 답하므로 최악이 10초쯤에서 끝난다.
+GEMINI_BUDGET = 8
+# 늘어지거나 서버가 아플 때 그 조합을 쉬게 하는 시간.
+# 기억하지 않으면 다음 사람이 같은 시간을 또 버린다.
+SLOW_COOLDOWN = 30
+
 
 def _mark_key_dead(key, reason=""):
     """되살아나지 않는 키를 표시한다.
@@ -2135,8 +2144,9 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
         },
     }
 
-    # 키와 모델을 많이 돌리다 보면 오래 걸릴 수 있어 전체 시간에 상한을 둔다
-    deadline = time.monotonic() + 25
+    # 키와 모델을 많이 돌리다 보면 오래 걸릴 수 있어 전체 시간에 상한을 둔다.
+    # 넉넉히 잡으면 한 번 늘어질 때 사용자가 그 시간을 통째로 기다린다.
+    deadline = time.monotonic() + GEMINI_BUDGET
 
     tried = 0
     for model in GEMINI_MODELS:
@@ -2146,7 +2156,10 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
         # 한 모델 안에서 키를 돌려 본다. 한도(429)에 걸린 키만 건너뛰고,
         # 그 밖의 오류면 이 모델은 포기하고 다음 모델로 넘어간다.
         for key in GEMINI_API_KEYS:
-            if time.monotonic() > deadline:
+            # 남은 시간이 한 번 왕복도 못 할 만큼이면 시작하지 않는다.
+            # 시작해 놓고 중간에 못 끊으므로, 걸기 전에 판단해야 한다.
+            left = deadline - time.monotonic()
+            if left < 2:
                 break
             # 아까 한도에 걸린 조합은 쉬는 중이다. 두드려 봐야 또 거절이다.
             if not _quota_ok(model, key):
@@ -2158,9 +2171,10 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                     data=json.dumps(body).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                 )
-                # 정상 응답이 1.2초 안팎이다. 15초까지 기다리면 한 번 늘어질 때
+                # 정상 응답이 1.2초 안팎이다. 오래 기다리면 한 번 늘어질 때
                 # 사용자가 그만큼 통째로 기다린다.
-                with urllib.request.urlopen(req, timeout=8) as res:
+                # 남은 예산보다 길게 잡지 않는다.
+                with urllib.request.urlopen(req, timeout=min(GEMINI_TIMEOUT, left)) as res:
                     data = json.loads(res.read().decode("utf-8"))
                 raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
                 # 일부 모델이 ```json ... ``` 로 감싸 보낸다. 그대로 파싱하면 실패한다.
@@ -2189,10 +2203,17 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                     # 모델 문제가 아니므로 다음 키로 이어 간다.
                     _mark_key_dead(key, f"HTTP {e.code}")
                     continue
+                # 5xx 는 구글 쪽이 아픈 것이다. 바로 다시 물어도 또 아프다.
+                if e.code >= 500:
+                    _quota_block(model, key, SLOW_COOLDOWN)
                 print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} HTTP {e.code}")
                 break
             except Exception as e:
-                print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} 실패: {e}")
+                # 늘어진 조합을 기억해 둔다.
+                # 안 그러면 다음 사람도 같은 시간을 그대로 버린다.
+                _quota_block(model, key, SLOW_COOLDOWN)
+                print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} "
+                      f"실패({e}) — {SLOW_COOLDOWN}초 쉼")
                 break
     if tried == 0:
         blocked, total, _ = quota_status()
