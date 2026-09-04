@@ -80,7 +80,7 @@ const btnRefresh = document.getElementById('btnRefresh');
 // 1. 상태 텍스트
 const STATE_TRANSLATION = {
   POWER_OFF:    { label: '대기 중 (사용 가능)', isFree: true, isError: false },
-  INITIAL:      { label: '선택 완료(시작 준비중)', isFree: true, isError: false },
+  INITIAL:      { label: '선택 완료(시작 기다리는 중...)', isFree: false, isError: false },
   COMPLETE:     { label: '세탁 완료 (수거 대기)', isFree: false, isError: false },
   RUNNING:      { label: '작동 중',             isFree: false, isError: false },
   DETECTING:    { label: '무게 감지 중',         isFree: false, isError: false },
@@ -269,7 +269,8 @@ function towerHasData(name) {
 }
 
 function isUnitFree(state) {
-  return ['POWER_OFF', 'INITIAL', 'COMPLETE'].includes(state);
+  // INITIAL 은 코스까지 골라두고 시작만 안 누른 것이라 빈 기기가 아니다.
+  return ['POWER_OFF', 'COMPLETE'].includes(state);
 }
 
 function isUnitRunning(state) {
@@ -1338,9 +1339,13 @@ function createTowerCardElement(tower, isFloorplan = false) {
   const wRunning = isUnitRunning(wState);
   const dRunning = isUnitRunning(dState);
 
+  const wInit = wState === 'INITIAL';
+  const dInit = dState === 'INITIAL';
+
   let cardClass = 'washtower-card';
   if (noData) cardClass += ' is-nodata';
   else if (hasError) cardClass += ' is-error';
+  else if ((wInit || dInit) && !wRunning && !dRunning) cardClass += ' is-inuse';
   else if (wRunning && dRunning) cardClass += ' is-active-both';
   else if (wRunning) cardClass += ' is-active-wash';
   else if (dRunning) cardClass += ' is-active-dry';
@@ -1348,6 +1353,7 @@ function createTowerCardElement(tower, isFloorplan = false) {
   let statusPillHtml = '';
   if (noData) statusPillHtml = `<span class="wt-status-pill pill-nodata">정보 없음</span>`;
   else if (hasError) statusPillHtml = `<span class="wt-status-pill pill-error">점검 필요</span>`;
+  else if ((wInit || dInit) && !wRunning && !dRunning) statusPillHtml = `<span class="wt-status-pill pill-inuse">사용 중</span>`;
   else if (wRunning && dRunning) statusPillHtml = `<span class="wt-status-pill pill-both">전체 가동 중</span>`;
   else if (wRunning) statusPillHtml = `<span class="wt-status-pill pill-washing">세탁 가동 중</span>`;
   else if (dRunning) statusPillHtml = `<span class="wt-status-pill pill-drying">건조 가동 중</span>`;
@@ -1398,7 +1404,7 @@ function createTowerCardElement(tower, isFloorplan = false) {
           <!-- 1행: 기기 구분 & 타이머 -->
           <div class="unit-header-line">
             <span class="unit-name">${isFloorplan ? '건조기' : 'UPPER · 건조기'}</span>
-            <span class="unit-timer ${dTimerStr && !noData ? '' : 'dim'}">${noData ? '정보 없음' : (dTimerStr || (isDryerErr ? '점검 필요' : (dState === 'INITIAL' ? '시작 전' : '대기 중')))}</span>
+            <span class="unit-timer ${dTimerStr && !noData ? '' : 'dim'}">${noData ? '정보 없음' : (dTimerStr || (isDryerErr ? '점검 필요' : (dState === 'INITIAL' ? '시작 기다리는 중' : '대기 중')))}</span>
           </div>
 
           <!-- 2행: 현재 상태/코스 & 알림 버튼 -->
@@ -1445,7 +1451,7 @@ function createTowerCardElement(tower, isFloorplan = false) {
           <!-- 1행: 기기 구분 & 타이머 -->
           <div class="unit-header-line">
             <span class="unit-name">${isFloorplan ? '세탁기' : 'LOWER · 세탁기'}</span>
-            <span class="unit-timer ${wTimerStr && !noData ? '' : 'dim'}">${noData ? '정보 없음' : (wTimerStr || (isWasherErr ? '점검 필요' : (wState === 'INITIAL' ? '시작 전' : '대기 중')))}</span>
+            <span class="unit-timer ${wTimerStr && !noData ? '' : 'dim'}">${noData ? '정보 없음' : (wTimerStr || (isWasherErr ? '점검 필요' : (wState === 'INITIAL' ? '시작 기다리는 중' : '대기 중')))}</span>
           </div>
 
           <!-- 2행: 현재 상태/코스 & 알림 버튼 -->
@@ -1987,8 +1993,12 @@ function getCompactContextSummary() {
     const dFluc = analyzeDynamicTimeFluctuation('dryer', dState, d.dryer?.timer || {}, cycle, err);
     const wFluc = analyzeDynamicTimeFluctuation('washer', wState, d.washer?.timer || {}, cycle, err);
 
-    const wStr = isUnitFree(wState) ? '세탁:대기(사용가능)' : `세탁:${wState}(${wTime}남음, ${wFluc.tagText})`;
-    const dStr = isUnitFree(dState) && !err ? '건조:대기(사용가능)' : `건조:${dState}(${dTime || '가동중'}${err ? ',배수점검필요' : ', ' + dFluc.tagText})`;
+    const wStr = wState === 'INITIAL'
+      ? '세탁:사용중(코스만 고르고 시작 전 — 빨래가 들어 있을 수 있어 빈 기기가 아님)'
+      : (isUnitFree(wState) ? '세탁:대기(사용가능)' : `세탁:${wState}(${wTime}남음, ${wFluc.tagText})`);
+    const dStr = dState === 'INITIAL'
+      ? '건조:사용중(코스만 고르고 시작 전 — 빨래가 들어 있을 수 있어 빈 기기가 아님)'
+      : (isUnitFree(dState) && !err ? '건조:대기(사용가능)' : `건조:${dState}(${dTime || '가동중'}${err ? ',배수점검필요' : ', ' + dFluc.tagText})`);
     return `• ${t.label}(${t.zoneName}): ${wStr} / ${dStr} / 누적${cycle}회${cycle >= 30 ? '[통살균필요]' : ''}`;
   });
   return lines.join('\n');

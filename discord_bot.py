@@ -184,7 +184,9 @@ RUNNING_STATES = ('RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLIN
 STARTED_STATES = RUNNING_STATES + ('DETECTING',)
 
 # 정말로 비어 있는 상태. 이 둘이 아니면 누군가 쓰고 있는 것으로 본다.
-FREE_STATES = ('POWER_OFF', 'INITIAL')
+# 정말 비어 있는 상태만 넣는다.
+# INITIAL 은 코스까지 골라두고 시작만 안 누른 것이라 빈 기기가 아니다.
+FREE_STATES = ('POWER_OFF',)
 
 # 이보다 오래된 알림 등록은 지난 빨래로 보고 정리한다 (한 사이클은 길어야 2시간)
 MAX_ALARM_AGE_SEC = 4 * 60 * 60
@@ -482,7 +484,8 @@ def render_floorplan_image(status_data):
     # 카드 테두리/상태 뱃지와 같은 색을 쓴다
     legend = [((100, 116, 139), "사용 가능"), ((16, 185, 129), "전체 가동 중"),
               ((59, 130, 246), "세탁 가동 중"), ((245, 158, 11), "건조 가동 중"),
-              ((239, 68, 68), "점검 필요"), ((148, 163, 184), "정보 없음")]
+              ((239, 68, 68), "점검 필요"), ((203, 213, 225), "사용 중"),
+              ((148, 163, 184), "정보 없음")]
     lx = W - MARGIN - 28
     for col, label in reversed(legend):
         lw = tw(label, f_sub)
@@ -510,7 +513,7 @@ def render_floorplan_image(status_data):
             # 전원이 켜져 있고 코스까지 골라둔 채 시작만 안 누른 상태다.
             # 빈 기기와 같은 색으로 그리면 그냥 비어 있는 줄 안다.
             accent = (203, 213, 225)
-            state_txt = "선택 완료(시작 준비중)"
+            state_txt = "선택 완료(시작 기다리는 중...)"
         elif state in FREE_STATES:
             accent = (71, 85, 105)
             state_txt = "대기 중 (사용 가능)"
@@ -574,11 +577,17 @@ def render_floorplan_image(status_data):
         w_min = ((w.get("timer") or {}).get("remainHour", 0) * 60) + (w.get("timer") or {}).get("remainMinute", 0)
         d_err = bool(d.get("error")) or d_state == "ERROR"
         w_err = bool(w.get("error")) or w_state == "ERROR"
+        d_init = d_state == "INITIAL"
+        w_init = w_state == "INITIAL"
 
         if no_data:
             border, label, bg = (148, 163, 184), "정보 없음", (30, 41, 59)
         elif d_err or w_err:
             border, label, bg = (239, 68, 68), "점검 필요", (69, 16, 16)
+        elif d_init or w_init:
+            # 코스를 골라둔 기기가 있으면 비어 있는 칸이 아니다.
+            # 다만 돌고 있는 것도 아니므로 '가동 중' 이라고 하지 않는다.
+            border, label, bg = (203, 213, 225), "사용 중", (30, 41, 59)
         elif d_min > 0 and w_min > 0:
             border, label, bg = (16, 185, 129), "전체 가동 중", (6, 78, 59)
         elif d_min > 0:
@@ -925,7 +934,7 @@ def build_floorplan_embed():
 # 상태 조회 명령어 (/세탁기 · /건조기 · /정보)
 # =========================================================
 STATE_LABELS = {
-    "POWER_OFF": "대기 중", "INITIAL": "선택 완료(시작 준비중)", "COMPLETE": "완료 (수거 대기)",
+    "POWER_OFF": "대기 중", "INITIAL": "선택 완료(시작 기다리는 중...)", "COMPLETE": "완료 (수거 대기)",
     "END": "완료", "RUNNING": "작동 중", "WASHING": "세탁 중", "RINSING": "헹굼 중",
     "SPINNING": "탈수 중", "DRYING": "건조 중", "COOLING": "쿨링 중",
     "WRINKLE_CARE": "구김 방지 중", "PAUSE": "일시정지", "ERROR": "기기 점검/에러",
@@ -980,6 +989,11 @@ def build_unit_list_embed(unit_type):
                 running += 1
             elif state == "WRINKLE_CARE":
                 mark, tail = "🟣", "완료 · 수거 가능"
+            elif state == "INITIAL":
+                # 시작만 안 눌렀을 뿐 빨래가 들어 있을 수 있다.
+                # 빈 기기가 아니므로 사용 중으로 센다.
+                mark, tail = "⏳", "**사용 중**"
+                running += 1
             elif state not in FREE_STATES:
                 # DETECTING 처럼 막 시작해서 아직 시간이 안 잡힌 상태.
                 # 비어 있다고 안내하면 헛걸음하게 된다.
@@ -1001,7 +1015,7 @@ def build_unit_list_embed(unit_type):
 
     embed = discord.Embed(
         title=f"{icon} {label} 현황",
-        description=(f"사용 가능 **{free}대** · 가동 중 **{running}대** · "
+        description=(f"사용 가능 **{free}대** · 사용 중 **{running}대** · "
                      f"점검 필요 **{errors}대**"
                      + (f" · 정보 없음 **{unknown}대**" if unknown else "")),
         color=color,
@@ -3109,7 +3123,7 @@ def _presence_units(status_data):
         for unit, box in (("washer", "w"), ("dryer", "d")):
             u = data.get(unit) or {}
             state = (u.get("runState") or {}).get("currentState")
-            if state in (None, "POWER_OFF", "INITIAL"):
+            if state in FREE_STATES:
                 if box == "w":
                     free_w += 1
                 else:
