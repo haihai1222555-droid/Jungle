@@ -1711,6 +1711,23 @@ def parse_device_segment(seg):
     return {"action": "unit_status", "towerId": tower_id, "unitType": unit_type, "_verb": False}
 
 
+# 규칙이 다루지 못하는 말. 이런 것이 섞이면 AI 에게 넘긴다.
+# 규칙은 기기 알림만 알아서, 이런 말이 함께 오면 그 부분을 통째로 놓친다.
+BEYOND_RULES = ("제보", "버그", "건의", "개선", "제안", "테스트", "시험",
+                "사용법", "어떻게", "알려줘", "뭐야", "왜", "추천", "코스",
+                "벌점", "외박", "공가", "출결", "와이파이", "택배", "식당")
+
+
+def needs_ai(text):
+    """규칙이 감당 못 하는 말이 섞여 있는가.
+
+    기기 알림 이야기만 있으면 규칙이 빠르고 정확하다.
+    다른 이야기가 섞이면 규칙은 그 부분을 못 보고 지나치므로 AI 가 읽어야 한다.
+    """
+    t = (text or '').lower()
+    return any(w in t for w in BEYOND_RULES)
+
+
 def parse_by_rules(text, ctx=None):
     """API 를 쓰지 않고 알아들을 수 있는 문장은 여기서 바로 처리한다.
     (빠르고, 무료고, 결과가 항상 같다)"""
@@ -2352,7 +2369,8 @@ async def _run_assistant_inner(user_id, text):
         clear_history(user_id)
         return "🧹 대화 기억을 지웠습니다. 처음부터 다시 말씀해 주세요.", None
 
-    plan = parse_by_rules(text, get_context(user_id))
+    # 기기 이야기만 있으면 규칙이 빠르다. 다른 말이 섞였으면 AI 가 읽는다.
+    plan = None if needs_ai(text) else parse_by_rules(text, get_context(user_id))
     if plan is None:
         plan = await asyncio.to_thread(ask_gemini, text, status_data, mine,
                                        get_history(user_id), admin_active(user_id))
@@ -2367,7 +2385,14 @@ async def _run_assistant_inner(user_id, text):
     # 다음 말에 맥락이 이어지도록 사람별로 기록해 둔다
     push_history(user_id, "user", text)
 
+    # 무엇을 물었는지 알아야 답에 알맞은 안내를 붙일 수 있다
+    plan = dict(plan, _userText=text)
+
     steps = plan.get("actions")
+    # 빈 배열은 '여러 요청 아님' 이라는 뜻이다.
+    # 예전에는 이것을 흘려보내 답이 통째로 사라졌다.
+    if isinstance(steps, list) and not steps:
+        steps = None
     if isinstance(steps, list) and len(steps) > 1:
         return await _run_steps(user_id, steps, plan.get("reply"), status_data)
     if isinstance(steps, list) and len(steps) == 1:
@@ -2398,6 +2423,30 @@ CLAIM_WORDS = ("등록했", "등록해", "등록 완료", "걸었", "걸어드�
 # 사실이 아닌 제약을 말하는 경우. 여러 대를 한 번에 거는 것은 실제로 된다.
 FALSE_LIMIT_WORDS = ("한 번에 한", "한번에 한", "하나씩만", "한 개씩만",
                      "동시에 여러", "한 번에 여러")
+
+
+# 문제를 호소하는 말. 이럴 때는 해결 안내 뒤에 제보 길을 열어 준다.
+TROUBLE_WORDS = ("안 와", "안와", "안 옴", "안옴", "안 돼", "안돼", "안 됨", "안됨",
+                 "못 받", "못받", "안 나와", "안나와", "이상해", "고장", "먹통",
+                 "반응이 없", "작동 안", "실행 안", "오류", "에러",
+                 "안 눌", "안눌", "안 열", "안열", "안 보여", "안보여",
+                 "안 뜨", "안뜨", "느려", "멈춰", "꺼져", "사라졌", "없어졌")
+
+
+def add_report_path(reply, user_text):
+    """문제를 호소했는데 갈 곳을 안 알려줬으면 한 줄 붙인다.
+
+    지시문에 적어 두어도 AI 판단이라 붙일 때와 안 붙일 때가 갈린다.
+    해결이 안 되면 어디로 가야 하는지는 항상 알려줘야 한다.
+    """
+    if not reply:
+        return reply
+    t = (user_text or "")
+    if not any(w in t for w in TROUBLE_WORDS):
+        return reply
+    if "/버그" in reply or "제보" in reply:
+        return reply                       # 이미 알려줬다
+    return reply.rstrip() + "\n-# 그래도 안 되면 `/버그` 로 알려주세요."
 
 
 def claims_outcome(text):
@@ -2441,7 +2490,38 @@ async def _run_steps(user_id, steps, reply, status_data):
         # 예) "1번 알림 걸어주고 버그 제보하려고" -> 등록 결과 + 제보 버튼
         if v is not None and view is None:
             view = v
-    return "\n".join(texts), embed, board, view
+    body = "\n".join(t for t in texts if t)
+    if not body and view is not None:
+        # 앞 단계가 막혀 할 말이 없어도, 눌러야 할 것이 있으면 안내한다
+        body = "아래에서 이어서 진행해 주세요."
+    return body, embed, board, view
+
+
+def describe_why_ambiguous(tower_id, status_data):
+    """번호만 듣고 기기를 못 정한 이유를 사람 말로 돌려준다.
+
+    "어떤 기기인지 알려주세요" 만 되풀이하면 왜 안 되는지 알 수 없다.
+    지금 아무것도 안 돌고 있으면 그 사실을 알려주는 편이 훨씬 낫다.
+    """
+    tower = next((t for t in TOWERS if t["id"] == tower_id), None)
+    if not tower:
+        return None
+    data = (status_data or {}).get(tower["name"]) or {}
+    running = []
+    for ut, label in (("washer", "세탁기"), ("dryer", "건조기")):
+        u = data.get(ut) or {}
+        state = (u.get("runState") or {}).get("currentState")
+        t = u.get("timer") or {}
+        mins = t.get("remainHour", 0) * 60 + t.get("remainMinute", 0)
+        if state not in (None, "POWER_OFF", "INITIAL") and mins > 0:
+            running.append(label)
+    if not running:
+        return (f"{tower_id}번은 지금 세탁기도 건조기도 돌아가고 있지 않아요.\n"
+                "-# 돌아가기 시작하면 그때 알림을 걸 수 있어요.")
+    if len(running) >= 2:
+        return (f"{tower_id}번은 세탁기와 건조기가 둘 다 돌아가고 있어요. "
+                "어느 쪽에 걸어드릴까요?")
+    return None
 
 
 def infer_unit_type(user_id, tower_id, action, status_data):
@@ -2501,7 +2581,10 @@ async def _do_step(user_id, plan, status_data, mine):
         return await send_test_notifications(user), None
 
     if action == "info":
-        return "", build_info_embed(user_id)
+        # 카드만 보내면 답장이 허전하고, 화면이 좁은 곳에서는
+        # 카드가 접혀 아무 말도 안 한 것처럼 보인다. 한 줄을 붙인다.
+        return ((reply or "봇 사용법과 알림 규칙이에요! 🫧").strip(),
+                build_info_embed(user_id))
 
     if action == "unit_list":
         # 글 목록 + 배치도 그림을 같이 준다 (한눈에 보이도록)
@@ -2533,6 +2616,18 @@ async def _do_step(user_id, plan, status_data, mine):
         if not tower_id or not unit_type:
             # 아무것도 하지 않았으므로 "등록했어요" 같은 말이 나가면 안 된다.
             ask = "어떤 기기인지 알려주세요. 예) `3번 건조기 알림 걸어줘`"
+            # 번호는 말했는데 못 정한 경우, 왜 그런지 알려주는 편이 친절하다.
+            if tower_id and action == "register":
+                ask = describe_why_ambiguous(tower_id, status_data) or ask
+            elif tower_id and action == "cancel":
+                ask = (f"{tower_id}번에 걸어둔 알림이 없어요.\n"
+                       "-# `내 알림` 이라고 하면 걸어둔 것을 보여드려요.")
+                mine_here = [a for a in active_alarms
+                             if a.get("userId") == user_id
+                             and a.get("towerId") == tower_id]
+                if mine_here:
+                    ask = (f"{tower_id}번은 세탁기와 건조기 둘 다 걸려 있어요. "
+                           "어느 쪽을 해제할까요?")
             if reply and not claims_outcome(reply) and not claims_false_limit(reply):
                 return reply, None
             return ask, None
@@ -2578,7 +2673,9 @@ async def _do_step(user_id, plan, status_data, mine):
         head = (reply + "\n") if reply else ""
         return head + f"-# 지금 비어 있는 기기: **{free}대**", None, True
 
-    return (reply or "무슨 말씀인지 파악하지 못했습니다."), None
+    # 문제를 호소했는데 갈 곳을 안 알려줬으면 한 줄 붙인다
+    return add_report_path(reply, plan.get("_userText")) or \
+        "무슨 말씀인지 파악하지 못했습니다.", None
 
 
 class ReportModal(discord.ui.Modal):
