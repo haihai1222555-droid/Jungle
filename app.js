@@ -266,6 +266,13 @@ function formatTimer(remainH, remainM) {
   return `${remainM}분`;
 }
 
+// 원본이 점검 중인 워시타워를 null 로 내려보낸다.
+// 빈 객체로 메우면 '전원 꺼짐' -> '사용 가능' 이 되어 헛걸음시킨다.
+function towerHasData(name) {
+  const d = globalStatusData ? globalStatusData[name] : null;
+  return !!d && typeof d === 'object' && Object.keys(d).length > 0;
+}
+
 function isUnitFree(state) {
   return ['POWER_OFF', 'INITIAL', 'COMPLETE'].includes(state);
 }
@@ -824,6 +831,10 @@ function toggleLaundryAlarm(towerId, unitType, deviceName, remainMinutes) {
 // 그 상태로 다음 사람이 같은 기기를 쓰면 '남의 빨래'에 5분 전 알림이 울린다.
 const STALE_GRACE_MS = 40 * 60 * 1000; // 건조기 습도 감지 연장(최대 20~30분)을 넉넉히 넘기는 여유
 
+// 기기 값이 이만큼 계속 안 오면 모른다고 알린다.
+// 잠깐 끊기는 일은 흔해서 바로 알리면 시끄럽다. 봇·서버와 같은 기준이다.
+const NODATA_GRACE_MS = 3 * 60 * 1000;
+
 function isAlarmStale(item, towerData, now) {
   // 1) 세탁기: 누적 가동 횟수가 늘었으면 내 사이클은 확실히 종료됨
   const nowCycle = towerData?.washer?.cycle?.cycleCount;
@@ -961,6 +972,27 @@ setInterval(() => {
     const unitData = item.unitType === 'dryer' ? (data.dryer || {}) : (data.washer || {});
     const unitTimer = unitData.timer || {};
     const runState = unitData.runState?.currentState || 'POWER_OFF';
+
+    // ❓ 기기 값이 아예 안 올 때는 완료로 볼 수 없다.
+    //    빈 값은 0분 · POWER_OFF 로 읽혀 곧바로 '완료!' 가 떠 버린다.
+    //    수리에 들어간 기기가 이렇게 된다. 모르면 모른다고 해야 한다.
+    if (!tower || !towerHasData(tower.name)) {
+      if (!item.noDataSince) {
+        item.noDataSince = now;
+        changed = true;
+      } else if (now - item.noDataSince > NODATA_GRACE_MS && !item.notifiedNoData) {
+        item.notifiedNoData = true;
+        changed = true;
+        showToast('❓', `<b>[${item.deviceName}]</b> 기기 값이 오지 않아 완료 여부를 알 수 없습니다.`
+          + `<br><small>수리·점검 중일 수 있어요. 세탁실에서 직접 확인해 주세요.</small>`, 'warning');
+      }
+      return;
+    }
+    if (item.noDataSince || item.notifiedNoData) {
+      delete item.noDataSince;
+      delete item.notifiedNoData;
+      changed = true;
+    }
 
     // 🧹 0) 내가 등록했던 사이클이 이미 끝났으면 조용히 해제하고 건너뛴다.
     //       (그대로 두면 다음 사람 빨래에 내 알림이 울린다)
@@ -1211,6 +1243,8 @@ function renderCongestionStatus() {
   // 실시간 여유 대수 계산
   let freeCount = 0;
   TOWERS.forEach(t => {
+    // 값이 안 온 기기는 비어 있다고 셀 수 없다
+    if (!towerHasData(t.name)) return;
     const data = globalStatusData[t.name] || {};
     const wState = data.washer?.runState?.currentState || 'POWER_OFF';
     const dState = data.dryer?.runState?.currentState || 'POWER_OFF';
@@ -1278,6 +1312,7 @@ let currentViewMode = 'grid'; // 'grid' | 'floor'
 
 // 3. 개별 워시타워 실물 카드 엘리먼트 빌더 (기본 뷰는 풍부한 정보, 2열 뷰는 컴팩트 슬림)
 function createTowerCardElement(tower, isFloorplan = false) {
+  const noData = !towerHasData(tower.name);
   const data = globalStatusData[tower.name] || {};
   const washer = data.washer || {};
   const dryer = data.dryer || {};
@@ -1302,13 +1337,15 @@ function createTowerCardElement(tower, isFloorplan = false) {
   const dRunning = isUnitRunning(dState);
 
   let cardClass = 'washtower-card';
-  if (hasError) cardClass += ' is-error';
+  if (noData) cardClass += ' is-nodata';
+  else if (hasError) cardClass += ' is-error';
   else if (wRunning && dRunning) cardClass += ' is-active-both';
   else if (wRunning) cardClass += ' is-active-wash';
   else if (dRunning) cardClass += ' is-active-dry';
 
   let statusPillHtml = '';
-  if (hasError) statusPillHtml = `<span class="wt-status-pill pill-error">점검 필요</span>`;
+  if (noData) statusPillHtml = `<span class="wt-status-pill pill-nodata">정보 없음</span>`;
+  else if (hasError) statusPillHtml = `<span class="wt-status-pill pill-error">점검 필요</span>`;
   else if (wRunning && dRunning) statusPillHtml = `<span class="wt-status-pill pill-both">전체 가동 중</span>`;
   else if (wRunning) statusPillHtml = `<span class="wt-status-pill pill-washing">세탁 가동 중</span>`;
   else if (dRunning) statusPillHtml = `<span class="wt-status-pill pill-drying">건조 가동 중</span>`;
@@ -1359,14 +1396,14 @@ function createTowerCardElement(tower, isFloorplan = false) {
           <!-- 1행: 기기 구분 & 타이머 -->
           <div class="unit-header-line">
             <span class="unit-name">${isFloorplan ? '건조기' : 'UPPER · 건조기'}</span>
-            <span class="unit-timer ${dTimerStr ? '' : 'dim'}">${dTimerStr || (isDryerErr ? '점검 필요' : '대기 중')}</span>
+            <span class="unit-timer ${dTimerStr && !noData ? '' : 'dim'}">${noData ? '정보 없음' : (dTimerStr || (isDryerErr ? '점검 필요' : '대기 중'))}</span>
           </div>
 
           <!-- 2행: 현재 상태/코스 & 알림 버튼 -->
           <div class="unit-action-line">
             <div class="unit-state-pill-group">
               <span class="unit-state-text ${dRunning ? 'state-active-dry' : ''} ${isDryerErr ? 'state-error' : ''}">
-                ${dStateInfo.label}
+                ${noData ? '값이 오지 않음' : dStateInfo.label}
               </span>
               ${dCourse ? `<span class="unit-course-badge course-dry">🌀 ${dCourse.replace(/\s*\(.*?\)/g, '')}</span>` : ''}
             </div>
@@ -1406,14 +1443,14 @@ function createTowerCardElement(tower, isFloorplan = false) {
           <!-- 1행: 기기 구분 & 타이머 -->
           <div class="unit-header-line">
             <span class="unit-name">${isFloorplan ? '세탁기' : 'LOWER · 세탁기'}</span>
-            <span class="unit-timer ${wTimerStr ? '' : 'dim'}">${wTimerStr || (isWasherErr ? '점검 필요' : '대기 중')}</span>
+            <span class="unit-timer ${wTimerStr && !noData ? '' : 'dim'}">${noData ? '정보 없음' : (wTimerStr || (isWasherErr ? '점검 필요' : '대기 중'))}</span>
           </div>
 
           <!-- 2행: 현재 상태/코스 & 알림 버튼 -->
           <div class="unit-action-line">
             <div class="unit-state-pill-group">
               <span class="unit-state-text ${wRunning ? 'state-active-wash' : ''} ${isWasherErr ? 'state-error' : ''}">
-                ${wStateInfo.label}
+                ${noData ? '값이 오지 않음' : wStateInfo.label}
               </span>
               ${wCourse ? `<span class="unit-course-badge course-wash">🫧 ${wCourse.replace(/\s*\(.*?\)/g, '')}</span>` : ''}
             </div>
@@ -1434,6 +1471,13 @@ function createTowerCardElement(tower, isFloorplan = false) {
       </div>
 
     </div>
+
+    <!-- 값이 안 오는 기기: 왜 그런지 알려준다 (수리 중일 때 이렇게 된다) -->
+    ${noData ? `
+      <div class="wt-error-banner wt-nodata-banner">
+        <span>🛠️</span> <strong>기기 정보가 오지 않습니다 (수리·점검 중일 수 있어요)</strong>
+      </div>
+    ` : ''}
 
     <!-- 전체 워시타워 에러 배너 (개별 모듈 에러가 아닌 전체 시스템/통신/전원 에러 시에만 원래 자리에 노출) -->
     ${towerError ? `
@@ -1519,6 +1563,7 @@ function renderTowers() {
 // 주어진 구역에서 가장 먼저 완료되는(잔여시간이 가장 짧은) 세탁기를 실제 타이머로 산출
 function findSoonestFreeWasher(towers) {
   return towers
+    .filter(t => towerHasData(t.name))
     .map(t => {
       const d = globalStatusData[t.name] || {};
       const timer = d.washer?.timer || {};
@@ -1539,6 +1584,9 @@ function renderSmartSummary() {
   const menFreeDryers = [];
 
   menTowers.forEach(t => {
+    // 값이 안 온 기기는 추천할 수 없다.
+    // 누적 0회로 읽혀 '가장 쾌적한 기기' 로 뽑히는 일이 있었다.
+    if (!towerHasData(t.name)) return;
     const data = globalStatusData[t.name] || {};
     const wState = data.washer?.runState?.currentState || 'POWER_OFF';
     const dState = data.dryer?.runState?.currentState || 'POWER_OFF';
@@ -1562,6 +1610,7 @@ function renderSmartSummary() {
   const womenFreeDryers = [];
 
   womenTowers.forEach(t => {
+    if (!towerHasData(t.name)) return;
     const data = globalStatusData[t.name] || {};
     const wState = data.washer?.runState?.currentState || 'POWER_OFF';
     const dState = data.dryer?.runState?.currentState || 'POWER_OFF';
@@ -1582,6 +1631,7 @@ function renderSmartSummary() {
   // 3) 공용 구역 (6~7호기) 집계
   const commonTowers = TOWERS.filter(t => t.zone === 'common');
   commonTowers.forEach(t => {
+    if (!towerHasData(t.name)) return;
     const data = globalStatusData[t.name] || {};
     const wState = data.washer?.runState?.currentState || 'POWER_OFF';
     const dState = data.dryer?.runState?.currentState || 'POWER_OFF';
@@ -1898,6 +1948,12 @@ const GEMINI_MODELS = [
 // ⚡ 토큰 수 80% 압축: LLM 처리 속도 극대화 + 동적 시간 변동 센서 정보 주입
 function getCompactContextSummary() {
   const lines = TOWERS.map(t => {
+    // 값이 안 온 기기를 '대기(사용가능)' 으로 넘기면
+    // AI 가 수리 중인 기기를 추천한다. 모른다고 그대로 적는다.
+    if (!towerHasData(t.name)) {
+      return `• ${t.label}(${t.zoneName}): 정보없음 — 이 기기의 값이 오지 않습니다. `
+        + `수리·점검 중일 수 있으니 추천하지 말고, 물어보면 값이 오지 않는다고 그대로 알려주세요.`;
+    }
     const d = globalStatusData[t.name] || {};
     const wState = d.washer?.runState?.currentState || 'POWER_OFF';
     const dState = d.dryer?.runState?.currentState || 'POWER_OFF';
@@ -2349,6 +2405,38 @@ function speakWithTts(text) {
 }
 
 // 고지능 로컬 규칙/상황별 응답 엔진 (Fallback)
+// 아래 로컬 답변들이 쓰는 도우미.
+// 코드에 숫자를 박아두면 그 순간부터 거짓말이 된다. 화면이 가진 값을 읽는다.
+function zoneTowers(zone) {
+  return TOWERS.filter(t => t.zone === zone);
+}
+
+// 지금 쓸 수 있는 기기. 값이 안 온 기기는 넣지 않는다.
+function freeUnitsIn(zone, unitType) {
+  return zoneTowers(zone).filter(t => {
+    if (!towerHasData(t.name)) return false;
+    const u = (globalStatusData[t.name] || {})[unitType] || {};
+    if (u.error) return false;
+    return isUnitFree(u.runState?.currentState || 'POWER_OFF');
+  });
+}
+
+function noDataTowers() {
+  return TOWERS.filter(t => !towerHasData(t.name));
+}
+
+// 값이 안 오는 기기가 있으면 그 사실을 덧붙인다
+function noDataNote() {
+  const nd = noDataTowers();
+  if (!nd.length) return '';
+  return `<br><small style="color:var(--text-dim)">🛠️ ${nd.map(t => t.label).join(', ')}`
+    + `는 값이 오지 않아 확인할 수 없습니다 (수리·점검 중일 수 있어요).</small>`;
+}
+
+function towerListText(list) {
+  return list.length ? list.map(t => t.label).join(', ') : '없음';
+}
+
 function fallbackLocalNlp(q, isNoKey = false) {
   const numMatch = q.match(/(\d+)\s*(?:호기|번|호)?/);
   const targetId = numMatch ? parseInt(numMatch[1], 10) : null;
@@ -2398,7 +2486,15 @@ function fallbackLocalNlp(q, isNoKey = false) {
                `1. <b>데일리 일반 의류:</b> <code>표준 코스 + 터보샷</code> (39분 만에 강력한 입체 물살로 찌든 때 제거 & 시간 절약!)<br>` +
                `2. <b>찌든 때/양말:</b> <code>온수 40℃ 세탁 + 불림 옵션</code> 추가<br>` +
                `3. <b>세제 권장량:</b> 세제를 너무 많이 넣으면 헹굼이 덜 되므로 전용 컵 정량만 투입하세요.<br>` +
-               `💡 <b>현재 남성 구역 2호기 / 여성 구역 8호기</b>가 비어 있어 바로 이용 가능합니다!`;
+               `💡 ${(() => {
+                 const m = freeUnitsIn('men', 'washer');
+                 const w = freeUnitsIn('women', 'washer');
+                 if (!m.length && !w.length) return '<b>지금은 비어 있는 세탁기가 없습니다.</b>';
+                 const parts = [];
+                 if (m.length) parts.push(`남성 구역 ${towerListText(m)}`);
+                 if (w.length) parts.push(`여성 구역 ${towerListText(w)}`);
+                 return `<b>현재 ${parts.join(' / ')}</b> 세탁기가 비어 있습니다.`;
+               })()}`;
       speakText = `일반 빨래는 표준 코스에 터보샷 옵션을 추천합니다. 39분 만에 때가 잘 빠지고 빠릅니다.`;
     }
   }
@@ -2413,7 +2509,12 @@ function fallbackLocalNlp(q, isNoKey = false) {
     const cycle = washer.cycle?.cycleCount || 0;
     const err = dryer.error || washer.error;
 
-    if (err) {
+    if (!towerHasData(tower.name)) {
+      // 값이 안 오는 기기를 '사용 가능' 이라고 하면 헛걸음시킨다
+      answer = `🛠️ <b>${tower.label} (${tower.zoneName})</b>: 기기 정보가 오지 않아 `
+             + `지금 상태를 알 수 없습니다.<br>• 수리·점검 중일 수 있으니 세탁실에서 직접 확인해 주세요.`;
+      speakText = `${tower.label}는 정보가 오지 않아 상태를 알 수 없습니다.`;
+    } else if (err) {
       const diag = getErrorDiagnostic(err);
       answer = `⚠️ <b>${tower.label} (${tower.zoneName})</b>: ${diag.title}<br>• <b>조치:</b> ${diag.solution[0]}`;
       speakText = `${tower.label}에 배수 점검 알림이 있습니다.`;
@@ -2424,39 +2525,89 @@ function fallbackLocalNlp(q, isNoKey = false) {
   }
   // 4) 청소 / 통살균
   else if (isCleanQuery) {
-    answer = `🧼 <b>LG 권장 30회 초과 통살균 대상 기기:</b> 1호기(39회), 4호기(33회), 6호기(55회), 7호기(46회)입니다.<br>` +
-             `💡 <b>통살균 방법:</b> 세탁조 클리너를 넣고 [통살균] 코스를 누르면 70도 고온 살균 세척됩니다.`;
-    speakText = `1호기, 4호기, 6호기, 7호기 세탁기 통살균 청소를 권장합니다.`;
+    const care = TOWERS
+      .filter(t => towerHasData(t.name))
+      .map(t => ({ t, c: (globalStatusData[t.name] || {}).washer?.cycle?.cycleCount || 0 }))
+      .filter(x => x.c >= 30);
+    answer = `🧼 <b>LG 권장 30회 초과 통살균 대상 기기:</b> `
+           + (care.length ? care.map(x => `${x.t.label}(${x.c}회)`).join(', ') + '입니다.'
+                          : '지금은 없습니다.')
+           + `<br>💡 <b>통살균 방법:</b> 세탁조 클리너를 넣고 [통살균] 코스를 누르면 70도 고온 살균 세척됩니다.`
+           + noDataNote();
+    speakText = care.length
+      ? `${care.map(x => x.t.label).join(', ')} 세탁기 통살균 청소를 권장합니다.`
+      : `지금은 통살균이 필요한 기기가 없습니다.`;
   }
   // 5) 에러
   else if (isErrorQuery) {
-    answer = `🚨 <b>현재 점검 필요 기기:</b> 1호기, 5호기 건조기<br>` +
-             `💡 LG 워시타워는 자동 직배수 방식이므로 후면 배수 호스 꺾임 및 2중 먼지 필터를 청소해 주시면 즉시 해결됩니다.`;
-    speakText = `1호기와 5호기 건조기 배수관 및 필터 점검이 필요합니다.`;
+    const bad = [];
+    TOWERS.filter(t => towerHasData(t.name)).forEach(t => {
+      const d = globalStatusData[t.name] || {};
+      if (d.dryer?.error || d.dryer?.runState?.currentState === 'ERROR') bad.push(`${t.label} 건조기`);
+      if (d.washer?.error || d.washer?.runState?.currentState === 'ERROR') bad.push(`${t.label} 세탁기`);
+    });
+    answer = `🚨 <b>현재 점검 필요 기기:</b> ${bad.length ? bad.join(', ') : '없습니다.'}<br>`
+           + `💡 LG 워시타워는 자동 직배수 방식이므로 후면 배수 호스 꺾임 및 2중 먼지 필터를 청소해 주시면 즉시 해결됩니다.`
+           + noDataNote();
+    speakText = bad.length ? `${bad.join(', ')} 점검이 필요합니다.` : `지금 점검이 필요한 기기는 없습니다.`;
   }
   // 6) 남성 구역
   else if (isMen) {
-    answer = `👦 <b>남성 구역:</b> 2호기 세탁기가 대기 중이며 가장 쾌적합니다 (누적 13회). 건조기는 4호기 추천!`;
-    speakText = `남성 구역은 2호기 세탁기가 비어 있습니다.`;
+    const mw = freeUnitsIn('men', 'washer');
+    const md = freeUnitsIn('men', 'dryer');
+    answer = (mw.length || md.length)
+      ? `👦 <b>남성 구역(1~5호기) 비어 있는 기기</b><br>`
+        + `• 세탁기: ${towerListText(mw)}<br>• 건조기: ${towerListText(md)}` + noDataNote()
+      : `👦 <b>남성 구역(1~5호기):</b> 지금은 비어 있는 기기가 없습니다.` + noDataNote();
+    speakText = mw.length
+      ? `남성 구역은 ${towerListText(mw)} 세탁기가 비어 있습니다.`
+      : `남성 구역은 지금 비어 있는 세탁기가 없습니다.`;
   }
   // 7) 여성 구역
   else if (isWomen) {
-    answer = `👧 <b>여성 구역:</b> 8호기, 9호기 세탁기/건조기 모두 즉시 사용 가능합니다!`;
-    speakText = `여성 구역은 8호기와 9호기 모두 비어 있습니다.`;
+    const ww = freeUnitsIn('women', 'washer');
+    const wd = freeUnitsIn('women', 'dryer');
+    answer = (ww.length || wd.length)
+      ? `👧 <b>여성 구역(8~9호기) 비어 있는 기기</b><br>`
+        + `• 세탁기: ${towerListText(ww)}<br>• 건조기: ${towerListText(wd)}` + noDataNote()
+      : `👧 <b>여성 구역(8~9호기):</b> 지금은 비어 있는 기기가 없습니다.` + noDataNote();
+    speakText = ww.length
+      ? `여성 구역은 ${towerListText(ww)} 세탁기가 비어 있습니다.`
+      : `여성 구역은 지금 비어 있는 세탁기가 없습니다.`;
   }
   // 8) 통계
   else if (isStatsQuery) {
-    answer = `📊 <b>최근 7일 인기 1위:</b> 5호기 (총 104회 가동으로 가장 인기 있는 명당!)`;
-    speakText = `5호기 워시타워가 104회 가동되어 가장 인기가 많습니다.`;
+    const byTower = {};
+    (globalStatsData?.counts || []).forEach(c => {
+      byTower[c.id] = (byTower[c.id] || 0) + (c.count || 0);
+    });
+    const rank = Object.entries(byTower).sort((a, b) => b[1] - a[1])[0];
+    const days = globalStatsData?.days || 7;
+    if (rank) {
+      const top = TOWERS.find(t => t.id === Number(rank[0]));
+      answer = `📊 <b>최근 ${days}일 인기 1위:</b> ${top ? top.label : rank[0] + '호기'} `
+             + `(총 ${rank[1]}회 가동으로 가장 인기 있는 명당!)`;
+      speakText = `${top ? top.label : rank[0] + '호기'} 워시타워가 ${rank[1]}회 가동되어 가장 인기가 많습니다.`;
+    } else {
+      answer = `📊 아직 가동 통계를 불러오지 못했습니다. 잠시 후 다시 물어봐 주세요.`;
+      speakText = `아직 가동 통계를 불러오지 못했습니다.`;
+    }
   }
   // 9) 기본 응답
   else {
+    const bm = freeUnitsIn('men', 'washer');
+    const bc = freeUnitsIn('common', 'washer');
+    const bw = freeUnitsIn('women', 'washer');
     answer = `💬 <b>실시간 브리핑:</b><br>` +
-             `• <b>남성 구역:</b> 2호기 세탁기 즉시 사용 가능<br>` +
-             `• <b>여성 구역:</b> 8호기, 9호기 즉시 사용 가능<br>` +
-             `• <b>빨래 팁:</b> 일상복은 <code>표준 + 터보샷</code> 코스가 가장 빠르고 깨끗합니다!<br>` +
+             `• <b>남성 구역(1~5):</b> 세탁기 ${towerListText(bm)}<br>` +
+             `• <b>공용(6~7):</b> 세탁기 ${towerListText(bc)}<br>` +
+             `• <b>여성 구역(8~9):</b> 세탁기 ${towerListText(bw)}<br>` +
+             `• <b>빨래 팁:</b> 일상복은 <code>표준 + 터보샷</code> 코스가 가장 빠르고 깨끗합니다!` +
+             noDataNote() + `<br>` +
              (isNoKey ? `<small style="color:var(--text-dim)">💡 상단 <b>[⚙️ AI 설정]</b>에서 무료 Gemini API 키를 넣으시면 더욱 자유롭고 똑똑한 대화가 가능합니다.</small>` : '');
-    speakText = `현재 남성 2호기, 여성 8호기 9호기 세탁기가 비어 있습니다.`;
+    speakText = (bm.length || bc.length || bw.length)
+      ? `지금 비어 있는 세탁기는 ${[...bm, ...bc, ...bw].map(t => t.label).join(', ')} 입니다.`
+      : `지금은 비어 있는 세탁기가 없습니다.`;
   }
 
   appendChatMessage('ai', answer);

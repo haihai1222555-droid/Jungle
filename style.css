@@ -1023,6 +1023,7 @@ body {
 .legend-drying .dot { background-color: var(--color-drying); box-shadow: 0 0 6px var(--color-drying); }
 .legend-wrinkle .dot { background-color: var(--color-wrinkle); }
 .legend-error .dot { background-color: var(--color-error); }
+.legend-nodata .dot { background-color: #94a3b8; }
 
 /* ---------------------------------------------
    3. Real WashTower Container & Grid vs Floorplan
@@ -1413,6 +1414,12 @@ body {
   border-color: rgba(239, 68, 68, 0.6);
   box-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
 }
+/* 값이 안 오는 기기. 눈에 띄되 고장으로 읽히지 않게 무채색으로 둔다. */
+.washtower-card.is-nodata {
+  border-color: rgba(148, 163, 184, 0.5);
+  box-shadow: 0 0 16px rgba(148, 163, 184, 0.1);
+  opacity: 0.82;
+}
 
 /* 기기 헤더 (번호, 구역 태그, 전체 상태 배지) */
 .wt-header {
@@ -1454,6 +1461,8 @@ body {
 .pill-drying { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.35); }
 .pill-idle { background: rgba(255, 255, 255, 0.05); color: var(--text-dim); border: 1px solid rgba(255, 255, 255, 0.12); }
 .pill-error { background: rgba(239, 68, 68, 0.2); color: var(--color-error); border: 1px solid rgba(239, 68, 68, 0.45); }
+/* 값이 안 오는 기기. 켜짐/꺼짐이 아니라 '모른다' 는 뜻이라 무채색을 쓴다. */
+.pill-nodata { background: rgba(148, 163, 184, 0.16); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.4); }
 
 /* 실물 워시타워 본체 시각화 (상단 건조기 + 중간 컨트롤러 + 하단 세탁기) */
 .wt-body-hardware {
@@ -3131,6 +3140,10 @@ body.light-theme .washtower-card.is-error {
   border: 2px solid #ef4444 !important;
   box-shadow: 0 0 18px rgba(239, 68, 68, 0.22), 0 4px 16px rgba(15, 23, 42, 0.04) !important;
 }
+body.light-theme .washtower-card.is-nodata {
+  border: 2px solid #94a3b8 !important;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04) !important;
+}
 body.light-theme .washtower-card.is-active-dry {
   border: 2px solid #f59e0b !important;
   box-shadow: 0 0 18px rgba(245, 158, 11, 0.18), 0 4px 16px rgba(15, 23, 42, 0.04) !important;
@@ -3178,6 +3191,11 @@ body.light-theme .wt-status-pill.pill-idle {
   background: #f1f5f9 !important;
   color: #64748b !important;
   border: 1.5px solid #cbd5e1 !important;
+}
+body.light-theme .wt-status-pill.pill-nodata {
+  background: #e2e8f0 !important;
+  color: #475569 !important;
+  border: 1.5px solid #94a3b8 !important;
 }
 
 /* 🎛️ 하드웨어 섀시 및 유닛 화이트/그레이 조화 레이어링 */
@@ -3322,6 +3340,17 @@ body.light-theme .wt-error-banner {
   background: #fef2f2;
   border-color: #fca5a5;
   color: #dc2626;
+}
+
+.wt-nodata-banner {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.32);
+  color: #cbd5e1;
+}
+body.light-theme .wt-nodata-banner {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #475569;
 }
 
 /* 6. Reality Floorplan Single Wall View */

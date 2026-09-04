@@ -188,6 +188,9 @@ FREE_STATES = ('POWER_OFF', 'INITIAL')
 
 # 이보다 오래된 알림 등록은 지난 빨래로 보고 정리한다 (한 사이클은 길어야 2시간)
 MAX_ALARM_AGE_SEC = 4 * 60 * 60
+# 기기 값이 이만큼 계속 안 오면 모른다고 알린다.
+# 잠깐 끊기는 일은 흔해서 바로 알리면 시끄럽다.
+NODATA_GRACE_SEC = 180
 
 # 세탁이 끝난 뒤 이 시간이 지나도록 기기가 그대로면 '수거 안 함' 으로 보고 한 번 더 알린다.
 STALE_PICKUP_SEC = int(os.environ.get("STALE_PICKUP_SEC") or 15 * 60)
@@ -3193,6 +3196,37 @@ async def check_laundry_alarms():
         
         remain_min = (timer.get("remainHour", 0) * 60) + timer.get("remainMinute", 0)
         is_error = run_state == "ERROR" or bool(unit_data.get("error"))
+
+        # 기기 값이 실제로 왔는지. 점검에 들어간 기기는 원본이 null 로 준다.
+        # 빈 값을 그대로 읽으면 0분 · POWER_OFF 가 되어 '완료' 로 오판한다.
+        if not unit_data:
+            since = item.get("noDataSince")
+            if not since:
+                item["noDataSince"] = now_ts
+                changed = True
+            elif (now_ts - since > NODATA_GRACE_SEC
+                    and not item.get("notifiedNoData")):
+                item["notifiedNoData"] = True
+                changed = True
+                user = await resolve_user(item["userId"])
+                if user:
+                    try:
+                        await user.send(
+                            f"\u2753 **[확인 불가: {item['deviceName']}]** "
+                            "기기에서 값이 오지 않아 완료 여부를 알 수 없습니다.\n"
+                            "\u2022 점검 중이거나 네트워크가 끊긴 것으로 보여요. "
+                            "세탁실에서 직접 확인해 주세요.\n"
+                            "-# 값이 다시 오면 알림은 그대로 이어집니다.")
+                    except Exception as e:
+                        print(f"[DM Send Error] {e}")
+            # 모르는 상태에서는 어떤 판정도 하지 않는다
+            continue
+
+        # 값이 돌아왔으면 원래대로 돌아간다
+        if item.get("noDataSince") or item.get("notifiedNoData"):
+            item.pop("noDataSince", None)
+            item.pop("notifiedNoData", None)
+            changed = True
 
 
         # 🚨 1) 가동 중 에러/중단 발생 시 즉시 알림

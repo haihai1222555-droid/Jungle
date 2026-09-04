@@ -119,6 +119,8 @@ CACHED_STATUS_MAX_AGE = 20  # 이보다 오래된 것은 못 믿고 직접 물�
 
 # 이보다 오래된 알림 등록은 지난 빨래로 보고 정리한다 (한 사이클은 길어야 2시간)
 MAX_ALARM_AGE_SEC = 4 * 60 * 60
+# 기기 값이 이만큼 계속 안 오면 모른다고 알린다.
+NODATA_GRACE_SEC = 180
 
 # 세탁이 끝난 뒤 이 시간이 지나도록 기기가 그대로면 '수거 안 함' 으로 보고 한 번 더 알린다.
 # 환경변수로 조정할 수 있다 (기본 15분).
@@ -374,6 +376,34 @@ def background_push_worker():
                 if has_live:
                     _t = unit_data.get('timer') or {}
                     live_min = (_t.get('remainHour') or 0) * 60 + (_t.get('remainMinute') or 0)
+
+                # 기기 값이 한참 안 오면 완료로 오판하지 않는다.
+                # 점검에 들어간 기기는 원본이 null 로 주는데, 그것을
+                # 등록 시점 예상치로 메우면 '완료' 알림이 거짓으로 나간다.
+                if not has_live:
+                    since = alarm.get('noDataSince')
+                    if not since:
+                        alarm['noDataSince'] = time.time()
+                        changed = True
+                    elif (time.time() - since > NODATA_GRACE_SEC
+                            and not alarm.get('notifiedNoData')):
+                        alarm['notifiedNoData'] = True
+                        changed = True
+                        send_push_notification(sub_info, {
+                            'title': f"\u2753 [확인 불가] {device_name}",
+                            'body': (f"{device_name} 에서 값이 오지 않아 완료 여부를 "
+                                     "알 수 없습니다. 점검 중일 수 있으니 "
+                                     "세탁실에서 직접 확인해 주세요."),
+                            'tag': f"nodata-{device_name}",
+                            'key': alarm.get('key'),
+                            'endpoint': sub_info.get('endpoint'),
+                        })
+                    continue
+
+                if alarm.get('noDataSince') or alarm.get('notifiedNoData'):
+                    alarm.pop('noDataSince', None)
+                    alarm.pop('notifiedNoData', None)
+                    changed = True
 
                 if live_min > 0:
                     remain_min = float(live_min)
