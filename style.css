@@ -3956,3 +3956,123 @@ body.light-theme .help-note {
   border-color: rgba(217, 119, 6, 0.45);
   color: #92400e;
 }
+
+
+/* ============================================
+   제보 (버그 · 개선) — 좌측 하단
+   알림 독은 가운데, 토스트는 우상단이라 왼쪽 아래가 비어 있다.
+   ============================================ */
+.report-fab {
+  position: fixed;
+  bottom: 24px;
+  left: 24px;
+  z-index: 998;                       /* 알림 독(999)보다 아래 */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color .18s ease, border-color .18s ease,
+              background .18s ease, transform .18s ease;
+}
+.report-fab:hover {
+  color: var(--text-main);
+  border-color: var(--border-active);
+  background: var(--bg-card-hover);
+  transform: translateY(-2px);
+}
+.report-fab-icon { font-size: 1rem; line-height: 1; }
+
+@media (max-width: 640px) {
+  /* 좁은 화면에서는 아이콘만 (본문을 가리지 않게) */
+  .report-fab { bottom: 16px; left: 16px; padding: 11px; }
+  .report-fab-text { display: none; }
+}
+
+.report-card { max-width: 520px; }
+
+.report-kind { display: flex; gap: 10px; margin-bottom: 14px; }
+.report-kind-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .16s ease;
+}
+.report-kind-btn small {
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.report-kind-btn:hover { border-color: var(--border-active); }
+.report-kind-btn.is-active {
+  border-color: var(--jungle-green);
+  background: var(--jungle-glow);
+  color: var(--text-main);
+}
+
+.report-text {
+  width: 100%;
+  min-height: 132px;
+  padding: 13px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  resize: vertical;
+}
+.report-text:focus {
+  outline: none;
+  border-color: var(--jungle-green);
+}
+.report-text::placeholder { color: var(--text-dim); }
+
+.report-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+.report-count { font-size: 0.78rem; color: var(--text-dim); }
+.report-send {
+  padding: 10px 22px;
+  border: none;
+  border-radius: 10px;
+  background: var(--jungle-green);
+  color: #06210f;
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity .16s ease, transform .16s ease;
+}
+.report-send:hover:not(:disabled) { transform: translateY(-1px); }
+.report-send:disabled { opacity: .45; cursor: not-allowed; }
+
+.report-note {
+  margin-top: 10px;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  text-align: center;
+}

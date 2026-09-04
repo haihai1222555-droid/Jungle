@@ -244,6 +244,127 @@ def load_alarms():
 def save_alarms():
     state_save("discord_alarms", active_alarms)
 
+
+# =========================================================
+# 제보 (버그 · 개선 요청)
+# ---------------------------------------------------------
+# 웹과 디스코드 양쪽에서 들어온다. 한곳에 모아 두고 관리자에게 DM 으로 알린다.
+# 알림과 같은 저장소를 쓰므로 재배포해도 남는다.
+# =========================================================
+REPORTS = []
+REPORT_MAX = 300           # 오래된 것부터 버린다. 무한정 쌓을 이유가 없다.
+REPORT_MAX_LEN = 1000      # 한 건의 길이 상한
+_REPORTS_LOADED = False
+
+
+def load_reports():
+    global REPORTS, _REPORTS_LOADED
+    if _REPORTS_LOADED:
+        return
+    data = state_load("reports", [])
+    REPORTS = data if isinstance(data, list) else []
+    _REPORTS_LOADED = True
+
+
+def save_reports():
+    state_save("reports", REPORTS[-REPORT_MAX:])
+
+
+def _clean_report_text(text):
+    """제보 내용을 안전하게 다듬는다.
+
+    관리자에게 DM 으로 보내는 글이다. @everyone 같은 멘션이 살아 있으면
+    엉뚱한 사람을 부르게 되므로 끊어 둔다.
+    """
+    t = (text or "").strip()[:REPORT_MAX_LEN]
+    t = t.replace("@everyone", "@\u200beveryone").replace("@here", "@\u200bhere")
+    # 폭 없는 공백을 끼워 멘션이 실제로 사람을 부르지 않게 한다
+    t = re.sub(r"<@[!&]?(\d+)>", "<@​\\1>", t)
+    return t
+
+
+def add_report(kind, text, source, who=None):
+    """제보를 받아 저장한다. 저장된 항목을 돌려준다.
+
+    kind   : "bug" 또는 "idea"
+    source : "discord" 또는 "web"
+    who    : 남긴 사람 표시 (디스코드 이름 등). 웹은 익명이다.
+    """
+    load_reports()
+    body = _clean_report_text(text)
+    if len(body) < 5:
+        return None
+    item = {
+        "id": int(time.time() * 1000) % 100000000,
+        "kind": "idea" if kind == "idea" else "bug",
+        "text": body,
+        "source": source,
+        "who": (who or "")[:60],
+        "at": now_kst().strftime("%Y-%m-%d %H:%M"),
+        "done": False,
+    }
+    REPORTS.append(item)
+    del REPORTS[:-REPORT_MAX]
+    save_reports()
+    return item
+
+
+def format_report(item, index=None):
+    """제보 한 건을 사람이 읽기 좋게."""
+    icon = "\U0001f41e" if item["kind"] == "bug" else "\U0001f4a1"
+    label = "버그 제보" if item["kind"] == "bug" else "개선 제안"
+    where = "웹" if item["source"] == "web" else "디스코드"
+    head = f"{icon} **{label}** `#{item['id']}`"
+    if index is not None:
+        head = f"{index}. " + head
+    lines = [head, f"> {item['text']}"]
+    meta = [f"{where}에서", item["at"]]
+    if item.get("who"):
+        meta.insert(0, item["who"])
+    lines.append("-# " + " · ".join(meta))
+    return "\n".join(lines)
+
+
+async def notify_admins_report(item):
+    """관리자에게 DM 으로 알린다.
+
+    관리자가 여러 명일 수 있으므로 모두에게 보낸다.
+    DM 이 막혀 있어도 저장은 이미 끝났으므로 잃지 않는다.
+    """
+    if not ADMIN_USER_IDS:
+        print("[제보] 관리자 ID 가 설정되지 않아 DM 을 보내지 못했습니다.")
+        return 0
+    sent = 0
+    for uid in ADMIN_USER_IDS:
+        try:
+            user = await resolve_user(int(uid))
+            if not user:
+                continue
+            await user.send(format_report(item) +
+                            "\n-# `/제보목록` 으로 전체를 볼 수 있어요.")
+            sent += 1
+        except Exception as e:
+            print(f"[제보] DM 실패({uid}): {e}")
+    return sent
+
+
+def submit_report(kind, text, source, who=None):
+    """제보를 저장하고 관리자에게 알린다. (다른 스레드에서도 부를 수 있다)
+
+    웹 서버는 별도 스레드에서 돌기 때문에, 봇의 이벤트 루프에
+    안전하게 일을 넘겨야 한다.
+    """
+    item = add_report(kind, text, source, who)
+    if not item:
+        return None
+    try:
+        loop = bot.loop
+        if loop and not isinstance(loop, type(discord.utils.MISSING)):
+            asyncio.run_coroutine_threadsafe(notify_admins_report(item), loop)
+    except Exception as e:
+        print(f"[제보] 알림 예약 실패: {e}")
+    return item
+
 # 마지막으로 성공한 조회 결과. 한 번씩 나는 실패 때문에
 # "실시간 데이터를 가져오지 못했습니다" 가 뜨는 것을 막는다.
 _LAST_STATUS = {}
@@ -1704,7 +1825,7 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
             "관련이 없으면 무시하고 네 일반 지식으로 답해라.\n\n"
             + ("[참고 자료 — 크래프톤 정글 캠퍼스 안내]\n" + kb_text + "\n\n" if kb_text else "")
             + "[가능한 action]\n"
-            "- register / cancel / cancel_all / list_alarms / status / test_alarm\n"
+            "- register / cancel / cancel_all / list_alarms / status / test_alarm / report\n"
             "- chat: 그 밖의 모든 질문. reply 에 답을 직접 써라\n\n"
             "[지금 시각]\n" + _now_line() + "\n\n"
             "[지금 기기 상태]\n" + "\n".join(lines) + "\n\n"
@@ -1756,6 +1877,7 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
         "- list_alarms: 내가 등록한 알림 목록\n"
         "- status: 세탁실 전체 현황\n"
         "- test_alarm: 알림이 잘 오는지 시험해 보고 싶다는 요청 (예: '알림 테스트 해줘')\n"
+        "- report: 버그를 알리거나 개선을 제안하려는 요청. 잘못 동작한다는 신고, '이런 기능 있으면 좋겠다', '건의하고 싶다' 같은 말. 내용은 창을 띄워 직접 적게 하므로 reply 에는 고맙다는 짧은 한마디만 적는다\n"
         "- chat: 위 어디에도 해당하지 않음. reply 에 답을 직접 써라\n"
         "한 문장에 요청이 여러 개면(예: '3번 건조기 알림 취소하고 7번 세탁기 예약') "
         "actions 배열에 말한 순서대로 모두 담아라. 요청이 하나뿐이면 actions 는 비워두고 "
@@ -1801,7 +1923,7 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                 "properties": {
                     "action": {"type": "STRING",
                                "enum": ["register", "cancel", "cancel_all", "list_alarms",
-                                        "status", "test_alarm", "chat"]},
+                                        "status", "test_alarm", "report", "chat"]},
                     "towerId": {"type": "INTEGER"},
                     "unitType": {"type": "STRING", "enum": ["washer", "dryer"]},
                     "actions": {
@@ -1898,7 +2020,7 @@ def ask_groq(text, status_data, mine, history=None, admin=False):
     system_text += (
         "\n\n[답하는 형식 — 반드시 지켜라]\n"
         "설명을 붙이지 말고 JSON 객체 하나만 답해라. 필드는 다음과 같다.\n"
-        '{"action": "register|cancel|cancel_all|list_alarms|status|test_alarm|chat", '
+        '{"action": "register|cancel|cancel_all|list_alarms|status|test_alarm|report|chat", '
         '"towerId": 1~9 (기기를 가리킬 때만), '
         '"unitType": "washer" 또는 "dryer" (기기를 가리킬 때만), '
         '"actions": [여러 요청일 때만, {"action","towerId","unitType"} 목록], '
@@ -2202,12 +2324,16 @@ async def _run_assistant_inner(user_id, text):
 
 
 def _norm(result):
-    """(문장, embed, 배치도) 세 칸으로 길이를 맞춘다."""
+    """(문장, embed, 배치도, 버튼) 네 칸으로 길이를 맞춘다.
+
+    버튼 칸은 제보처럼 눌러서 이어가야 하는 경우에만 채워진다.
+    """
     if not isinstance(result, tuple):
         result = (result,)
     return (result[0] if len(result) > 0 else "",
             result[1] if len(result) > 1 else None,
-            result[2] if len(result) > 2 else False)
+            result[2] if len(result) > 2 else False,
+            result[3] if len(result) > 3 else None)
 
 
 async def _run_steps(user_id, steps, reply, status_data):
@@ -2221,7 +2347,7 @@ async def _run_steps(user_id, steps, reply, status_data):
         texts.append(reply.strip())
     for step in steps:
         mine = [a for a in active_alarms if a.get("userId") == user_id]
-        t, e, b = _norm(await _do_step(user_id, step, status_data, mine))
+        t, e, b, v = _norm(await _do_step(user_id, step, status_data, mine))
         if t:
             texts.append(t)
         if e is not None and embed is None:
@@ -2234,6 +2360,11 @@ async def _run_steps(user_id, steps, reply, status_data):
 async def _do_step(user_id, plan, status_data, mine):
     action = plan.get("action")
     reply = (plan.get("reply") or "").strip()
+
+    if action == "report":
+        # 말로 제보하겠다고 하면 적을 창을 띄운다.
+        # 여기서 바로 받아 적으면 대화가 길어지고, 무엇을 적어야 하는지도 흐려진다.
+        return (reply or "제보 고마워요! 아래에서 골라 적어주세요."), None, False, ReportKindView()
 
     if action == "test_alarm":
         user = bot.get_user(user_id)
@@ -2314,6 +2445,85 @@ async def _do_step(user_id, plan, status_data, mine):
     return (reply or "무슨 말씀인지 파악하지 못했습니다."), None
 
 
+class ReportModal(discord.ui.Modal):
+    """제보를 적는 창.
+
+    버그인지 개선 제안인지는 버튼으로 미리 고르고 오므로 여기선 내용만 받는다.
+    """
+
+    def __init__(self, kind):
+        self.kind = kind
+        title = "버그 제보" if kind == "bug" else "개선 제안"
+        super().__init__(title=title, timeout=600)
+        self.body = discord.ui.TextInput(
+            label="어떤 점인가요?",
+            style=discord.TextStyle.paragraph,
+            placeholder=("어떤 상황에서 무엇이 잘못됐는지 적어주세요."
+                         if kind == "bug" else
+                         "있으면 좋겠다 싶은 기능을 적어주세요."),
+            required=True, min_length=5, max_length=1000)
+        self.add_item(self.body)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        who = f"{interaction.user.display_name}"
+        item = await asyncio.to_thread(
+            submit_report, self.kind, str(self.body.value), "discord", who)
+        if not item:
+            await interaction.response.send_message(
+                "\u26a0\ufe0f 내용이 너무 짧아요. 조금만 더 적어주세요.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"\u2705 접수했어요! `#{item['id']}`\n"
+            "-# 확인하고 반영할게요. 고마워요 \U0001f64c", ephemeral=True)
+
+
+class ReportKindView(discord.ui.View):
+    """버그인지 개선 제안인지 먼저 고르게 한다."""
+
+    def __init__(self):
+        super().__init__(timeout=300)
+
+    @discord.ui.button(label="버그 제보", emoji="\U0001f41e",
+                       style=discord.ButtonStyle.danger)
+    async def bug(self, interaction: discord.Interaction, _b: discord.ui.Button):
+        await interaction.response.send_modal(ReportModal("bug"))
+
+    @discord.ui.button(label="개선 제안", emoji="\U0001f4a1",
+                       style=discord.ButtonStyle.primary)
+    async def idea(self, interaction: discord.Interaction, _b: discord.ui.Button):
+        await interaction.response.send_modal(ReportModal("idea"))
+
+
+@bot.tree.command(name="버그", description="버그 제보나 개선 제안을 남깁니다.")
+async def cmd_report(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "무엇을 남기시겠어요?\n"
+        "-# \U0001f41e 잘못 동작하는 것 · \U0001f4a1 있으면 좋겠는 기능",
+        view=ReportKindView(), ephemeral=True)
+
+
+@bot.tree.command(name="제보목록", description="접수된 제보를 확인합니다. (관리자 전용)")
+async def cmd_report_list(interaction: discord.Interaction):
+    if not is_admin_user(interaction.user.id):
+        await interaction.response.send_message(
+            "\U0001f512 관리자만 볼 수 있어요.", ephemeral=True)
+        return
+    await asyncio.to_thread(load_reports)
+    open_items = [r for r in REPORTS if not r.get("done")]
+    if not open_items:
+        await interaction.response.send_message(
+            "\U0001f4ed 아직 접수된 제보가 없어요.", ephemeral=True)
+        return
+    lines = [f"**접수된 제보 {len(open_items)}건**", ""]
+    for i, r in enumerate(reversed(open_items[-10:]), 1):
+        lines.append(format_report(r, i))
+        lines.append("")
+    if len(open_items) > 10:
+        lines.append(f"-# 외 {len(open_items) - 10}건")
+    await interaction.response.send_message(
+        "\n".join(lines)[:1900], ephemeral=True)
+
+
 @bot.tree.command(name="알림테스트", description="실제 알림이 잘 오는지 DM 으로 바로 받아봅니다. (버튼도 확인)")
 async def cmd_test_alarm(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -2357,12 +2567,15 @@ async def cmd_set_channel(interaction: discord.Interaction):
 async def cmd_assistant(interaction: discord.Interaction, 말: str):
     await interaction.response.defer(ephemeral=True)
     try:
-        result, embed, board = await run_assistant(interaction.user.id, 말)
+        result, embed, board, view = _norm(await run_assistant(interaction.user.id, 말))
     except Exception as e:
         print(f"[Assistant Error] {e}")
-        result, embed, board = "⚠️ 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.", None, False
+        result, embed, board, view = ("⚠️ 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+                                      None, False, None)
     header = f"> {말}"
     kwargs = {"ephemeral": True}
+    if view is not None:
+        kwargs["view"] = view
     if board:
         board_file = await (make_board_file() if board is True else make_guide_file(board))
         if board_file is not None:
@@ -2754,7 +2967,8 @@ async def on_message(message: discord.Message):
         async with QuietTyping(message.channel):
             t_marks.append(("입력중 표시", time.perf_counter() - t_start))
             _t = time.perf_counter()
-            result, embed, board = await run_assistant(message.author.id, text, private=is_dm)
+            result, embed, board, view = _norm(
+                await run_assistant(message.author.id, text, private=is_dm))
             t_marks.append(("답 만들기", time.perf_counter() - _t))
         # 공용 채널에서는 여러 명이 동시에 말을 걸 수 있으므로
         # 누구에게 하는 답인지 이름을 붙여 헷갈리지 않게 한다.
@@ -2772,6 +2986,8 @@ async def on_message(message: discord.Message):
             return
 
         kwargs = {"mention_author": False}
+        if view is not None:
+            kwargs["view"] = view
         if board:
             _t = time.perf_counter()
             board_file = await (make_board_file() if board is True else make_guide_file(board))
@@ -2817,6 +3033,7 @@ async def on_message(message: discord.Message):
 async def on_ready():
     load_alarms()
     load_settings()
+    load_reports()
     if assistant_channels:
         print(f"[Settings] 대화 채널 {len(assistant_channels)}개 등록됨")
     print(f"🤖 [Discord Bot] {bot.user.name}#{bot.user.discriminator} (ID: {bot.user.id}) 로그인 성공!")

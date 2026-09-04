@@ -637,7 +637,69 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
 
         return super().do_GET()
 
+    def _client_key(self):
+        """요청을 보낸 사람을 구분할 값.
+
+        Caddy 를 거치면 출발지가 늘 127.0.0.1 이라, 그대로 쓰면
+        한 사람이 제보한 뒤 30초 동안 모두가 막힌다.
+        Caddy 가 붙여 주는 X-Forwarded-For 의 맨 앞이 진짜 사용자다.
+        """
+        fwd = (self.headers.get('X-Forwarded-For') or '').split(',')[0].strip()
+        if fwd:
+            return fwd
+        return self.client_address[0] if self.client_address else '?'
+
+    def _read_json(self, limit=8000):
+        """요청 본문을 JSON 으로 읽는다. 형식이 틀리면 None."""
+        try:
+            n = int(self.headers.get('Content-Length') or 0)
+            if n <= 0 or n > limit:
+                return None
+            return json.loads(self.rfile.read(n).decode('utf-8'))
+        except Exception:
+            return None
+
+    def _json_out(self, status, obj):
+        body = json.dumps(obj, ensure_ascii=False).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
+        if self.path.split('?')[0] == '/api/report':
+            data = self._read_json()
+            if not isinstance(data, dict):
+                self._json_out(400, {"ok": False, "error": "형식이 올바르지 않습니다."})
+                return
+            text = str(data.get('text') or '').strip()[:REPORT_MAX_LEN]
+            kind = 'idea' if data.get('kind') == 'idea' else 'bug'
+            if len(text) < 5:
+                self._json_out(400, {"ok": False,
+                                     "error": "조금 더 자세히 적어주세요. (5자 이상)"})
+                return
+            who = self._client_key()
+            if not report_allowed(who):
+                self._json_out(429, {"ok": False,
+                                     "error": "방금 보내셨어요. 잠시 후 다시 시도해 주세요."})
+                return
+            if DISCORD_MODULE is None:
+                self._json_out(503, {"ok": False,
+                                     "error": "지금은 접수할 수 없어요. 잠시 후 다시 시도해 주세요."})
+                return
+            try:
+                item = DISCORD_MODULE.submit_report(kind, text, 'web')
+            except Exception as e:
+                print(f"[제보] 접수 실패: {e}")
+                item = None
+            if not item:
+                self._json_out(500, {"ok": False, "error": "접수하지 못했습니다."})
+                return
+            print(f"[제보] 웹에서 접수 #{item['id']} ({item['kind']})")
+            self._json_out(200, {"ok": True, "id": item['id']})
+            return
+
         req_path = self.path.split('?')[0]
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length)
@@ -817,6 +879,28 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
 DISCORD_MODULE = None   # 봇을 띄웠으면 그 모듈. 상태를 물어보는 데 쓴다.
+
+# 제보가 쏟아지는 것을 막는다. 같은 사람이 연달아 여러 번 보내지 못하게.
+REPORT_MIN_GAP = 30          # 초
+REPORT_MAX_LEN = 1000
+_REPORT_LAST = {}            # 보낸 곳 -> 마지막 시각
+_REPORT_LOCK = threading.Lock()
+
+
+def report_allowed(who):
+    """너무 자주 보내는 것을 막는다. 보내도 되면 True."""
+    now = time.time()
+    with _REPORT_LOCK:
+        last = _REPORT_LAST.get(who, 0)
+        if now - last < REPORT_MIN_GAP:
+            return False
+        _REPORT_LAST[who] = now
+        if len(_REPORT_LAST) > 500:      # 무한정 쌓이지 않게
+            for k in [k for k, v in _REPORT_LAST.items()
+                      if now - v > 3600]:
+                _REPORT_LAST.pop(k, None)
+    return True
+
 
 
 def discord_bot_health():

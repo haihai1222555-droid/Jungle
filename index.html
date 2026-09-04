@@ -344,6 +344,47 @@
 
 
   <!-- 📖 사용 방법 모달 (기존 모달 스타일 재사용) -->
+  <!-- 제보 버튼 (좌측 하단) -->
+  <button class="report-fab" id="reportFab" title="버그 제보 · 개선 제안">
+    <span class="report-fab-icon">🐞</span>
+    <span class="report-fab-text">제보</span>
+  </button>
+
+  <!-- 제보 입력 창 -->
+  <div class="modal-overlay" id="reportModal">
+    <div class="modal-card report-card">
+      <div class="modal-header-bar">
+        <div class="modal-header-info">
+          <div class="modal-badge">의견 보내기</div>
+          <h2 class="modal-title">🐞 버그 제보 · 개선 제안</h2>
+        </div>
+        <button class="modal-close" id="reportModalClose" title="닫기">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="report-kind">
+          <button class="report-kind-btn is-active" data-kind="bug">
+            🐞 버그 제보
+            <small>잘못 동작해요</small>
+          </button>
+          <button class="report-kind-btn" data-kind="idea">
+            💡 개선 제안
+            <small>이런 게 있으면 좋겠어요</small>
+          </button>
+        </div>
+
+        <textarea id="reportText" class="report-text" maxlength="1000"
+                  placeholder="어떤 상황에서 무엇이 잘못됐는지 적어주세요.&#10;예) 4번 건조기 알림을 걸었는데 알림이 안 왔어요."></textarea>
+
+        <div class="report-foot">
+          <span class="report-count"><span id="reportCount">0</span> / 1000</span>
+          <button class="report-send" id="reportSend">보내기</button>
+        </div>
+        <p class="report-note">보내주신 내용은 관리자에게 바로 전달됩니다. 고마워요! 🙌</p>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="helpModal">
     <div class="modal-card">
       <div class="modal-header-bar">

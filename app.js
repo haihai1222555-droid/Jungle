@@ -2103,7 +2103,14 @@ async function processNaturalLanguageQuery(userText) {
      모르면 담당 코치나 운영사무실에 문의하라고 안내하세요.
    → 정글 생활 관련 답변에는 [안내 페이지 링크]에서 관련된 것을 골라 맨 끝에 "자세히: <링크>" 한 줄만 덧붙이세요.
      세탁 현황처럼 링크가 필요 없는 답변에는 붙이지 마세요.
-3. ⚠️ 코딩/프로그래밍/알고리즘 문제 풀이 등 일반 코딩 질문이 들어올 경우:
+3. 버그 제보 · 개선 제안:
+   - "이게 안 돼요", "버그 같아요", "이런 기능 있으면 좋겠어요", "건의하고 싶어요" 같은 말이 나오면
+     반드시 화면 **왼쪽 아래의 '🐞 제보' 버튼**을 눌러 남겨 달라고 안내하세요.
+   - 당신은 그 내용을 관리자에게 전달할 수 없습니다. 대신 받아 적거나 "전달하겠다"고 말하지 마세요.
+     그렇게 하면 사용자는 전달된 줄 알지만 실제로는 아무 데도 가지 않습니다.
+   - 예시: "앗, 불편을 드렸네요! 왼쪽 아래 '🐞 제보' 버튼을 눌러 남겨주시면 관리자에게 바로 전달돼요 🙌"
+   - 디스코드를 쓰는 사용자에게는 봇에게 `/버그` 라고 해도 된다고 덧붙일 수 있습니다.
+4. ⚠️ 코딩/프로그래밍/알고리즘 문제 풀이 등 일반 코딩 질문이 들어올 경우:
    - 답변을 장황하게 풀지 말고 1~2문장으로 유쾌하고 정중하게 거절하여 토큰을 절약하세요.
    - 예시: "저는 정글 세탁실 & 기숙사 생활 전용 비서입니다! 🫧 코딩 질문은 랩실 동료들과 페어 프로그래밍으로 해결하시고, 세탁실 현황이나 세탁 팁을 물어봐 주세요!"
 
@@ -2609,3 +2616,99 @@ initTheme();
 renderAllViews();
 loadDashboardData();
 setInterval(loadDashboardData, REFRESH_INTERVAL_SEC * 1000);
+
+
+/* ============================================================
+   제보 (버그 · 개선)
+   보낸 내용은 서버를 거쳐 관리자 디스코드로 바로 전달된다.
+   여기 AI 는 제보를 직접 받지 않는다 (전달 경로가 없다).
+   대신 이 버튼을 안내하도록 지시문에 적어 두었다.
+   ============================================================ */
+const reportFab = document.getElementById('reportFab');
+const reportModal = document.getElementById('reportModal');
+const reportText = document.getElementById('reportText');
+const reportSend = document.getElementById('reportSend');
+const reportCount = document.getElementById('reportCount');
+let reportKind = 'bug';
+
+const REPORT_PLACEHOLDER = {
+  bug: '어떤 상황에서 무엇이 잘못됐는지 적어주세요.\n예) 4번 건조기 알림을 걸었는데 알림이 안 왔어요.',
+  idea: '있으면 좋겠다 싶은 기능을 적어주세요.\n예) 세탁이 끝나면 카카오톡으로도 알려주면 좋겠어요.'
+};
+
+function openReportModal(kind) {
+  if (!reportModal) return;
+  if (kind) setReportKind(kind);
+  reportModal.classList.add('open');
+  setTimeout(() => reportText && reportText.focus(), 60);
+}
+
+function closeReportModal() {
+  if (reportModal) reportModal.classList.remove('open');
+}
+
+function setReportKind(kind) {
+  reportKind = (kind === 'idea') ? 'idea' : 'bug';
+  document.querySelectorAll('.report-kind-btn').forEach(b => {
+    b.classList.toggle('is-active', b.dataset.kind === reportKind);
+  });
+  if (reportText) reportText.placeholder = REPORT_PLACEHOLDER[reportKind];
+}
+
+async function sendReport() {
+  if (!reportText || !reportSend) return;
+  const text = reportText.value.trim();
+  if (text.length < 5) {
+    showToast('✏️', '조금 더 자세히 적어주세요. (5자 이상)', 'warning');
+    reportText.focus();
+    return;
+  }
+  reportSend.disabled = true;
+  reportSend.textContent = '보내는 중…';
+  try {
+    const res = await fetch('/api/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: reportKind, text })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) {
+      showToast('🙌', '접수했어요! 확인하고 반영할게요.', 'success');
+      reportText.value = '';
+      if (reportCount) reportCount.textContent = '0';
+      closeReportModal();
+    } else {
+      showToast('⚠️', data.error || '보내지 못했어요. 잠시 후 다시 시도해 주세요.', 'error');
+    }
+  } catch (e) {
+    showToast('⚠️', '연결에 실패했어요. 잠시 후 다시 시도해 주세요.', 'error');
+  } finally {
+    reportSend.disabled = false;
+    reportSend.textContent = '보내기';
+  }
+}
+
+if (reportFab) reportFab.onclick = () => openReportModal();
+const reportClose = document.getElementById('reportModalClose');
+if (reportClose) reportClose.onclick = closeReportModal;
+if (reportModal) {
+  reportModal.onclick = (e) => { if (e.target.id === 'reportModal') closeReportModal(); };
+}
+document.querySelectorAll('.report-kind-btn').forEach(b => {
+  b.onclick = () => setReportKind(b.dataset.kind);
+});
+if (reportText) {
+  reportText.oninput = () => {
+    if (reportCount) reportCount.textContent = String(reportText.value.length);
+  };
+  // Ctrl+Enter 로 바로 보내기
+  reportText.onkeydown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') sendReport();
+  };
+}
+if (reportSend) reportSend.onclick = sendReport;
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && reportModal && reportModal.classList.contains('open')) {
+    closeReportModal();
+  }
+});
