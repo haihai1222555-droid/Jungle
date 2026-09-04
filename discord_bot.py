@@ -1086,13 +1086,30 @@ GEMINI_API_KEYS = _load_gemini_keys()
 # 예전에는 요청마다 죽은 조합을 처음부터 다시 두드렸다.
 # 한 번 왕복에 0.2초씩이라 9가지가 모두 막히면 그만큼 그냥 버려진다.
 _QUOTA_BLOCKED = {}            # (모델, 키) -> 다시 시도해도 되는 시각
+_DEAD_KEYS = set()             # 아예 못 쓰는 키 (정지·삭제된 것)
 _QUOTA_LOCK = threading.Lock()
 QUOTA_COOLDOWN_DEFAULT = 60    # 알려주지 않으면 1분 쉬어 본다
 QUOTA_COOLDOWN_MAX = 3600
 
 
+def _mark_key_dead(key, reason=""):
+    """되살아나지 않는 키를 표시한다.
+
+    한도(429)는 기다리면 풀리지만, 프로젝트가 정지되거나 키가 지워지면
+    아무리 기다려도 안 된다. 그런 키는 매번 두드릴 이유가 없다.
+    """
+    with _QUOTA_LOCK:
+        if key in _DEAD_KEYS:
+            return
+        _DEAD_KEYS.add(key)
+    idx = GEMINI_API_KEYS.index(key) + 1 if key in GEMINI_API_KEYS else "?"
+    print(f"[Gemini] 키#{idx} 는 쓸 수 없습니다 ({reason}). 앞으로 건너뜁니다.")
+
+
 def _quota_ok(model, key):
     """지금 이 조합을 써도 되는가."""
+    if key in _DEAD_KEYS:
+        return False
     with _QUOTA_LOCK:
         until = _QUOTA_BLOCKED.get((model, key))
         if until is None:
@@ -1421,6 +1438,11 @@ def admin_command(text, status_data=None):
 def admin_diagnostics():
     """관리자에게 보여줄 지금 상태 요약."""
     lines = ["**진단**"]
+    if _DEAD_KEYS:
+        _dead_no = [str(GEMINI_API_KEYS.index(k) + 1) for k in _DEAD_KEYS
+                    if k in GEMINI_API_KEYS]
+        lines.append(f"• 쓸 수 없는 키: {len(_DEAD_KEYS)}개 "
+                     f"(#{', #'.join(sorted(_dead_no))}) — 정지되었거나 삭제됨")
     _blocked, _total, _live = quota_status()
     if _blocked:
         _soon = int(min(_live.values()) - time.time())
@@ -2056,6 +2078,11 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                     rest = _quota_block(model, key, delay)
                     print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} "
                           f"한도 초과 — {rest:.0f}초 쉼")
+                    continue
+                if e.code in (401, 403):
+                    # 키가 정지·삭제됐다. 기다려도 살아나지 않으므로 접어 둔다.
+                    # 모델 문제가 아니므로 다음 키로 이어 간다.
+                    _mark_key_dead(key, f"HTTP {e.code}")
                     continue
                 print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} HTTP {e.code}")
                 break
