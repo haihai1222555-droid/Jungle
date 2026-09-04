@@ -1711,34 +1711,25 @@ def parse_device_segment(seg):
     return {"action": "unit_status", "towerId": tower_id, "unitType": unit_type, "_verb": False}
 
 
-# 규칙이 다루지 못하는 말. 이런 것이 섞이면 AI 에게 넘긴다.
-# 규칙은 기기 알림만 알아서, 이런 말이 함께 오면 그 부분을 통째로 놓친다.
-BEYOND_RULES = ("제보", "버그", "건의", "개선", "제안", "테스트", "시험",
-                "사용법", "어떻게", "알려줘", "뭐야", "왜", "추천", "코스",
-                "벌점", "외박", "공가", "출결", "와이파이", "택배", "식당")
-
-
-def needs_ai(text):
-    """규칙이 감당 못 하는 말이 섞여 있는가.
-
-    기기 알림 이야기만 있으면 규칙이 빠르고 정확하다.
-    다른 이야기가 섞이면 규칙은 그 부분을 못 보고 지나치므로 AI 가 읽어야 한다.
-    """
-    t = (text or '').lower()
-    return any(w in t for w in BEYOND_RULES)
-
-
 def parse_by_rules(text, ctx=None):
     """API 를 쓰지 않고 알아들을 수 있는 문장은 여기서 바로 처리한다.
     (빠르고, 무료고, 결과가 항상 같다)"""
     t = text.replace(" ", "")
 
     # "전체 예약 취소", "알림 전부 꺼줘" 처럼 말이 조금씩 달라도 잡히게 한다
-    if re.search(r"(전체|전부|모두)(의)?(예약|알림|알람)?(을|를)?(다)?(취소|해제|삭제|끄|꺼|지워|없애)", t):
+    if re.search(r"(전체|전부|모두|모든|싹|다)(의)?(예약|알림|알람)?(을|를)?(다)?(취소|해제|삭제|끄|꺼|지워|없애)", t):
         return {"action": "cancel_all"}
     # "다 취소해줘" 처럼 짧게 말한 경우. 다만 기기 번호가 있으면 그 기기만 뜻하므로 뺀다
     if not DEVICE_RE.search(t) and re.search(r"다(취소|해제|삭제|꺼|끄|지워)", t):
         return {"action": "cancel_all"}
+    # "알림 설정 된 거 보여줘" 처럼 보여 달라는 말은 목록이다.
+    # 예전에는 '알림' 만 보고 등록으로 읽었다.
+    if any(k in t for k in ("보여줘", "보여주", "보여줄", "확인해줘", "확인하고",
+                            "뭐가있", "뭐있", "어떤게있")) \
+            and any(k in t for k in ("알림", "알람", "예약")) \
+            and not DEVICE_RE.search(t):
+        return {"action": "list_alarms"}
+
     if any(k in t for k in ("내알림", "내예약", "알림목록", "예약목록", "알림현황", "예약현황",
                             "알림리스트", "알림상태", "뭐걸었", "등록한알림", "등록한예약")):
         return {"action": "list_alarms"}
@@ -2369,18 +2360,24 @@ async def _run_assistant_inner(user_id, text):
         clear_history(user_id)
         return "🧹 대화 기억을 지웠습니다. 처음부터 다시 말씀해 주세요.", None
 
-    # 기기 이야기만 있으면 규칙이 빠르다. 다른 말이 섞였으면 AI 가 읽는다.
-    plan = None if needs_ai(text) else parse_by_rules(text, get_context(user_id))
-    if plan is None:
-        plan = await asyncio.to_thread(ask_gemini, text, status_data, mine,
-                                       get_history(user_id), admin_active(user_id))
+    # 문장을 읽는 일은 AI 가 훨씬 낫다. 규칙은 말이 조금만 달라져도 어긋난다.
+    # 실제로 "1번, 3번 건조기 세탁기" 를 둘 다 건조기로 걸거나,
+    # "링크 줄래? 그리고 3번 알림도" 에서 링크를 버리는 일이 있었다.
+    plan = await asyncio.to_thread(ask_gemini, text, status_data, mine,
+                                   get_history(user_id), admin_active(user_id))
     if plan is None:
         # 제미나이 키가 모두 막혔을 때 (하루 한도·모델 혼잡) 예비 엔진으로 넘어간다
         plan = await asyncio.to_thread(ask_groq, text, status_data, mine,
                                        get_history(user_id), admin_active(user_id))
     if plan is None:
-        return ("무슨 말씀인지 파악하지 못했습니다.\n"
-                "-# 예) `3번 건조기 알림 걸어줘` · `내 알림 보여줘` · `전부 해제해줘`"), None
+        # AI 가 둘 다 막혔다. 규칙으로라도 기본 동작은 살린다.
+        # 평소에는 쓰지 않지만, 이럴 때 아무것도 못 하면 봇이 먹통이 된다.
+        plan = parse_by_rules(text, get_context(user_id))
+        if plan is not None:
+            print("[Assistant] AI 가 모두 막혀 규칙으로 처리했습니다.")
+    if plan is None:
+        return ("지금은 답을 만들지 못했습니다. 잠시 후 다시 말씀해 주세요.\n"
+                "-# 급하면 `/알림` `/내알림` `/세탁기` 명령을 쓰실 수 있어요."), None
 
     # 다음 말에 맥락이 이어지도록 사람별로 기록해 둔다
     push_history(user_id, "user", text)
@@ -2393,10 +2390,13 @@ async def _run_assistant_inner(user_id, text):
     # 예전에는 이것을 흘려보내 답이 통째로 사라졌다.
     if isinstance(steps, list) and not steps:
         steps = None
-    if isinstance(steps, list) and len(steps) > 1:
+    if isinstance(steps, list) and steps:
+        # 동작이 하나여도 _run_steps 를 거친다.
+        # 함께 물어본 설명(분리수거 방법 같은)이 reply 에 담겨 오는데,
+        # _do_step 은 문장을 직접 만들어 쓰므로 그 설명을 잃는다.
+        for st in steps:
+            st.setdefault("_userText", text)
         return await _run_steps(user_id, steps, plan.get("reply"), status_data)
-    if isinstance(steps, list) and len(steps) == 1:
-        plan = dict(steps[0], reply=plan.get("reply"))
 
     return await _do_step(user_id, plan, status_data, mine)
 
@@ -2449,6 +2449,26 @@ def add_report_path(reply, user_text):
     return reply.rstrip() + "\n-# 그래도 안 되면 `/버그` 로 알려주세요."
 
 
+def strip_claim_sentences(text):
+    """한 일을 주장하는 문장만 덜어내고 나머지는 남긴다.
+
+    문장을 통째로 버리면 사용자가 물어본 설명까지 사라진다.
+    실제로 분리수거 안내가 '이용해 주세요' 한 마디 때문에 통째로 날아갔다.
+    """
+    if not text:
+        return ""
+    # 문장 단위로 끊어 주장하는 것만 뺀다
+    parts = re.split(r'(?<=[.!?요다])\s+', text.strip())
+    kept = [p for p in parts
+            if p.strip() and not claims_outcome(p) and not claims_false_limit(p)]
+    out = " ".join(kept).strip()
+    # 이모지나 기호만 남았으면 알맹이가 없는 것이다
+    if not any(ch.isalnum() for ch in out):
+        return ""
+    # 다 걸러졌으면 원래 문장에 설명이 없었다는 뜻이다
+    return out
+
+
 def claims_outcome(text):
     """무언가를 해냈다고 주장하는 말인가."""
     t = (text or "")
@@ -2471,9 +2491,9 @@ async def _run_steps(user_id, steps, reply, status_data):
     # AI 의 말은 아직 아무것도 하기 전에 지어낸 것이다.
     # 실제 결과가 나오면 그것만 말한다. 둘 다 붙이면
     # "한 번에 하나만 돼요" 뒤에 두 건 등록 결과가 따라붙는 꼴이 된다.
-    head = (reply or "").strip()
-    if head and (claims_outcome(head) or claims_false_limit(head)):
-        head = ""
+    # 주장하는 문장만 덜어내고 설명은 남긴다.
+    # 통째로 버리면 사용자가 물어본 답까지 사라진다.
+    head = strip_claim_sentences(reply)
     if head:
         texts.append(head)
     view = None
