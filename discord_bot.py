@@ -7,6 +7,7 @@ import json
 import asyncio
 import time
 import random
+import threading
 import urllib.request
 import urllib.error
 from collections import deque
@@ -959,6 +960,62 @@ def _load_gemini_keys():
 
 
 GEMINI_API_KEYS = _load_gemini_keys()
+
+# 한도(429)에 걸린 (모델, 키) 조합을 잠시 건너뛴다.
+# 예전에는 요청마다 죽은 조합을 처음부터 다시 두드렸다.
+# 한 번 왕복에 0.2초씩이라 9가지가 모두 막히면 그만큼 그냥 버려진다.
+_QUOTA_BLOCKED = {}            # (모델, 키) -> 다시 시도해도 되는 시각
+_QUOTA_LOCK = threading.Lock()
+QUOTA_COOLDOWN_DEFAULT = 60    # 알려주지 않으면 1분 쉬어 본다
+QUOTA_COOLDOWN_MAX = 3600
+
+
+def _quota_ok(model, key):
+    """지금 이 조합을 써도 되는가."""
+    with _QUOTA_LOCK:
+        until = _QUOTA_BLOCKED.get((model, key))
+        if until is None:
+            return True
+        if time.time() >= until:
+            del _QUOTA_BLOCKED[(model, key)]
+            return True
+        return False
+
+
+def _quota_block(model, key, retry_after=None):
+    """한도에 걸린 조합을 쉬게 한다.
+
+    구글이 알려준 대기 시간이 있으면 그대로 따르고,
+    없으면 1분만 쉬었다 다시 본다. 너무 길게 잡으면
+    한도가 풀렸는데도 안 쓰게 되어 손해다.
+    """
+    wait = retry_after if retry_after else QUOTA_COOLDOWN_DEFAULT
+    wait = min(max(float(wait), 5.0), QUOTA_COOLDOWN_MAX)
+    with _QUOTA_LOCK:
+        _QUOTA_BLOCKED[(model, key)] = time.time() + wait
+    return wait
+
+
+def _retry_delay_from(body):
+    """구글이 응답에 넣어 주는 대기 시간(초)을 꺼낸다."""
+    try:
+        data = json.loads(body)
+        for d in (data.get("error") or {}).get("details") or []:
+            v = d.get("retryDelay")
+            if v:
+                return float(str(v).rstrip("s"))
+    except Exception:
+        pass
+    return None
+
+
+def quota_status():
+    """지금 몇 가지 조합이 쉬는 중인지 (진단용)."""
+    now = time.time()
+    with _QUOTA_LOCK:
+        live = {k: v for k, v in _QUOTA_BLOCKED.items() if v > now}
+    total = len(GEMINI_API_KEYS) * len(GEMINI_MODELS)
+    return len(live), total, live
 GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
 
 # ── 관리자 모드 ────────────────────────────────────────────
@@ -1243,6 +1300,13 @@ def admin_command(text, status_data=None):
 def admin_diagnostics():
     """관리자에게 보여줄 지금 상태 요약."""
     lines = ["**진단**"]
+    _blocked, _total, _live = quota_status()
+    if _blocked:
+        _soon = int(min(_live.values()) - time.time())
+        lines.append(f"• 한도로 쉬는 조합 {_blocked}/{_total}개 "
+                     f"(가장 빨리 풀리는 것 {max(_soon, 0)}초 뒤)")
+    else:
+        lines.append("• 한도로 쉬는 조합 없음 (전부 사용 가능)")
     lines.append(f"• 제미나이 키 {len(GEMINI_API_KEYS)}개 · 모델 {len(GEMINI_MODELS)}개 "
                  f"→ 최대 {len(GEMINI_API_KEYS) * len(GEMINI_MODELS)}가지 조합")
     lines.append(f"• 예비 엔진(Groq) {'사용 가능' if GROQ_API_KEY else '미설정'}")
@@ -1764,6 +1828,7 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
     # 키와 모델을 많이 돌리다 보면 오래 걸릴 수 있어 전체 시간에 상한을 둔다
     deadline = time.monotonic() + 25
 
+    tried = 0
     for model in GEMINI_MODELS:
         if time.monotonic() > deadline:
             print("[Gemini] 시간 초과로 중단")
@@ -1773,13 +1838,19 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
         for key in GEMINI_API_KEYS:
             if time.monotonic() > deadline:
                 break
+            # 아까 한도에 걸린 조합은 쉬는 중이다. 두드려 봐야 또 거절이다.
+            if not _quota_ok(model, key):
+                continue
+            tried += 1
             try:
                 req = urllib.request.Request(
                     f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
                     data=json.dumps(body).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                 )
-                with urllib.request.urlopen(req, timeout=15) as res:
+                # 정상 응답이 1.2초 안팎이다. 15초까지 기다리면 한 번 늘어질 때
+                # 사용자가 그만큼 통째로 기다린다.
+                with urllib.request.urlopen(req, timeout=8) as res:
                     data = json.loads(res.read().decode("utf-8"))
                 raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
                 # 일부 모델이 ```json ... ``` 로 감싸 보낸다. 그대로 파싱하면 실패한다.
@@ -1794,13 +1865,23 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                 return plan
             except urllib.error.HTTPError as e:
                 # 429 = 이 키의 한도 초과, 다음 키로. 그 밖의 코드는 모델 문제로 본다.
-                print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} HTTP {e.code}")
                 if e.code == 429:
+                    try:
+                        delay = _retry_delay_from(e.read().decode("utf-8", "replace"))
+                    except Exception:
+                        delay = None
+                    rest = _quota_block(model, key, delay)
+                    print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} "
+                          f"한도 초과 — {rest:.0f}초 쉼")
                     continue
+                print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} HTTP {e.code}")
                 break
             except Exception as e:
                 print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} 실패: {e}")
                 break
+    if tried == 0:
+        blocked, total, _ = quota_status()
+        print(f"[Gemini] {blocked}/{total} 조합이 한도로 쉬는 중 — 바로 Groq 로")
     return None
 
 
@@ -2666,9 +2747,15 @@ async def on_message(message: discord.Message):
     if api_blocked():
         return
 
+    t_start = time.perf_counter()
+    t_marks = []
+
     try:
         async with QuietTyping(message.channel):
+            t_marks.append(("입력중 표시", time.perf_counter() - t_start))
+            _t = time.perf_counter()
             result, embed, board = await run_assistant(message.author.id, text, private=is_dm)
+            t_marks.append(("답 만들기", time.perf_counter() - _t))
         # 공용 채널에서는 여러 명이 동시에 말을 걸 수 있으므로
         # 누구에게 하는 답인지 이름을 붙여 헷갈리지 않게 한다.
         who = "" if is_dm else f"**{message.author.display_name}**님, "
@@ -2686,15 +2773,26 @@ async def on_message(message: discord.Message):
 
         kwargs = {"mention_author": False}
         if board:
+            _t = time.perf_counter()
             board_file = await (make_board_file() if board is True else make_guide_file(board))
+            t_marks.append(("그림 그리기", time.perf_counter() - _t))
             if board_file is not None:
                 kwargs["file"] = board_file
         # embed 가 있어도 문장을 함께 보낸다 (여러 요청을 한 번에 처리한 경우)
         body = (who + result) if result else (who.strip() or None)
+        _t = time.perf_counter()
         if embed is not None:
             await message.reply(content=body, embed=embed, **kwargs)
         else:
             await message.reply(body or "…", **kwargs)
+        t_marks.append(("디스코드 전송", time.perf_counter() - _t))
+
+        # 어디서 시간을 쓰는지 남긴다. 느릴 때만 (2초 초과) 기록해 로그를 더럽히지 않는다.
+        total = time.perf_counter() - t_start
+        if total > 2.0:
+            detail = " · ".join(f"{k} {v:.1f}s" for k, v in t_marks)
+            print(f"[느림] 전체 {total:.1f}s = {detail} "
+                  f"(게이트웨이 지연 {bot.latency * 1000:.0f}ms)")
     except discord.Forbidden:
         pass
     except discord.HTTPException as e:
