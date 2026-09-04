@@ -470,11 +470,46 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=BASE_DIR, **kwargs)
 
+    # 매번 서버에 물어봐야 하는 것 / 오래 담아 둬도 되는 것
+    REVALIDATE_EXT = ('.html', '.js', '.css', '.json', '.webmanifest')
+    LONG_CACHE_EXT = ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg',
+                      '.ico', '.ttf', '.woff', '.woff2')
+
+    def _cache_header_for(self, path):
+        """이 파일을 얼마나 담아 둬도 되는지 정한다.
+
+        Cache-Control 이 없으면 브라우저가 스스로 기간을 정해 버린다.
+        그래서 코드를 고쳐 올려도 사용자는 한참 옛 것을 쓰게 된다.
+        화면을 이루는 파일은 매번 확인시키고(no-cache 는 '쓰지 마'가 아니라
+        '쓰기 전에 물어봐'라는 뜻이다), 그림·글꼴은 오래 담아 둔다.
+        """
+        p = (path or '').split('?')[0].lower()
+        if p.endswith(self.LONG_CACHE_EXT):
+            return 'public, max-age=604800'          # 일주일
+        if p.endswith(self.REVALIDATE_EXT) or p.endswith('/'):
+            return 'no-cache'
+        return None
+
     def end_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        if not self._has_cache_header:
+            cc = self._cache_header_for(getattr(self, 'path', ''))
+            if cc:
+                self.send_header('Cache-Control', cc)
         super().end_headers()
+
+    _has_cache_header = False
+
+    def send_header(self, keyword, value):
+        if keyword.lower() == 'cache-control':
+            self._has_cache_header = True
+        super().send_header(keyword, value)
+
+    def handle_one_request(self):
+        self._has_cache_header = False     # 요청마다 새로 판단한다
+        super().handle_one_request()
 
     def do_OPTIONS(self):
         self.send_response(200)
