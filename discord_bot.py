@@ -1683,6 +1683,19 @@ _LEAK_MARKERS = (
     "[답변 범위", "[절대 규칙", "[가능한 action]", "[정글 생활 안내]", "[지금 기기 상태]",
     "systeminstruction", "system prompt", "systemprompt", "responseschema",
     "너는 크래프톤 정글 캠퍼스 생활 안내 봇이다",
+    # 지시문에만 쓰는 표현이다. 평범한 답변에는 나올 일이 없다.
+    "답변 허용 범위", "절대 규칙", "가능한 action",
+)
+
+# 대괄호 없이 풀어서 흘리는 것도 잡는다.
+# "제 절대 규칙은 다음과 같습니다" 처럼 지시문을 소개하려는 말투다.
+# 낱말 하나로 판단하면 평범한 답변까지 막히므로 문장 꼴을 본다.
+_LEAK_PHRASES = re.compile(
+    r"(절대\s*규칙|답변\s*허용\s*범위|답변\s*범위|시스템\s*프롬프트|지시문|"
+    r"가능한\s*action|내부\s*지침|제 지침|나의 지침)"
+    r"[^.\n]{0,20}"
+    r"(은|는|이|가|을|를)?\s*"
+    r"(다음|아래|이렇|알려|보여|공개|말씀|설명|적혀|되어)",
 )
 _CODE_MARKERS = (
     "```", "def ", "class ", "import ", "function ", "console.log", "print(",
@@ -1698,6 +1711,7 @@ def sanitize_reply(reply):
         return reply
     low = reply.lower()
     if (any(m in low for m in _LEAK_MARKERS)
+            or _LEAK_PHRASES.search(reply or "")
             or any(m in low for m in _CODE_MARKERS)
             or any(m in reply for m in _PERSONA_LEAK)):
         print("[Guard] 답변에서 유출/코드/호칭 변경을 감지해 대체했습니다.")

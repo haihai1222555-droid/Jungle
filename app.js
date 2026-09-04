@@ -2008,8 +2008,19 @@ function guardInput(text) {
 const GUARD_LEAK_MARKERS = [
   '[절대 규칙', '[답변 허용 범위', '[크래프톤 정글 기숙사 세탁실 현실',
   '[실시간 9대 기기 상태]', 'systeminstruction', 'system prompt', 'systemprompt',
-  "당신은 '크래프톤 정글 스마트 세탁실"
+  "당신은 '크래프톤 정글 스마트 세탁실",
+  // 지시문에만 쓰는 표현이다. 평범한 답변에는 나올 일이 없다.
+  '답변 허용 범위', '절대 규칙', '가능한 action'
 ];
+
+// 대괄호 없이 풀어서 흘리는 것도 잡는다.
+// "제 시스템 프롬프트는 다음과 같습니다" 처럼 지시문을 소개하려는 말투다.
+// 낱말 하나로 판단하면 평범한 답변까지 막히므로 문장 꼴을 본다.
+const GUARD_LEAK_PHRASE = new RegExp(
+  '(시스템\\s*프롬프트|지시문|내부\\s*지침|제 지침|나의 지침)' +
+  '[^.\\n]{0,20}(은|는|이|가|을|를)?\\s*' +
+  '(다음|아래|이렇|알려|보여|공개|말씀|설명|적혀|되어)'
+);
 const GUARD_CODE_MARKERS = [
   '```', 'def ', 'class ', 'import ', 'function ', 'console.log', 'print(',
   '#include', 'public static', 'select * from', '<?php', 'std::',
@@ -2022,6 +2033,7 @@ function isLeakyReply(reply) {
   if (!reply) return false;
   const low = String(reply).toLowerCase();
   return GUARD_LEAK_MARKERS.some(m => low.includes(m))
+    || GUARD_LEAK_PHRASE.test(reply)
     || GUARD_CODE_MARKERS.some(m => low.includes(m))
     || GUARD_PERSONA_LEAK.some(m => reply.includes(m));
 }
