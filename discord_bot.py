@@ -482,7 +482,7 @@ def render_floorplan_image(status_data):
     # 카드 테두리/상태 뱃지와 같은 색을 쓴다
     legend = [((100, 116, 139), "사용 가능"), ((16, 185, 129), "전체 가동 중"),
               ((59, 130, 246), "세탁 가동 중"), ((245, 158, 11), "건조 가동 중"),
-              ((239, 68, 68), "점검 필요")]
+              ((239, 68, 68), "점검 필요"), ((148, 163, 184), "정보 없음")]
     lx = W - MARGIN - 28
     for col, label in reversed(legend):
         lw = tw(label, f_sub)
@@ -495,7 +495,7 @@ def render_floorplan_image(status_data):
         """기기 한 칸: 도어 원 + [이름 ... 시간] + [상태 · 코스 · 알림뱃지]"""
         if unknown:
             # 값이 안 온 기기. 회색으로 두고 모른다고 적는다.
-            accent = (100, 116, 139)
+            accent = (148, 163, 184)
             state_txt = "정보 없음"
         elif err:
             accent = (239, 68, 68)
@@ -506,6 +506,11 @@ def render_floorplan_image(status_data):
         elif minutes > 0:
             accent = (245, 158, 11) if is_dryer else (59, 130, 246)
             state_txt = "작동 중"
+        elif state == "INITIAL":
+            # 전원이 켜져 있고 코스까지 골라둔 채 시작만 안 누른 상태다.
+            # 빈 기기와 같은 색으로 그리면 그냥 비어 있는 줄 안다.
+            accent = (203, 213, 225)
+            state_txt = "선택 완료(시작 준비중)"
         elif state in FREE_STATES:
             accent = (71, 85, 105)
             state_txt = "대기 중 (사용 가능)"
@@ -530,7 +535,14 @@ def render_floorplan_image(status_data):
             draw.text((x + cw - tw(t, f_time) - 20, uy), t,
                       fill=accent if err else (255, 255, 255), font=f_time)
         else:
-            lbl = "점검 필요" if err else "대기 중"
+            if err:
+                lbl = "점검 필요"
+            elif unknown:
+                lbl = "정보 없음"
+            elif state == "INITIAL":
+                lbl = "시작 전"
+            else:
+                lbl = "대기 중"
             draw.text((x + cw - tw(lbl, f_state) - 20, uy + 4), lbl,
                       fill=accent if err else TXT_MUTED, font=f_state)
 
@@ -564,7 +576,7 @@ def render_floorplan_image(status_data):
         w_err = bool(w.get("error")) or w_state == "ERROR"
 
         if no_data:
-            border, label, bg = (100, 116, 139), "정보 없음", (30, 41, 59)
+            border, label, bg = (148, 163, 184), "정보 없음", (30, 41, 59)
         elif d_err or w_err:
             border, label, bg = (239, 68, 68), "점검 필요", (69, 16, 16)
         elif d_min > 0 and w_min > 0:
@@ -913,7 +925,7 @@ def build_floorplan_embed():
 # 상태 조회 명령어 (/세탁기 · /건조기 · /정보)
 # =========================================================
 STATE_LABELS = {
-    "POWER_OFF": "대기 중", "INITIAL": "준비 완료", "COMPLETE": "완료 (수거 대기)",
+    "POWER_OFF": "대기 중", "INITIAL": "선택 완료(시작 준비중)", "COMPLETE": "완료 (수거 대기)",
     "END": "완료", "RUNNING": "작동 중", "WASHING": "세탁 중", "RINSING": "헹굼 중",
     "SPINNING": "탈수 중", "DRYING": "건조 중", "COOLING": "쿨링 중",
     "WRINKLE_CARE": "구김 방지 중", "PAUSE": "일시정지", "ERROR": "기기 점검/에러",
@@ -955,7 +967,7 @@ def build_unit_list_embed(unit_type):
             # 값 자체가 안 온 기기. 빈 값을 '전원 꺼짐' 으로 읽으면
             # '사용 가능' 이 되어 헛걸음시킨다. 모른다고 적는다.
             if not tower_has_data(status_data, t["name"]):
-                lines.append(f"\u2b1b `{t['label']}` 정보 없음 · 값이 오지 않음")
+                lines.append(f"\u2b1b `{t['label']}` 정보 없음 · 점검 중일 수 있음")
                 unknown += 1
                 continue
 
@@ -1918,9 +1930,9 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
         # 빈 값을 넘기면 AI 가 '전원 꺼짐 = 사용 가능' 으로 읽어 잘못 안내한다.
         if not tower_has_data(status_data, t["name"]):
             lines.append(f"{t['id']}번({t['zoneName']}): 정보 없음 "
-                         "— 지금 이 기기의 값이 오지 않습니다. "
-                         "사용 가능한지 알 수 없으니 추천하지 말고, "
-                         "물어보면 값이 오지 않는다고 그대로 알려줄 것")
+                         "— 이 기기는 값이 오지 않습니다. 사용 가능한지 알 수 없으니 "
+                         "절대 추천하지 말고, 물어보면 반드시 이렇게 답할 것: "
+                         "\"현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요.\"")
             continue
         d = (status_data.get(t["name"]) or {})
         cycle = ((d.get("washer") or {}).get("cycle") or {}).get("cycleCount", 0)
@@ -2745,8 +2757,8 @@ async def _do_step(user_id, plan, status_data, mine):
         # 값이 안 오는 기기는 상태를 지어내지 않는다.
         # 해제는 막지 않는다. 이미 걸어둔 알림은 지울 수 있어야 한다.
         if info.get("unknown") and action != "cancel":
-            return (f"**{info['name']}** 는 지금 값이 오지 않아 상태를 알 수 없습니다.\n"
-                    "-# 기기가 네트워크에서 떨어져 있는 것으로 보여요. "
+            return (f"🛠️ **{info['name']}** — 현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요.\n"
+                    "-# 값이 다시 오면 그때 알림을 걸 수 있어요. "
                     "계속 이러면 `/버그` 로 알려주세요."), None
 
         set_context(user_id, tower_id, unit_type)
@@ -3212,10 +3224,8 @@ async def check_laundry_alarms():
                 if user:
                     try:
                         await user.send(
-                            f"\u2753 **[확인 불가: {item['deviceName']}]** "
-                            "기기에서 값이 오지 않아 완료 여부를 알 수 없습니다.\n"
-                            "\u2022 점검 중이거나 네트워크가 끊긴 것으로 보여요. "
-                            "세탁실에서 직접 확인해 주세요.\n"
+                            f"\u2753 **[확인 불가: {item['deviceName']}]**\n"
+                            "\u2022 현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요.\n"
                             "-# 값이 다시 오면 알림은 그대로 이어집니다.")
                     except Exception as e:
                         print(f"[DM Send Error] {e}")

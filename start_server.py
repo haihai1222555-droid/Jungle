@@ -391,9 +391,8 @@ def background_push_worker():
                         changed = True
                         send_push_notification(sub_info, {
                             'title': f"\u2753 [확인 불가] {device_name}",
-                            'body': (f"{device_name} 에서 값이 오지 않아 완료 여부를 "
-                                     "알 수 없습니다. 점검 중일 수 있으니 "
-                                     "세탁실에서 직접 확인해 주세요."),
+                            'body': (f"{device_name} 완료 여부를 알 수 없습니다. "
+                                     "현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요."),
                             'tag': f"nodata-{device_name}",
                             'key': alarm.get('key'),
                             'endpoint': sub_info.get('endpoint'),

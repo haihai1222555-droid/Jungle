@@ -85,7 +85,7 @@ const btnRefresh = document.getElementById('btnRefresh');
 // 1. 상태 텍스트
 const STATE_TRANSLATION = {
   POWER_OFF:    { label: '대기 중 (사용 가능)', isFree: true, isError: false },
-  INITIAL:      { label: '준비 완료',          isFree: true, isError: false },
+  INITIAL:      { label: '선택 완료(시작 준비중)', isFree: true, isError: false },
   COMPLETE:     { label: '세탁 완료 (수거 대기)', isFree: false, isError: false },
   RUNNING:      { label: '작동 중',             isFree: false, isError: false },
   DETECTING:    { label: '무게 감지 중',         isFree: false, isError: false },
@@ -983,8 +983,8 @@ setInterval(() => {
       } else if (now - item.noDataSince > NODATA_GRACE_MS && !item.notifiedNoData) {
         item.notifiedNoData = true;
         changed = true;
-        showToast('❓', `<b>[${item.deviceName}]</b> 기기 값이 오지 않아 완료 여부를 알 수 없습니다.`
-          + `<br><small>수리·점검 중일 수 있어요. 세탁실에서 직접 확인해 주세요.</small>`, 'warning');
+        showToast('❓', `<b>[${item.deviceName}]</b> 완료 여부를 알 수 없습니다.`
+          + `<br><small>현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요.</small>`, 'warning');
       }
       return;
     }
@@ -1396,14 +1396,14 @@ function createTowerCardElement(tower, isFloorplan = false) {
           <!-- 1행: 기기 구분 & 타이머 -->
           <div class="unit-header-line">
             <span class="unit-name">${isFloorplan ? '건조기' : 'UPPER · 건조기'}</span>
-            <span class="unit-timer ${dTimerStr && !noData ? '' : 'dim'}">${noData ? '정보 없음' : (dTimerStr || (isDryerErr ? '점검 필요' : '대기 중'))}</span>
+            <span class="unit-timer ${dTimerStr && !noData ? '' : 'dim'}">${noData ? '정보 없음' : (dTimerStr || (isDryerErr ? '점검 필요' : (dState === 'INITIAL' ? '시작 전' : '대기 중')))}</span>
           </div>
 
           <!-- 2행: 현재 상태/코스 & 알림 버튼 -->
           <div class="unit-action-line">
             <div class="unit-state-pill-group">
               <span class="unit-state-text ${dRunning ? 'state-active-dry' : ''} ${isDryerErr ? 'state-error' : ''}">
-                ${noData ? '값이 오지 않음' : dStateInfo.label}
+                ${noData ? '정보 없음' : dStateInfo.label}
               </span>
               ${dCourse ? `<span class="unit-course-badge course-dry">🌀 ${dCourse.replace(/\s*\(.*?\)/g, '')}</span>` : ''}
             </div>
@@ -1443,14 +1443,14 @@ function createTowerCardElement(tower, isFloorplan = false) {
           <!-- 1행: 기기 구분 & 타이머 -->
           <div class="unit-header-line">
             <span class="unit-name">${isFloorplan ? '세탁기' : 'LOWER · 세탁기'}</span>
-            <span class="unit-timer ${wTimerStr && !noData ? '' : 'dim'}">${noData ? '정보 없음' : (wTimerStr || (isWasherErr ? '점검 필요' : '대기 중'))}</span>
+            <span class="unit-timer ${wTimerStr && !noData ? '' : 'dim'}">${noData ? '정보 없음' : (wTimerStr || (isWasherErr ? '점검 필요' : (wState === 'INITIAL' ? '시작 전' : '대기 중')))}</span>
           </div>
 
           <!-- 2행: 현재 상태/코스 & 알림 버튼 -->
           <div class="unit-action-line">
             <div class="unit-state-pill-group">
               <span class="unit-state-text ${wRunning ? 'state-active-wash' : ''} ${isWasherErr ? 'state-error' : ''}">
-                ${noData ? '값이 오지 않음' : wStateInfo.label}
+                ${noData ? '정보 없음' : wStateInfo.label}
               </span>
               ${wCourse ? `<span class="unit-course-badge course-wash">🫧 ${wCourse.replace(/\s*\(.*?\)/g, '')}</span>` : ''}
             </div>
@@ -1475,7 +1475,7 @@ function createTowerCardElement(tower, isFloorplan = false) {
     <!-- 값이 안 오는 기기: 왜 그런지 알려준다 (수리 중일 때 이렇게 된다) -->
     ${noData ? `
       <div class="wt-error-banner wt-nodata-banner">
-        <span>🛠️</span> <strong>기기 정보가 오지 않습니다 (수리·점검 중일 수 있어요)</strong>
+        <span>🛠️</span> <strong>현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요.</strong>
       </div>
     ` : ''}
 
@@ -1951,8 +1951,9 @@ function getCompactContextSummary() {
     // 값이 안 온 기기를 '대기(사용가능)' 으로 넘기면
     // AI 가 수리 중인 기기를 추천한다. 모른다고 그대로 적는다.
     if (!towerHasData(t.name)) {
-      return `• ${t.label}(${t.zoneName}): 정보없음 — 이 기기의 값이 오지 않습니다. `
-        + `수리·점검 중일 수 있으니 추천하지 말고, 물어보면 값이 오지 않는다고 그대로 알려주세요.`;
+      return `• ${t.label}(${t.zoneName}): 정보없음 — 이 기기는 값이 오지 않습니다. `
+        + `사용 가능한지 알 수 없으니 절대 추천하지 말고, 물어보면 반드시 이렇게 답하세요: `
+        + `"현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요."`;
     }
     const d = globalStatusData[t.name] || {};
     const wState = d.washer?.runState?.currentState || 'POWER_OFF';
@@ -2429,8 +2430,8 @@ function noDataTowers() {
 function noDataNote() {
   const nd = noDataTowers();
   if (!nd.length) return '';
-  return `<br><small style="color:var(--text-dim)">🛠️ ${nd.map(t => t.label).join(', ')}`
-    + `는 값이 오지 않아 확인할 수 없습니다 (수리·점검 중일 수 있어요).</small>`;
+  return `<br><small style="color:var(--text-dim)">🛠️ ${nd.map(t => t.label).join(', ')}: `
+    + `현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요.</small>`;
 }
 
 function towerListText(list) {
@@ -2511,9 +2512,8 @@ function fallbackLocalNlp(q, isNoKey = false) {
 
     if (!towerHasData(tower.name)) {
       // 값이 안 오는 기기를 '사용 가능' 이라고 하면 헛걸음시킨다
-      answer = `🛠️ <b>${tower.label} (${tower.zoneName})</b>: 기기 정보가 오지 않아 `
-             + `지금 상태를 알 수 없습니다.<br>• 수리·점검 중일 수 있으니 세탁실에서 직접 확인해 주세요.`;
-      speakText = `${tower.label}는 정보가 오지 않아 상태를 알 수 없습니다.`;
+      answer = `🛠️ <b>${tower.label} (${tower.zoneName})</b><br>• 현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요.`;
+      speakText = `${tower.label}는 현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요.`;
     } else if (err) {
       const diag = getErrorDiagnostic(err);
       answer = `⚠️ <b>${tower.label} (${tower.zoneName})</b>: ${diag.title}<br>• <b>조치:</b> ${diag.solution[0]}`;
