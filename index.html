@@ -373,12 +373,15 @@
           </button>
         </div>
 
-        <textarea id="reportText" class="report-text" maxlength="1000"
-                  placeholder="어떤 상황에서 무엇이 잘못됐는지 적어주세요.&#10;예) 4번 건조기 알림을 걸었는데 알림이 안 왔어요."></textarea>
-
-        <div class="report-foot">
-          <span class="report-count"><span id="reportCount">0</span> / 1000</span>
-          <button class="report-send" id="reportSend">보내기</button>
+        <div class="modal-section-card report-write">
+          <textarea id="reportText" class="report-text" maxlength="1000"
+                    placeholder="어떤 상황에서 무엇이 잘못됐는지 적어주세요.&#10;예) 4번 건조기 알림을 걸었는데 알림이 안 왔어요."></textarea>
+          <div class="report-foot">
+            <span class="report-count" id="reportCountWrap">
+              <span id="reportCount">0</span> / 1000 · 최소 5자
+            </span>
+            <button class="report-send" id="reportSend" disabled>보내기</button>
+          </div>
         </div>
         <p class="report-note">보내주신 내용은 관리자에게 바로 전달됩니다. 고마워요! 🙌</p>
       </div>

@@ -4029,13 +4029,15 @@ body.light-theme .help-note {
   color: var(--text-main);
 }
 
+.report-write { padding: 14px; }
+
 .report-text {
   width: 100%;
   min-height: 132px;
   padding: 13px 14px;
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(0, 0, 0, 0.35);
   color: var(--text-main);
   font-family: var(--font-sans);
   font-size: 0.92rem;
@@ -4076,3 +4078,6 @@ body.light-theme .help-note {
   color: var(--text-dim);
   text-align: center;
 }
+
+/* 최소 글자 수에 못 미치면 알려 준다 (보내기도 잠근다) */
+.report-count.is-short { color: var(--color-drying); }

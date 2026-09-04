@@ -2140,10 +2140,10 @@ async def run_assistant(user_id, text, private=True):
         return blocked, None, False
 
     result = await _run_assistant_inner(user_id, text)
-    # 반환값 길이를 (문장, embed, 배치도필요) 세 개로 맞춘다
-    text_out = result[0] if len(result) > 0 else ""
-    embed_out = result[1] if len(result) > 1 else None
-    attach = result[2] if len(result) > 2 else False
+    # 칸 수를 맞추는 일은 _norm 에 맡긴다.
+    # 예전에는 여기서 세 칸만 손으로 꺼내 써서, 버튼이 담긴 네 번째 칸이
+    # 통째로 버려졌다. 제보 버튼이 안 뜨던 원인이다.
+    text_out, embed_out, attach, view_out = _norm(result)
     # 배치도를 붙일 상황이 아니면, 질문에 맞는 안내 사진이 있는지 본다
     if not attach:
         guide = find_guide_image(text)
@@ -2156,7 +2156,7 @@ async def run_assistant(user_id, text, private=True):
                             f"-# {guide['caption']}")
     if text_out:
         push_history(user_id, "model", text_out)
-    return text_out, embed_out, attach
+    return text_out, embed_out, attach, view_out
 
 
 def find_guide_image(text):

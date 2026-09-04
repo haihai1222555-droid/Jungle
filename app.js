@@ -2640,6 +2640,7 @@ function openReportModal(kind) {
   if (!reportModal) return;
   if (kind) setReportKind(kind);
   reportModal.classList.add('open');
+  updateReportLen();
   setTimeout(() => reportText && reportText.focus(), 60);
 }
 
@@ -2675,7 +2676,7 @@ async function sendReport() {
     if (res.ok && data.ok) {
       showToast('🙌', '접수했어요! 확인하고 반영할게요.', 'success');
       reportText.value = '';
-      if (reportCount) reportCount.textContent = '0';
+      updateReportLen();
       closeReportModal();
     } else {
       showToast('⚠️', data.error || '보내지 못했어요. 잠시 후 다시 시도해 주세요.', 'error');
@@ -2697,10 +2698,20 @@ if (reportModal) {
 document.querySelectorAll('.report-kind-btn').forEach(b => {
   b.onclick = () => setReportKind(b.dataset.kind);
 });
+const reportCountWrap = document.getElementById('reportCountWrap');
+
+function updateReportLen() {
+  if (!reportText) return;
+  const len = reportText.value.trim().length;
+  if (reportCount) reportCount.textContent = String(reportText.value.length);
+  // 5자가 안 되면 보내기를 잠가 둔다. 눌러 보고 나서 거절당하는 것보다 낫다.
+  const tooShort = len > 0 && len < 5;
+  if (reportSend) reportSend.disabled = len < 5;
+  if (reportCountWrap) reportCountWrap.classList.toggle('is-short', tooShort);
+}
+
 if (reportText) {
-  reportText.oninput = () => {
-    if (reportCount) reportCount.textContent = String(reportText.value.length);
-  };
+  reportText.oninput = updateReportLen;
   // Ctrl+Enter 로 바로 보내기
   reportText.onkeydown = (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') sendReport();
