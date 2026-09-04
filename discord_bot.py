@@ -2699,6 +2699,98 @@ async def resolve_user(user_id):
     return user
 
 
+# 상태 문구는 정보와 안내를 섞어 돌린다.
+# 값이 필요한 것은 그때그때 만들고, 만들지 못하면 조용히 건너뛴다.
+PRESENCE_SLIDES = [
+    lambda st: "정글러 학습 중...",
+    lambda st: _presence_units(st),
+    lambda st: "정글에 대해 공부하는 중...",
+    lambda st: _presence_soonest(st),
+    lambda st: "현재 세탁기·건조기 현황 알아보는 중...",
+    lambda st: "/알림 으로 완료 5분 전에 알려드려요",
+    lambda st: _presence_alarms(),
+    lambda st: "/버그 로 개선 의견을 받아요",
+]
+_presence_i = 0
+
+
+def _presence_units(status_data):
+    """지금 몇 대나 쓸 수 있는지."""
+    if not status_data:
+        return None
+    free_w = free_d = 0
+    for tower in TOWERS:
+        data = status_data.get(tower["name"]) or {}
+        for unit, box in (("washer", "w"), ("dryer", "d")):
+            u = data.get(unit) or {}
+            state = (u.get("runState") or {}).get("currentState")
+            if state in (None, "POWER_OFF", "INITIAL"):
+                if box == "w":
+                    free_w += 1
+                else:
+                    free_d += 1
+    return f"세탁기 {free_w}대 · 건조기 {free_d}대 사용 가능"
+
+
+def _presence_soonest(status_data):
+    """가장 먼저 끝나는 기기. 기다리는 사람에게 제일 쓸모 있는 정보다."""
+    if not status_data:
+        return None
+    best = None
+    for tower in TOWERS:
+        data = status_data.get(tower["name"]) or {}
+        for unit, label in (("washer", "세탁기"), ("dryer", "건조기")):
+            u = data.get(unit) or {}
+            state = (u.get("runState") or {}).get("currentState")
+            if state in (None, "POWER_OFF", "INITIAL", "WRINKLE_CARE"):
+                continue
+            t = u.get("timer") or {}
+            mins = t.get("remainHour", 0) * 60 + t.get("remainMinute", 0)
+            if mins > 0 and (best is None or mins < best[0]):
+                best = (mins, f"{tower['id']}번 {label}")
+    if not best:
+        return None
+    return f"{best[1]} {best[0]}분 뒤 완료"
+
+
+def _presence_alarms():
+    """지금 걸려 있는 알림 수."""
+    if not active_alarms:
+        return None
+    return f"알림 {len(active_alarms)}개 지켜보는 중..."
+
+
+@tasks.loop(seconds=30)
+async def rotate_presence():
+    """상태 문구를 하나씩 넘긴다.
+
+    너무 자주 바꾸면 디스코드가 갱신을 흘리고 보는 사람도 어지럽다.
+    30초면 한 바퀴에 4분쯤 걸려 적당하다.
+    """
+    global _presence_i
+    status_data = _LAST_STATUS or {}
+    # 값을 못 만드는 문구(가동 중인 기기가 없을 때 등)는 건너뛴다
+    for _ in range(len(PRESENCE_SLIDES)):
+        make = PRESENCE_SLIDES[_presence_i % len(PRESENCE_SLIDES)]
+        _presence_i += 1
+        try:
+            text = make(status_data)
+        except Exception:
+            text = None
+        if text:
+            try:
+                await bot.change_presence(
+                    activity=discord.CustomActivity(name=text[:128]))
+            except Exception as e:
+                print(f"[Presence] 상태 갱신 실패: {e}")
+            return
+
+
+@rotate_presence.before_loop
+async def _before_presence():
+    await bot.wait_until_ready()
+
+
 @tasks.loop(seconds=10)
 async def check_laundry_alarms():
     if not active_alarms:
@@ -3077,6 +3169,9 @@ async def on_ready():
 
     BOT_STATUS.update(name=str(bot.user), guilds=len(bot.guilds))
     set_bot_status("연결됨", f"{len(bot.guilds)}개 서버", online=True)
+
+    if not rotate_presence.is_running():
+        rotate_presence.start()
 
     if not check_laundry_alarms.is_running():
         check_laundry_alarms.start()

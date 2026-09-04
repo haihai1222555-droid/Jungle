@@ -1,0 +1,127 @@
+/* ============================================
+   약관·개인정보 문서 페이지 공통 스타일
+   대시보드의 색·글꼴을 그대로 쓴다 (style.css 다음에 불러온다).
+   ============================================ */
+.doc-wrap {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 40px 20px 80px;
+}
+
+.doc-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 24px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 0.88rem;
+  transition: color .16s ease;
+}
+.doc-back:hover { color: var(--jungle-green); }
+
+.doc-head { margin-bottom: 28px; }
+.doc-badge {
+  display: inline-block;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--jungle-glow);
+  color: var(--jungle-green);
+  font-size: 0.76rem;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.doc-head h1 {
+  font-size: 1.55rem;
+  color: var(--text-main);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.doc-head p { color: var(--text-muted); font-size: 0.9rem; line-height: 1.6; }
+
+.doc-sec {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  padding: 22px 24px;
+  margin-bottom: 16px;
+}
+.doc-sec h2 {
+  font-size: 1.05rem;
+  color: var(--text-main);
+  margin-bottom: 12px;
+}
+.doc-sub {
+  font-size: 0.92rem;
+  color: var(--text-main);
+  margin: 18px 0 8px;
+}
+.doc-sec p,
+.doc-sec li { color: var(--text-muted); font-size: 0.92rem; line-height: 1.75; }
+.doc-sec ul,
+.doc-sec ol { padding-left: 20px; margin: 8px 0; }
+.doc-sec li { margin-bottom: 5px; }
+.doc-sec b,
+.doc-sec strong { color: var(--text-main); }
+.doc-sec code {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgba(0, 232, 122, 0.12);
+  color: var(--jungle-green);
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+}
+
+.doc-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 0.88rem; }
+.doc-table th,
+.doc-table td {
+  padding: 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  vertical-align: top;
+  line-height: 1.65;
+}
+.doc-table th {
+  color: var(--text-main);
+  font-weight: 600;
+  white-space: nowrap;
+  width: 30%;
+}
+/* 좁은 화면에서는 표를 위아래로 편다 */
+@media (max-width: 560px) {
+  .doc-table th,
+  .doc-table td { display: block; width: auto; border-bottom: none; }
+  .doc-table th { padding-bottom: 2px; }
+  .doc-table td { padding-top: 0; border-bottom: 1px solid var(--border-subtle); }
+}
+
+/* '언제 수집하는가' 를 항목마다 붙여 둔다 */
+.doc-when {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 0.82em;
+}
+
+.doc-note {
+  background: rgba(0, 232, 122, 0.07);
+  border: 1px solid var(--border-active);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-top: 12px;
+}
+.doc-note p { color: var(--text-main); font-size: 0.88rem; }
+
+.doc-foot {
+  margin-top: 28px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  line-height: 1.8;
+}
+.doc-foot a { color: var(--jungle-green); text-decoration: none; }
+.doc-foot a:hover { text-decoration: underline; }
+
+body.light-theme .doc-sec { background: #ffffff; }
+body.light-theme .doc-note { background: rgba(0, 232, 122, 0.09); }

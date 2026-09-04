@@ -4135,3 +4135,19 @@ body.light-theme .report-fab:hover {
   color: #0f172a;
   border-color: var(--jungle-green);
 }
+
+
+/* 하단 약관·개인정보 링크 (디스코드 앱 인증에도 필요하다) */
+.footer-doc-links {
+  margin-top: 10px;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+.footer-doc-links a {
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color .16s ease;
+}
+.footer-doc-links a:hover { color: var(--jungle-green); }
+.footer-dot { margin: 0 8px; opacity: .5; }
