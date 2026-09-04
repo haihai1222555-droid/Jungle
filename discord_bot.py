@@ -1143,6 +1143,13 @@ QUOTA_COOLDOWN_MAX = 3600
 
 # 한 번 요청에 이만큼까지만 기다린다. 정상 응답이 2초 안팎이다.
 GEMINI_TIMEOUT = 5
+# 이만큼 기다려도 제미나이가 안 오면 그때 Groq 도 부른다.
+# 제미나이가 건강하면 여기서 이미 끝나므로 Groq 을 부르지 않는다.
+# Groq 도 한도가 있어서, 매번 부르면 정작 필요할 때 못 쓴다.
+GROQ_JOIN_AFTER = 2.0
+# Groq 을 부른 뒤에도 제미나이에게 주는 시간.
+# 제미나이만 정글 안내 전문을 받으므로 답이 더 낫다.
+GEMINI_GRACE = 2.0
 # 제미나이에 쓸 전체 시간. 이걸 넘기면 미련 없이 Groq 으로 넘어간다.
 # Groq 이 1.5~2초에 답하므로 최악이 10초쯤에서 끝난다.
 GEMINI_BUDGET = 8
@@ -2183,9 +2190,13 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                     raw = re.sub(r"\s*```$", "", raw)
                 plan = json.loads(raw)
                 global LAST_ENGINE
-                LAST_ENGINE = f"{model} (키 {GEMINI_API_KEYS.index(key) + 1}번)"
-                if isinstance(plan, dict) and not admin:
-                    plan["reply"] = sanitize_reply(plan.get("reply"))
+                engine = f"{model} (키 {GEMINI_API_KEYS.index(key) + 1}번)"
+                LAST_ENGINE = engine
+                if isinstance(plan, dict):
+                    # 둘을 동시에 돌리므로 전역 변수만으로는 어느 쪽 답인지 알 수 없다
+                    plan["_engine"] = engine
+                    if not admin:
+                        plan["reply"] = sanitize_reply(plan.get("reply"))
                 return plan
             except urllib.error.HTTPError as e:
                 # 429 = 이 키의 한도 초과, 다음 키로. 그 밖의 코드는 모델 문제로 본다.
@@ -2283,8 +2294,10 @@ def ask_groq(text, status_data, mine, history=None, admin=False):
                 raw = re.sub(r"\s*```$", "", raw)
             plan = json.loads(raw)
             global LAST_ENGINE
-            LAST_ENGINE = f"Groq {model}"
+            engine = f"Groq {model}"
+            LAST_ENGINE = engine
             if isinstance(plan, dict):
+                plan["_engine"] = engine
                 if not admin:
                     plan["reply"] = sanitize_reply(plan.get("reply"))
                 print(f"[Groq] {model} 로 답했습니다")
@@ -2499,6 +2512,72 @@ async def make_board_file():
 BOARD_ACTIONS = ("unit_list", "status")
 
 
+async def _finish(task, label):
+    """작업이 끝나기를 기다려 결과를 꺼낸다. 터졌으면 None 으로 본다."""
+    try:
+        return await task
+    except asyncio.CancelledError:
+        return None
+    except Exception as e:
+        print(f"[Assistant] {label} 처리 중: {e}")
+        return None
+
+
+def _peek(task, label):
+    """이미 끝난 작업에서 결과를 꺼낸다."""
+    try:
+        return task.result()
+    except asyncio.CancelledError:
+        return None
+    except Exception as e:
+        print(f"[Assistant] {label} 처리 중: {e}")
+        return None
+
+
+async def _ask_ai(text, status_data, mine, hist, is_admin):
+    """제미나이를 먼저 띄우고, 늦으면 Groq 을 붙여 먼저 오는 답을 쓴다.
+
+    제미나이가 건강하면 Groq 을 부르지 않는다. Groq 한도를 아껴야
+    제미나이가 진짜 죽은 날에 기댈 곳이 남는다.
+    """
+    g = asyncio.create_task(
+        asyncio.to_thread(ask_gemini, text, status_data, mine, hist, is_admin))
+
+    # 1) 잠깐은 제미나이만 기다린다. 대개 여기서 끝난다.
+    done, _ = await asyncio.wait({g}, timeout=GROQ_JOIN_AFTER)
+    if done:
+        plan = _peek(g, "제미나이")
+        if plan is not None:
+            return plan
+        # 제미나이가 실패했다. 이제 Groq 차례다.
+        return await _finish(
+            asyncio.to_thread(ask_groq, text, status_data, mine, hist, is_admin),
+            "Groq")
+
+    # 2) 늦는다. Groq 을 붙인다.
+    print(f"[Assistant] 제미나이가 {GROQ_JOIN_AFTER:.0f}초 안에 안 와 Groq 도 부릅니다")
+    q = asyncio.create_task(
+        asyncio.to_thread(ask_groq, text, status_data, mine, hist, is_admin))
+
+    # 3) 제미나이에게 조금 더 준다. 답이 더 나으므로 기다릴 값어치가 있다.
+    done, _ = await asyncio.wait({g}, timeout=GEMINI_GRACE)
+    if done:
+        plan = _peek(g, "제미나이")
+        if plan is not None:
+            q.cancel()
+            return plan
+
+    # 4) 제미나이가 아직이거나 실패했다. Groq 답을 쓴다.
+    q_plan = await _finish(q, "Groq")
+    if q_plan is not None:
+        g.cancel()
+        return q_plan
+
+    # 5) 둘 다 안 되면 제미나이가 스스로 끝날 때까지만 본다.
+    #    ask_gemini 안에 전체 상한이 있어 마냥 기다리지는 않는다.
+    return await _finish(g, "제미나이")
+
+
 async def _run_assistant_inner(user_id, text):
     # urllib 은 이벤트 루프를 멈추므로 별도 스레드에서 부른다
     status_data = await asyncio.to_thread(fetch_live_status)
@@ -2516,12 +2595,15 @@ async def _run_assistant_inner(user_id, text):
     # 문장을 읽는 일은 AI 가 훨씬 낫다. 규칙은 말이 조금만 달라져도 어긋난다.
     # 실제로 "1번, 3번 건조기 세탁기" 를 둘 다 건조기로 걸거나,
     # "링크 줄래? 그리고 3번 알림도" 에서 링크를 버리는 일이 있었다.
-    plan = await asyncio.to_thread(ask_gemini, text, status_data, mine,
-                                   get_history(user_id), admin_active(user_id))
-    if plan is None:
-        # 제미나이 키가 모두 막혔을 때 (하루 한도·모델 혼잡) 예비 엔진으로 넘어간다
-        plan = await asyncio.to_thread(ask_groq, text, status_data, mine,
-                                       get_history(user_id), admin_active(user_id))
+    hist, is_admin = get_history(user_id), admin_active(user_id)
+    plan = await _ask_ai(text, status_data, mine, hist, is_admin)
+
+    if plan is not None:
+        # 어느 엔진이 답했는지 이 요청 기준으로 다시 적어 둔다.
+        # 동시에 돌았으므로 전역 변수는 상대 엔진 것일 수 있다.
+        global LAST_ENGINE
+        LAST_ENGINE = plan.get("_engine") or LAST_ENGINE
+
     if plan is None:
         # AI 가 둘 다 막혔다. 규칙으로라도 기본 동작은 살린다.
         # 평소에는 쓰지 않지만, 이럴 때 아무것도 못 하면 봇이 먹통이 된다.
