@@ -157,6 +157,12 @@ def save_subscriptions(subs):
         except Exception as e:
             print(f"[Subs Save Error] {e}")
 
+# 다시 살아날 수 없는 구독의 endpoint. 다음 바퀴에서 목록에서 뺀다.
+# 여기에 담아두지 않으면 못 쓰는 구독을 5초마다 영영 다시 두드린다.
+DEAD_ENDPOINTS = set()
+DEAD_ENDPOINTS_MAX = 500          # 이 표시 자체가 새는 일이 없게 상한을 둔다
+
+
 def send_push_notification(subscription_info, payload_data):
     if not HAS_WEBPUSH or not os.path.exists(VAPID_PRIV_PATH):
         return
@@ -169,7 +175,16 @@ def send_push_notification(subscription_info, payload_data):
         )
         print(f"[WebPush] 발송 성공: {payload_data.get('title', '')}")
     except Exception as e:
-        print(f"[WebPush Error] {e}")
+        # 410/404 는 구독이 사라진 것, 401/403 은 VAPID 열쇠가 안 맞는 것.
+        # 어느 쪽이든 다시 보내도 소용없다.
+        code = getattr(getattr(e, 'response', None), 'status_code', None)
+        if code in (401, 403, 404, 410):
+            ep = (subscription_info or {}).get('endpoint')
+            if ep and len(DEAD_ENDPOINTS) < DEAD_ENDPOINTS_MAX:
+                DEAD_ENDPOINTS.add(ep)
+            print(f"[WebPush] 못 쓰는 구독({code}) — 목록에서 뺍니다")
+        else:
+            print(f"[WebPush Error] {e}")
 
 # =========================================================
 # 시간대별 혼잡도 관측
@@ -342,6 +357,12 @@ def background_push_worker():
                 sub_info = item.get('subscription')
                 alarm = (item.get('alarm') or {})
                 if not sub_info or not alarm:
+                    continue
+
+                # 이미 못 쓴다고 판명된 구독은 여기서 버린다
+                if sub_info.get('endpoint') in DEAD_ENDPOINTS:
+                    print(f"[Alarm] 못 쓰는 구독 정리: {alarm.get('deviceName', '?')}")
+                    changed = True
                     continue
 
                 # 안전망: 기기가 에러로 멈춰 타이머가 얼어붙으면 완료 판정이 영영 안 나서

@@ -30,18 +30,6 @@ const TOWERS = [
   { id: 9, name: '워시타워_9', zone: 'women',  label: '9호기', zoneName: '여성 전용' },
 ];
 
-// 초기 즉시 렌더링용 최신 실시간 스냅샷
-const INITIAL_STATUS_SNAPSHOT = {
-  "워시타워_1":{"washer":{"runState":{"currentState":"POWER_OFF"},"timer":{"remainHour":0,"remainMinute":0},"cycle":{"cycleCount":39}},"dryer":{"runState":{"currentState":"ERROR"},"timer":{"remainHour":1,"remainMinute":26},"error":"EMPTY_WATER_ALERT_ERROR"}},
-  "워시타워_2":{"washer":{"runState":{"currentState":"POWER_OFF"},"timer":{"remainHour":0,"remainMinute":0},"cycle":{"cycleCount":13}},"dryer":{"runState":{"currentState":"POWER_OFF"},"timer":{"remainHour":0,"remainMinute":0}}},
-  "워시타워_3":{"washer":{"runState":{"currentState":"POWER_OFF"},"timer":{"remainHour":0,"remainMinute":0},"cycle":{"cycleCount":29}},"dryer":{"runState":{"currentState":"PAUSE"},"timer":{"remainHour":0,"remainMinute":42}}},
-  "워시타워_4":{"washer":{"runState":{"currentState":"RUNNING"},"timer":{"remainHour":0,"remainMinute":42},"cycle":{"cycleCount":33}},"dryer":{"runState":{"currentState":"WRINKLE_CARE"},"timer":{"remainHour":0,"remainMinute":0}}},
-  "워시타워_5":{"washer":{"runState":{"currentState":"POWER_OFF"},"timer":{"remainHour":0,"remainMinute":0},"cycle":{"cycleCount":24}},"dryer":{"runState":{"currentState":"ERROR"},"timer":{"remainHour":0,"remainMinute":51},"error":"EMPTY_WATER_ALERT_ERROR"}},
-  "워시타워_6":{"washer":{"runState":{"currentState":"SPINNING"},"timer":{"remainHour":0,"remainMinute":5},"cycle":{"cycleCount":55}},"dryer":{"runState":{"currentState":"POWER_OFF"},"timer":{"remainHour":0,"remainMinute":0}}},
-  "워시타워_7":{"washer":{"runState":{"currentState":"POWER_OFF"},"timer":{"remainHour":0,"remainMinute":0},"cycle":{"cycleCount":46}},"dryer":{"runState":{"currentState":"RUNNING"},"timer":{"remainHour":1,"remainMinute":34}}},
-  "워시타워_8":{"washer":{"runState":{"currentState":"POWER_OFF"},"timer":{"remainHour":0,"remainMinute":0},"cycle":{"cycleCount":14}},"dryer":{"runState":{"currentState":"POWER_OFF"},"timer":{"remainHour":0,"remainMinute":0}}},
-  "워시타워_9":{"washer":{"runState":{"currentState":"POWER_OFF"},"timer":{"remainHour":0,"remainMinute":0},"cycle":{"cycleCount":27}},"dryer":{"runState":{"currentState":"POWER_OFF"},"timer":{"remainHour":0,"remainMinute":0}}}
-};
 
 const INITIAL_STATS_SNAPSHOT = {
   "days": 7,
@@ -70,8 +58,15 @@ const INITIAL_STATS_SNAPSHOT = {
   ]
 };
 
-let globalStatusData = INITIAL_STATUS_SNAPSHOT;
-let globalStatsData = INITIAL_STATS_SNAPSHOT;
+// 첫 그림에 쓸 값. 코드에 박힌 옛 스냅샷을 그대로 쓰면
+// 페이지를 열 때마다 지어낸 상태가 잠깐 보인다.
+// 이 사람이 지난번에 실제로 받아둔 값이 있으면 그것을 쓰고, 없으면 비워 둔다.
+// 비어 있으면 '정보 없음' 으로 그려지므로 거짓 상태를 보여주지 않는다.
+const _lastGood = (() => {
+  try { return loadLastGoodSnapshot(); } catch (e) { return null; }
+})();
+let globalStatusData = _lastGood?.status || {};
+let globalStatsData = _lastGood?.stats || INITIAL_STATS_SNAPSHOT;
 let currentZoneFilter = 'all';
 let usageChartInstance = null;
 
@@ -436,7 +431,9 @@ async function loadDashboardData() {
       if (cached.stats) globalStatsData = cached.stats;
       statusText.textContent = `연결 끊김 · ${formatDataAge(Date.now() - cached.savedAt)} 데이터`;
     } else {
-      statusText.textContent = '연결 끊김 · 저장된 스냅샷';
+      // 보여줄 실데이터가 없다. 지어낸 값으로 메우지 않는다.
+      globalStatusData = {};
+      statusText.textContent = '연결 끊김 · 기기 정보를 불러오지 못했습니다';
     }
     // 실데이터가 끊긴 상태를 실시간처럼 보이게 하지 않는다
     liveDot.style.background = '#f59e0b';
@@ -934,8 +931,13 @@ function updateAlarmDockUI() {
       remainMin = Math.max(0, Math.ceil(remainMs / (60 * 1000)));
     }
 
+    // 값이 안 오면 완료로 볼 수 없다. 초록색 '완료' 는 헛걸음시킨다.
+    const noData = !tower || !towerHasData(tower.name);
+
     let timeText = '';
-    if (isError) {
+    if (noData) {
+      timeText = `<span style="color:#94a3b8;font-weight:700;">🛠️ 정보 없음 · 점검 중일 수 있음</span>`;
+    } else if (isError) {
       const diag = getErrorDiagnostic(unitData.error || data.error || 'DRAIN_ERROR');
       timeText = `<span style="color:#ef4444;font-weight:800;">🚨 가동 중단! (${diag.short})</span>`;
     } else if (remainMin > 0) {
@@ -947,9 +949,9 @@ function updateAlarmDockUI() {
     const isWashing = item.unitType === 'washer';
 
     return `
-      <div class="alarm-row-item ${isError ? 'alarm-row-error' : ''}">
+      <div class="alarm-row-item ${isError && !noData ? 'alarm-row-error' : ''}">
         <div class="alarm-row-info">
-          <span class="alarm-device-pill ${isError ? 'pill-error' : (isWashing ? 'pill-wash' : 'pill-dry')}">${item.deviceName}</span>
+          <span class="alarm-device-pill ${noData ? 'pill-idle' : (isError ? 'pill-error' : (isWashing ? 'pill-wash' : 'pill-dry'))}">${item.deviceName}</span>
           <span class="alarm-row-time">${timeText}</span>
         </div>
         <button class="btn-alarm-row-del" onclick="removeLaundryAlarm('${item.key}')" title="이 기기 알림 끄기">✕</button>
@@ -1750,6 +1752,25 @@ function renderStaleTracker() {
 }
 
 function openTowerModal(tower, data, wFluc, dFluc) {
+  // 값이 안 오는 기기는 자세히 보여줄 것이 없다.
+  // 빈 값을 그리면 '대기 중 · 0분' 이 되어 비어 있는 것처럼 읽힌다.
+  if (!towerHasData(tower.name)) {
+    const m = document.getElementById('detailModal');
+    document.getElementById('mZoneBadge').className = `modal-badge zone-tag-${tower.zone}`;
+    document.getElementById('mZoneBadge').textContent = tower.zoneName;
+    document.getElementById('mTowerTitle').textContent = `워시타워 ${tower.label}`;
+    document.getElementById('mBodyContent').innerHTML = `
+      <div class="wt-error-banner wt-nodata-banner" style="margin:8px 0 4px;">
+        <span>🛠️</span> <strong>현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요.</strong>
+      </div>
+      <div class="modal-info-row">
+        <span class="modal-info-label">기기 모델</span>
+        <span class="modal-info-value modal-val-blue">LG TROMM WashTower™ (일체형)</span>
+      </div>`;
+    m.classList.add('open');
+    return;
+  }
+
   const modal = document.getElementById('detailModal');
   const badge = document.getElementById('mZoneBadge');
   const title = document.getElementById('mTowerTitle');

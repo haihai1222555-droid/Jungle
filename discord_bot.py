@@ -2623,6 +2623,9 @@ def describe_why_ambiguous(tower_id, status_data):
     tower = next((t for t in TOWERS if t["id"] == tower_id), None)
     if not tower:
         return None
+    # 값이 안 오면 '안 돌아간다' 가 아니라 '모른다' 다.
+    if not tower_has_data(status_data, tower["name"]):
+        return f"🛠️ **{tower_id}번** — 현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요."
     data = (status_data or {}).get(tower["name"]) or {}
     running = []
     for ut, label in (("washer", "세탁기"), ("dryer", "건조기")):
@@ -3086,6 +3089,7 @@ PRESENCE_SLIDES = [
     lambda st: "현재 세탁기·건조기 현황 알아보는 중...",
     lambda st: "/알림 으로 완료 5분 전에 알려드려요",
     lambda st: _presence_alarms(),
+    lambda st: _presence_nodata(st),
     lambda st: "/버그 로 개선 의견을 받아요",
 ]
 _presence_i = 0
@@ -3097,6 +3101,10 @@ def _presence_units(status_data):
         return None
     free_w = free_d = 0
     for tower in TOWERS:
+        # 값이 안 온 기기를 비어 있다고 세면 안 된다.
+        # state 가 None 이라 아래 조건에 걸려 '사용 가능' 으로 잡혔다.
+        if not tower_has_data(status_data, tower["name"]):
+            continue
         data = status_data.get(tower["name"]) or {}
         for unit, box in (("washer", "w"), ("dryer", "d")):
             u = data.get(unit) or {}
@@ -3128,6 +3136,20 @@ def _presence_soonest(status_data):
     if not best:
         return None
     return f"{best[1]} {best[0]}분 뒤 완료"
+
+
+def _presence_nodata(status_data):
+    """값이 안 오는 기기. 있을 때만 띄운다.
+
+    사용 가능 대수에서 빼기만 하면 왜 사라졌는지 알 수 없다.
+    """
+    if not status_data:
+        return None
+    gone = [str(t["id"]) for t in TOWERS
+            if not tower_has_data(status_data, t["name"])]
+    if not gone:
+        return None
+    return f"{'·'.join(gone)}번 정보 없음 (점검 중일 수 있어요)"
 
 
 def _presence_alarms():
