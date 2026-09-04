@@ -1136,6 +1136,7 @@ GEMINI_API_KEYS = _load_gemini_keys()
 # 예전에는 요청마다 죽은 조합을 처음부터 다시 두드렸다.
 # 한 번 왕복에 0.2초씩이라 9가지가 모두 막히면 그만큼 그냥 버려진다.
 _QUOTA_BLOCKED = {}            # (모델, 키) -> 다시 시도해도 되는 시각
+_FAIL_STREAK = {}              # (모델, 키) -> 연달아 실패한 횟수
 _DEAD_KEYS = set()             # 아예 못 쓰는 키 (정지·삭제된 것)
 _QUOTA_LOCK = threading.Lock()
 QUOTA_COOLDOWN_DEFAULT = 60    # 알려주지 않으면 1분 쉬어 본다
@@ -1153,9 +1154,12 @@ GEMINI_GRACE = 2.0
 # 제미나이에 쓸 전체 시간. 이걸 넘기면 미련 없이 Groq 으로 넘어간다.
 # Groq 이 1.5~2초에 답하므로 최악이 10초쯤에서 끝난다.
 GEMINI_BUDGET = 8
-# 늘어지거나 서버가 아플 때 그 조합을 쉬게 하는 시간.
+# 늘어지거나 서버가 아플 때 그 조합을 쉬게 하는 첫 시간.
 # 기억하지 않으면 다음 사람이 같은 시간을 또 버린다.
 SLOW_COOLDOWN = 30
+# 실패가 이어지면 이 시간을 배로 늘린다. 여기까지만 늘린다.
+# 모델 하나가 하루 종일 아픈 날, 계속 두드리며 시간을 버리지 않기 위해서다.
+SLOW_COOLDOWN_MAX = 900
 
 
 def _mark_key_dead(key, reason=""):
@@ -1170,6 +1174,31 @@ def _mark_key_dead(key, reason=""):
         _DEAD_KEYS.add(key)
     idx = GEMINI_API_KEYS.index(key) + 1 if key in GEMINI_API_KEYS else "?"
     print(f"[Gemini] 키#{idx} 는 쓸 수 없습니다 ({reason}). 앞으로 건너뜁니다.")
+
+
+def _note_ok(model, key):
+    """잘 됐다. 쉬는 기록과 실패 횟수를 지운다.
+
+    아팠던 모델이 살아나면 한 번의 성공으로 곧바로 원래대로 돌아와야 한다.
+    """
+    with _QUOTA_LOCK:
+        _FAIL_STREAK.pop((model, key), None)
+        _QUOTA_BLOCKED.pop((model, key), None)
+
+
+def _slow_block(model, key):
+    """늘어지거나 서버가 아픈 조합을 쉬게 한다.
+
+    계속 실패하면 쉬는 시간을 배로 늘린다.
+    30초로 고정하면 30초마다 다시 5초를 버리게 되어,
+    모델 하나가 하루 종일 아픈 날 내내 느려진다.
+    """
+    with _QUOTA_LOCK:
+        cnt = _FAIL_STREAK.get((model, key), 0) + 1
+        _FAIL_STREAK[(model, key)] = cnt
+        wait = min(SLOW_COOLDOWN * (2 ** (cnt - 1)), SLOW_COOLDOWN_MAX)
+        _QUOTA_BLOCKED[(model, key)] = time.time() + wait
+    return wait, cnt
 
 
 def _quota_ok(model, key):
@@ -2189,6 +2218,7 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                     raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
                     raw = re.sub(r"\s*```$", "", raw)
                 plan = json.loads(raw)
+                _note_ok(model, key)
                 global LAST_ENGINE
                 engine = f"{model} (키 {GEMINI_API_KEYS.index(key) + 1}번)"
                 LAST_ENGINE = engine
@@ -2216,15 +2246,18 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                     continue
                 # 5xx 는 구글 쪽이 아픈 것이다. 바로 다시 물어도 또 아프다.
                 if e.code >= 500:
-                    _quota_block(model, key, SLOW_COOLDOWN)
-                print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} HTTP {e.code}")
+                    rest, cnt = _slow_block(model, key)
+                    print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} "
+                          f"HTTP {e.code} — {rest:.0f}초 쉼 (연속 {cnt}번째)")
+                else:
+                    print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} HTTP {e.code}")
                 break
             except Exception as e:
                 # 늘어진 조합을 기억해 둔다.
                 # 안 그러면 다음 사람도 같은 시간을 그대로 버린다.
-                _quota_block(model, key, SLOW_COOLDOWN)
+                rest, cnt = _slow_block(model, key)
                 print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} "
-                      f"실패({e}) — {SLOW_COOLDOWN}초 쉼")
+                      f"실패({e}) — {rest:.0f}초 쉼 (연속 {cnt}번째)")
                 break
     if tried == 0:
         blocked, total, _ = quota_status()
