@@ -2062,7 +2062,6 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
         "정글 생활 관련 질문에 답할 때는 [안내 페이지 링크]에서 관련된 것을 골라 "
         "답변 맨 끝에 '-# 자세히: <링크>' 형태로 한 줄만 덧붙여라. "
         "세탁기 알림 등록처럼 링크가 필요 없는 요청에는 붙이지 마라.\n\n"
-        + ("[정글 생활 안내]\n" + kb_text + "\n\n" if kb_text else "")
         + "사용자의 요청을 읽고 할 일을 정해라.\n\n"
         "[가능한 action]\n"
         "- register: 특정 기기 완료 5분 전 알림 등록 (towerId 1~9, unitType washer/dryer 필요)\n"
@@ -2085,15 +2084,16 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
         "여러 대를 한 번에 거는 것은 문제없이 된다. '한 번에 하나만 가능하다' 같은 말은 사실이 아니므로 절대 하지 마라. 기기 종류(세탁기/건조기)를 말하지 않았으면 물어보되, 여러 대라서 안 된다는 식으로 답하지 마라\n"
         "번호만 말하고 종류를 안 밝혔어도 register(또는 cancel)로 넘겨라. towerId 만 채우고 unitType 은 비워 둔다. 지금 무엇이 돌아가는지는 코드가 알고 있어서 하나뿐이면 알아서 고르고, 애매할 때만 되묻는다. 네가 미리 '어떤 기기인가요' 라고 chat 으로 답하면 될 일도 안 된다\n"
         "action 에만 담아라.\n\n"
-        "[지금 시각]\n" + _now_line() + "\n\n"
-        "[지금 기기 상태]\n" + "\n".join(lines) + "\n\n"
-        "[내가 등록한 알림]\n" + ("\n".join(f"- {a['deviceName']}" for a in mine) if mine else "없음") + "\n\n"
         + LAUNDRY_GUIDE + "\n\n"
-        "에러가 난 기기를 물어보면 위에 적힌 에러코드 해설을 근거로 원인과 조치를 알려줘라.\n"
-        "세탁 방법을 물어보면 위 세탁 상식을 근거로 답하고, action 은 chat 으로 둬라.\n"
+        "에러가 난 기기를 물어보면 [지금 기기 상태]에 적힌 에러코드 해설을 근거로 원인과 조치를 알려줘라.\n"
+        "세탁 방법을 물어보면 [세탁 상식]을 근거로 답하고, action 은 chat 으로 둬라.\n"
         "reply 에는 사용자에게 보여줄 한국어 답변을 담아라. 필요하면 여러 줄로 써도 된다.\n"
         "이전 대화가 있으면 그 맥락을 이어서 이해해라. "
         "예를 들어 사용자가 앞서 3번 건조기를 말했고 이번에 '그거 해제해줘' 라고 하면 3번 건조기를 뜻한다."
+        + ("[정글 생활 안내]\n" + kb_text + "\n\n" if kb_text else "")
+        + "[지금 시각]\n" + _now_line() + "\n\n"
+        "[지금 기기 상태]\n" + "\n".join(lines) + "\n\n"
+        "[내가 등록한 알림]\n" + ("\n".join(f"- {a['deviceName']}" for a in mine) if mine else "없음") + "\n\n"
     )
 
     # 긴 주입 문단을 통째로 밀어 넣지 못하게 자른다
