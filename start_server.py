@@ -338,7 +338,7 @@ def background_push_worker():
 
             for item in subs:
                 sub_info = item.get('subscription')
-                alarm = item.get('alarm', {})
+                alarm = (item.get('alarm') or {})
                 if not sub_info or not alarm:
                     continue
 
@@ -360,9 +360,9 @@ def background_push_worker():
                 notified_0min = alarm.get('notified0Min', False)
 
                 tower_key = f"워시타워_{tower_id}"
-                tower_data = CACHED_STATUS.get(tower_key, {})
-                unit_data = tower_data.get('dryer' if unit_type == 'dryer' else 'washer', {})
-                run_state = unit_data.get('runState', {}).get('currentState', 'POWER_OFF')
+                tower_data = (CACHED_STATUS.get(tower_key) or {})
+                unit_data = (tower_data.get('dryer' if unit_type == 'dryer' else 'washer') or {})
+                run_state = (unit_data.get('runState') or {}).get('currentState', 'POWER_OFF')
 
                 # 실시간 상태를 실제로 받아왔는지 (못 받아온 상태에서 '완료' 로 오판하면 안 된다)
                 has_live = bool(unit_data)
@@ -752,7 +752,7 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                     # 세탁기 키만 보면, 같은 세탁기를 폰과 컴퓨터에서 각각 등록했을 때
                     # 나중에 등록한 기기가 먼저 등록한 기기의 구독을 지워버린다.
                     subs = [x for x in subs
-                            if not (x.get('alarm', {}).get('key') == key
+                            if not ((x.get('alarm') or {}).get('key') == key
                                     and (x.get('subscription') or {}).get('endpoint') == endpoint)]
                     subs.append({'subscription': sub_info, 'alarm': alarm_info, 'createdAt': time.time()})
                     save_subscriptions(subs)
@@ -779,7 +779,7 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 if key and endpoint:
                     subs = load_subscriptions()
                     for x in subs:
-                        if (x.get('alarm', {}).get('key') == key
+                        if ((x.get('alarm') or {}).get('key') == key
                                 and (x.get('subscription') or {}).get('endpoint') == endpoint):
                             x['alarm']['pickedUp'] = True
                             marked += 1
@@ -807,11 +807,11 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 key = data.get('key')
                 subs = load_subscriptions()
                 targets = [x for x in subs
-                           if not key or x.get('alarm', {}).get('key') == key]
+                           if not key or (x.get('alarm') or {}).get('key') == key]
 
                 sent = 0
                 for x in targets:
-                    device = x.get('alarm', {}).get('deviceName', '기기')
+                    device = (x.get('alarm') or {}).get('deviceName', '기기')
                     send_push_notification(x.get('subscription'), {
                         'title': f"🧪 [테스트] {device} 알림 도착",
                         'body': "이 알림이 보이면 전달 경로가 정상입니다. 실제 5분 전 알림도 같은 방식으로 옵니다.",
@@ -825,7 +825,7 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({
                     "sent": sent, "registered": len(subs),
-                    "devices": [x.get('alarm', {}).get('deviceName') for x in targets]
+                    "devices": [(x.get('alarm') or {}).get('deviceName') for x in targets]
                 }, ensure_ascii=False).encode('utf-8'))
                 return
             except Exception as e:
@@ -846,10 +846,10 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                     if endpoint:
                         # 해제를 요청한 그 기기의 등록만 지운다
                         subs = [x for x in subs
-                                if not (x.get('alarm', {}).get('key') == key
+                                if not ((x.get('alarm') or {}).get('key') == key
                                         and (x.get('subscription') or {}).get('endpoint') == endpoint)]
                     else:
-                        subs = [x for x in subs if x.get('alarm', {}).get('key') != key]
+                        subs = [x for x in subs if (x.get('alarm') or {}).get('key') != key]
                     save_subscriptions(subs)
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')

@@ -8,6 +8,7 @@ import asyncio
 import time
 import random
 import threading
+import traceback
 import urllib.request
 import urllib.error
 from collections import deque
@@ -486,9 +487,14 @@ def render_floorplan_image(status_data):
         draw.ellipse([(lx - lw - 28, 55), (lx - lw - 12, 71)], fill=col)
         lx -= lw + 28 + 30
 
-    def draw_unit(x, uy, cw, name, unit, state, minutes, err, is_dryer):
+    def draw_unit(x, uy, cw, name, unit, state, minutes, err, is_dryer,
+                  unknown=False):
         """기기 한 칸: 도어 원 + [이름 ... 시간] + [상태 · 코스 · 알림뱃지]"""
-        if err:
+        if unknown:
+            # 값이 안 온 기기. 회색으로 두고 모른다고 적는다.
+            accent = (100, 116, 139)
+            state_txt = "정보 없음"
+        elif err:
             accent = (239, 68, 68)
             state_txt = "기기 점검/에러"
         elif state in ("WRINKLE_CARE", "COMPLETE", "END"):
@@ -516,8 +522,8 @@ def render_floorplan_image(status_data):
         # 1행: 기기 이름 + 남은 시간(오른쪽)
         draw.text((tx, uy + 4), name, fill=TXT_DIM, font=f_unit)
         if minutes > 0:
-            t = format_timer(unit.get("timer", {}).get("remainHour", 0),
-                             unit.get("timer", {}).get("remainMinute", 0))
+            t = format_timer((unit.get("timer") or {}).get("remainHour", 0),
+                             (unit.get("timer") or {}).get("remainMinute", 0))
             draw.text((x + cw - tw(t, f_time) - 20, uy), t,
                       fill=accent if err else (255, 255, 255), font=f_time)
         else:
@@ -543,16 +549,20 @@ def render_floorplan_image(status_data):
 
 
     def draw_card(t, x, y, cw):
-        data = status_data.get(t["name"], {})
-        d, w = data.get("dryer", {}), data.get("washer", {})
-        d_state = d.get("runState", {}).get("currentState", "POWER_OFF")
-        w_state = w.get("runState", {}).get("currentState", "POWER_OFF")
-        d_min = (d.get("timer", {}).get("remainHour", 0) * 60) + d.get("timer", {}).get("remainMinute", 0)
-        w_min = (w.get("timer", {}).get("remainHour", 0) * 60) + w.get("timer", {}).get("remainMinute", 0)
+        # 값이 안 온 기기는 '대기 중(= 사용 가능)' 으로 그리면 안 된다.
+        no_data = not tower_has_data(status_data, t["name"])
+        data = (status_data.get(t["name"]) or {})
+        d, w = (data.get("dryer") or {}), (data.get("washer") or {})
+        d_state = (d.get("runState") or {}).get("currentState", "POWER_OFF")
+        w_state = (w.get("runState") or {}).get("currentState", "POWER_OFF")
+        d_min = ((d.get("timer") or {}).get("remainHour", 0) * 60) + (d.get("timer") or {}).get("remainMinute", 0)
+        w_min = ((w.get("timer") or {}).get("remainHour", 0) * 60) + (w.get("timer") or {}).get("remainMinute", 0)
         d_err = bool(d.get("error")) or d_state == "ERROR"
         w_err = bool(w.get("error")) or w_state == "ERROR"
 
-        if d_err or w_err:
+        if no_data:
+            border, label, bg = (100, 116, 139), "정보 없음", (30, 41, 59)
+        elif d_err or w_err:
             border, label, bg = (239, 68, 68), "점검 필요", (69, 16, 16)
         elif d_min > 0 and w_min > 0:
             border, label, bg = (16, 185, 129), "전체 가동 중", (6, 78, 59)
@@ -578,7 +588,8 @@ def render_floorplan_image(status_data):
 
         draw.line([(x + 16, y + 58), (x + cw - 16, y + 58)], fill=LINE, width=2)
 
-        draw_unit(x, y + 70, cw, "건조기", d, d_state, d_min, d_err, True)
+        draw_unit(x, y + 70, cw, "건조기", d, d_state, d_min, d_err, True,
+                  unknown=no_data)
 
         # 웹처럼 점 두 개로 구분
         mid = x + cw // 2
@@ -587,7 +598,8 @@ def render_floorplan_image(status_data):
         draw.ellipse([(mid - 10, y + 176), (mid - 2, y + 184)], fill=(71, 85, 105))
         draw.ellipse([(mid + 2, y + 176), (mid + 10, y + 184)], fill=(71, 85, 105))
 
-        draw_unit(x, y + 192, cw, "세탁기", w, w_state, w_min, w_err, False)
+        draw_unit(x, y + 192, cw, "세탁기", w, w_state, w_min, w_err, False,
+                  unknown=no_data)
 
     def section(y, text, chips, bg, fg):
         wtxt = tw(text, f_sec)
@@ -693,21 +705,21 @@ async def register_or_toggle_alarm(interaction: discord.Interaction, tower_id, u
 def get_running_options(status_data):
     running_options = []
     for t in TOWERS:
-        data = status_data.get(t["name"], {})
-        w = data.get("washer", {})
-        d = data.get("dryer", {})
+        data = (status_data.get(t["name"]) or {})
+        w = (data.get("washer") or {})
+        d = (data.get("dryer") or {})
 
-        w_state = w.get("runState", {}).get("currentState", "POWER_OFF")
-        d_state = d.get("runState", {}).get("currentState", "POWER_OFF")
-        w_min = (w.get("timer", {}).get("remainHour", 0) * 60) + w.get("timer", {}).get("remainMinute", 0)
-        d_min = (d.get("timer", {}).get("remainHour", 0) * 60) + d.get("timer", {}).get("remainMinute", 0)
+        w_state = (w.get("runState") or {}).get("currentState", "POWER_OFF")
+        d_state = (d.get("runState") or {}).get("currentState", "POWER_OFF")
+        w_min = ((w.get("timer") or {}).get("remainHour", 0) * 60) + (w.get("timer") or {}).get("remainMinute", 0)
+        d_min = ((d.get("timer") or {}).get("remainHour", 0) * 60) + (d.get("timer") or {}).get("remainMinute", 0)
         
         w_err = w.get("error") or (w_state == "ERROR")
         d_err = d.get("error") or (d_state == "ERROR")
 
         # 상단 건조기 검증 (에러/대기 제외, 진짜 가동 중인 기기만)
         if not d_err and is_unit_running(d_state, d_min):
-            time_str = format_timer(d.get("timer", {}).get("remainHour", 0), d.get("timer", {}).get("remainMinute", 0))
+            time_str = format_timer((d.get("timer") or {}).get("remainHour", 0), (d.get("timer") or {}).get("remainMinute", 0))
             running_options.append(discord.SelectOption(
                 label=f"[{t['zoneName'][:2]}] {t['label']} 건조기 ({time_str} 남음)",
                 description=f"가동 상태: {d_state} · 완료 5분 전 DM 알림",
@@ -717,7 +729,7 @@ def get_running_options(status_data):
 
         # 하단 세탁기 검증
         if not w_err and is_unit_running(w_state, w_min):
-            time_str = format_timer(w.get("timer", {}).get("remainHour", 0), w.get("timer", {}).get("remainMinute", 0))
+            time_str = format_timer((w.get("timer") or {}).get("remainHour", 0), (w.get("timer") or {}).get("remainMinute", 0))
             running_options.append(discord.SelectOption(
                 label=f"[{t['zoneName'][:2]}] {t['label']} 세탁기 ({time_str} 남음)",
                 description=f"가동 상태: {w_state} · 완료 5분 전 DM 알림",
@@ -925,7 +937,7 @@ def build_unit_list_embed(unit_type):
             color=discord.Color.from_rgb(239, 68, 68),
         )
 
-    free = running = errors = 0
+    free = running = errors = unknown = 0
     sections = []
 
     for zone_key, zone_title in ZONE_SECTIONS:
@@ -936,6 +948,13 @@ def build_unit_list_embed(unit_type):
             timer = unit.get("timer") or {}
             minutes = (timer.get("remainHour", 0) or 0) * 60 + (timer.get("remainMinute", 0) or 0)
             is_err = state == "ERROR" or bool(unit.get("error"))
+
+            # 값 자체가 안 온 기기. 빈 값을 '전원 꺼짐' 으로 읽으면
+            # '사용 가능' 이 되어 헛걸음시킨다. 모른다고 적는다.
+            if not tower_has_data(status_data, t["name"]):
+                lines.append(f"\u2b1b `{t['label']}` 정보 없음 · 값이 오지 않음")
+                unknown += 1
+                continue
 
             if is_err:
                 mark, tail = "🔴", "점검 필요"
@@ -967,7 +986,9 @@ def build_unit_list_embed(unit_type):
 
     embed = discord.Embed(
         title=f"{icon} {label} 현황",
-        description=f"사용 가능 **{free}대** · 가동 중 **{running}대** · 점검 필요 **{errors}대**",
+        description=(f"사용 가능 **{free}대** · 가동 중 **{running}대** · "
+                     f"점검 필요 **{errors}대**"
+                     + (f" · 정보 없음 **{unknown}대**" if unknown else "")),
         color=color,
         timestamp=datetime.now(),
     )
@@ -1499,7 +1520,7 @@ def get_history(user_id):
     if datetime.now().timestamp() - h.get("at", 0) > CHAT_TTL_SEC:
         CHAT_HISTORY.pop(user_id, None)
         return []
-    return h.get("turns", [])
+    return (h.get("turns") or [])
 
 
 def push_history(user_id, role, text):
@@ -1561,6 +1582,16 @@ def set_context(user_id, tower_id, unit_type):
                              "at": datetime.now().timestamp()}
 
 
+def tower_has_data(status_data, tower_name):
+    """원본에서 이 워시타워 값이 실제로 왔는지.
+
+    원본은 연결이 끊긴 기기를 null 로 내려보낸다.
+    빈 값을 '전원 꺼짐' 으로 읽으면 '사용 가능' 이 되어 거짓 안내가 된다.
+    """
+    d = (status_data or {}).get(tower_name)
+    return isinstance(d, dict) and bool(d)
+
+
 def find_unit(status_data, tower_id, unit_type):
     """해당 기기의 현재 상태와 남은 시간을 돌려준다."""
     tower = next((t for t in TOWERS if t["id"] == tower_id), None)
@@ -1575,6 +1606,8 @@ def find_unit(status_data, tower_id, unit_type):
         "state": state,
         "minutes": minutes,
         "error": bool(unit.get("error")) or state == "ERROR",
+        # 값 자체가 안 온 경우. '꺼져 있음' 과 구분해야 한다.
+        "unknown": not tower_has_data(status_data, tower["name"]),
         "name": f"{tower['label']} {'건조기' if unit_type == 'dryer' else '세탁기'}",
     }
 
@@ -1878,7 +1911,15 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
     """
     lines = []
     for t in TOWERS:
-        d = status_data.get(t["name"], {})
+        # 값이 안 온 기기는 상태를 지어내지 않는다.
+        # 빈 값을 넘기면 AI 가 '전원 꺼짐 = 사용 가능' 으로 읽어 잘못 안내한다.
+        if not tower_has_data(status_data, t["name"]):
+            lines.append(f"{t['id']}번({t['zoneName']}): 정보 없음 "
+                         "— 지금 이 기기의 값이 오지 않습니다. "
+                         "사용 가능한지 알 수 없으니 추천하지 말고, "
+                         "물어보면 값이 오지 않는다고 그대로 알려줄 것")
+            continue
+        d = (status_data.get(t["name"]) or {})
         cycle = ((d.get("washer") or {}).get("cycle") or {}).get("cycleCount", 0)
         for ut, label in (("washer", "세탁기"), ("dryer", "건조기")):
             u = d.get(ut) or {}
@@ -2698,6 +2739,13 @@ async def _do_step(user_id, plan, status_data, mine):
             return f"{tower_id}번 기기를 찾을 수 없습니다. (1~9번만 있습니다)", None
 
         # 다음 말("그거 해제해줘")을 위해 이 사람의 문맥으로 남긴다
+        # 값이 안 오는 기기는 상태를 지어내지 않는다.
+        # 해제는 막지 않는다. 이미 걸어둔 알림은 지울 수 있어야 한다.
+        if info.get("unknown") and action != "cancel":
+            return (f"**{info['name']}** 는 지금 값이 오지 않아 상태를 알 수 없습니다.\n"
+                    "-# 기기가 네트워크에서 떨어져 있는 것으로 보여요. "
+                    "계속 이러면 `/버그` 로 알려주세요."), None
+
         set_context(user_id, tower_id, unit_type)
         state_label = STATE_LABELS.get(info["state"], info["state"])
 
@@ -2726,13 +2774,22 @@ async def _do_step(user_id, plan, status_data, mine):
 
     if action == "status":
         free = 0
+        unknown = []
         for t in TOWERS:
+            if not tower_has_data(status_data, t["name"]):
+                unknown.append(str(t["id"]))
+                continue
             for ut in ("washer", "dryer"):
                 u = (status_data.get(t["name"]) or {}).get(ut) or {}
                 if (u.get("runState") or {}).get("currentState", "POWER_OFF") in FREE_STATES:
                     free += 1
         head = (reply + "\n") if reply else ""
-        return head + f"-# 지금 비어 있는 기기: **{free}대**", None, True
+        tail = f"-# 지금 비어 있는 기기: **{free}대**"
+        if unknown:
+            tail += (" (" + "·".join(unknown)
+                     + "번은 값이 오지 않아 "
+                       "셈에서 뻐어요)")
+        return head + tail, None, True
 
     # 문제를 호소했는데 갈 곳을 안 알려줬으면 한 줄 붙인다
     return add_report_path(reply, plan.get("_userText")) or \
@@ -3129,10 +3186,10 @@ async def check_laundry_alarms():
             to_remove.append(item)
             continue
 
-        data = status_data.get(tower["name"], {})
-        unit_data = data.get("dryer", {}) if item["unitType"] == "dryer" else data.get("washer", {})
-        timer = unit_data.get("timer", {})
-        run_state = unit_data.get("runState", {}).get("currentState", "POWER_OFF")
+        data = (status_data.get(tower["name"]) or {})
+        unit_data = (data.get("dryer") or {}) if item["unitType"] == "dryer" else (data.get("washer") or {})
+        timer = (unit_data.get("timer") or {})
+        run_state = (unit_data.get("runState") or {}).get("currentState", "POWER_OFF")
         
         remain_min = (timer.get("remainHour", 0) * 60) + timer.get("remainMinute", 0)
         is_error = run_state == "ERROR" or bool(unit_data.get("error"))
@@ -3272,7 +3329,7 @@ def load_settings():
         found.add(env_default)
     data = state_load("bot_settings", {})
     if isinstance(data, dict):
-        found.update(str(c) for c in data.get("assistantChannels", []))
+        found.update(str(c) for c in (data.get("assistantChannels") or []))
     assistant_channels = found
 
 
@@ -3414,12 +3471,15 @@ async def on_message(message: discord.Message):
             note_api_block(e, "on_message")
             return
         print(f"[on_message Error] {e}")
+        traceback.print_exc()
         try:
             await message.reply("⚠️ 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.", mention_author=False)
         except Exception:
             pass
     except Exception as e:
+        # 어디서 터졌는지 남긴다. 메시지만 남기면 원인을 못 찾는다.
         print(f"[on_message Error] {e}")
+        traceback.print_exc()
         try:
             await message.reply("⚠️ 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.", mention_author=False)
         except Exception:
@@ -3529,7 +3589,7 @@ def build_release_embed(rel, for_admin=False):
     """업데이트 내용을 카드로 만든다."""
     body = "\n".join(f"• {it}" for it in rel["items"][:10])
     embed = discord.Embed(
-        title=f"\U0001f9fa 세탁봇이 업데이트되었어요  ·  v{rel['version']}",
+        title=f"🧺 Jungle_AI 가 업데이트되었어요  ·  v{rel['version']}",
         description=body,
         color=0x00E87A,
     )
