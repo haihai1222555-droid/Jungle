@@ -1685,6 +1685,9 @@ def sanitize_reply(reply):
 
 # 기기를 가리키는 말 (예: "3번 건조기", "7 세탁기")
 DEVICE_RE = re.compile(r"(\d+)\s*(?:번|호기|호)?\s*(세탁기|건조기|세탁|건조)")
+# 종류 없이 번호만 말한 것도 찾는다 ("4번이랑 6번 건조기" 의 앞쪽 4번).
+# 종류는 같은 문장의 다른 기기에서 물려받는다.
+DEVICE_LOOSE_RE = re.compile(r"(\d+)\s*(?:번|호기|호)\s*(세탁기|건조기|세탁|건조)?")
 CANCEL_WORDS = ("해제", "취소", "꺼줘", "끄기", "끄고", "삭제", "빼줘", "지워")
 REGISTER_WORDS = ("알림", "알람", "등록", "설정", "걸어", "켜", "예약", "잡아")
 
@@ -1736,14 +1739,30 @@ def parse_by_rules(text, ctx=None):
 
     # 한 문장에 기기가 여러 번 나오면 각각을 따로 처리한다.
     # 예) "3번 건조기 알림 취소하고 7번 세탁기 예약"
-    found = list(DEVICE_RE.finditer(t))
+    found = list(DEVICE_LOOSE_RE.finditer(t))
     if len(found) >= 2:
         steps = []
         for i, m in enumerate(found):
             end = found[i + 1].start() if i + 1 < len(found) else len(t)
-            step = parse_device_segment(t[m.start():end])
+            seg = t[m.start():end]
+            step = parse_device_segment(seg)
+            if step is None and m.group(2) is None:
+                # 종류를 안 밝힌 조각이다. 자리만 잡아 두고 뒤에서 물려받는다.
+                step = {"action": "unit_status", "towerId": int(m.group(1)),
+                        "unitType": None, "_needType": True}
             if step:
                 steps.append(step)
+        # 종류를 밝힌 기기가 있으면 안 밝힌 쪽이 그것을 따른다.
+        # "4번이랑 6번 건조기" 는 사람이 보기에 둘 다 건조기다.
+        known = next((st["unitType"] for st in steps
+                      if st.get("unitType") and not st.get("_needType")), None)
+        if known:
+            for st in steps:
+                if st.get("_needType"):
+                    st["unitType"] = known
+        steps = [st for st in steps if st.get("unitType")]
+        for st in steps:
+            st.pop("_needType", None)
         if len(steps) >= 2:
             # "1번 세탁기랑 2번 건조기 알림 걸어줘" 처럼 시킨 말이 뒤에만 붙은 경우,
             # 그 앞에 있는 기기들도 같은 동사로 본다.
@@ -1878,9 +1897,13 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
         "- status: 세탁실 전체 현황\n"
         "- test_alarm: 알림이 잘 오는지 시험해 보고 싶다는 요청 (예: '알림 테스트 해줘')\n"
         "- report: 무언가 잘못 동작한다고 알리거나, 없는 기능을 만들어 달라고 할 때만 고른다. 방법을 묻는 질문(봇 추가하고 싶은데, 알림 어떻게 걸어요)은 report 가 아니라 chat 이다. '~하고 싶다'는 말투만 보고 넘기지 않는다. 내용은 창을 띄워 직접 적게 하므로 reply 에는 고맙다는 짧은 한마디만 적는다\n"
+        "- 문제를 호소하는데 흔한 원인이 짚이면 chat 으로 해결법을 먼저 안내한다. 다만 마지막에 '그래도 안 되면 /버그 로 알려주세요' 를 꼭 덧붙인다. 안내만 하고 끝내면 해결되지 않았을 때 갈 곳이 없다\n"
+        "- '버튼이 안 눌려요' 처럼 무엇을 가리키는지 모호하면 세탁기 물리 버튼이 아니라 이 봇이나 웹의 버튼일 가능성을 먼저 생각한다. 기기 자체 고장은 운영사무실 안내가 맞다\n"
         "- chat: 위 어디에도 해당하지 않음. reply 에 답을 직접 써라\n"
         "한 문장에 요청이 여러 개면(예: '3번 건조기 알림 취소하고 7번 세탁기 예약') "
         "actions 배열에 말한 순서대로 모두 담아라. 요청이 하나뿐이면 actions 는 비워두고 "
+        "여러 대를 한 번에 거는 것은 문제없이 된다. '한 번에 하나만 가능하다' 같은 말은 사실이 아니므로 절대 하지 마라. 기기 종류(세탁기/건조기)를 말하지 않았으면 물어보되, 여러 대라서 안 된다는 식으로 답하지 마라\n"
+        "번호만 말하고 종류를 안 밝힌 경우(예: 1번이랑 3번 알림), 지금 그 번호에서 돌아가는 기기가 한 종류뿐이면 그것으로 바로 등록한다. 둘 다 돌아가고 있을 때만 어느 쪽인지 되묻는다\n"
         "action 에만 담아라.\n\n"
         "[지금 시각]\n" + _now_line() + "\n\n"
         "[지금 기기 상태]\n" + "\n".join(lines) + "\n\n"
@@ -2336,6 +2359,29 @@ def _norm(result):
             result[3] if len(result) > 3 else None)
 
 
+# AI 가 "했다" 고 주장할 때 쓰는 말들.
+# 실제로 코드가 한 일이 따로 있는데 이런 말이 앞에 붙으면 앞뒤가 안 맞는다.
+CLAIM_WORDS = ("등록했", "등록해", "등록 완료", "걸었", "걸어드렸", "걸어 드렸",
+               "해제했", "해제해", "취소했", "취소해", "삭제했",
+               "설정했", "설정해", "완료했", "처리했", "드렸어요", "드렸습니다")
+
+# 사실이 아닌 제약을 말하는 경우. 여러 대를 한 번에 거는 것은 실제로 된다.
+FALSE_LIMIT_WORDS = ("한 번에 한", "한번에 한", "하나씩만", "한 개씩만",
+                     "동시에 여러", "한 번에 여러")
+
+
+def claims_outcome(text):
+    """무언가를 해냈다고 주장하는 말인가."""
+    t = (text or "")
+    return any(w in t for w in CLAIM_WORDS)
+
+
+def claims_false_limit(text):
+    """되는 일을 안 된다고 말하는가."""
+    t = (text or "")
+    return any(w in t for w in FALSE_LIMIT_WORDS) and ("안 " in t or "못" in t or "만 " in t)
+
+
 async def _run_steps(user_id, steps, reply, status_data):
     """여러 요청을 순서대로 처리하고 결과를 하나로 합친다.
 
@@ -2343,8 +2389,14 @@ async def _run_steps(user_id, steps, reply, status_data):
     단계마다 달라지는 건 메모리에 있는 알림 목록뿐이라 그것만 다시 센다.
     """
     texts, embed, board = [], None, False
-    if reply and reply.strip():
-        texts.append(reply.strip())
+    # AI 의 말은 아직 아무것도 하기 전에 지어낸 것이다.
+    # 실제 결과가 나오면 그것만 말한다. 둘 다 붙이면
+    # "한 번에 하나만 돼요" 뒤에 두 건 등록 결과가 따라붙는 꼴이 된다.
+    head = (reply or "").strip()
+    if head and (claims_outcome(head) or claims_false_limit(head)):
+        head = ""
+    if head:
+        texts.append(head)
     for step in steps:
         mine = [a for a in active_alarms if a.get("userId") == user_id]
         t, e, b, v = _norm(await _do_step(user_id, step, status_data, mine))
@@ -2399,7 +2451,11 @@ async def _do_step(user_id, plan, status_data, mine):
     if action in ("register", "cancel", "unit_status"):
         tower_id, unit_type = plan.get("towerId"), plan.get("unitType")
         if not tower_id or not unit_type:
-            return (reply or "어떤 기기인지 알려주세요. 예) `3번 건조기 알림 걸어줘`"), None
+            # 아무것도 하지 않았으므로 "등록했어요" 같은 말이 나가면 안 된다.
+            ask = "어떤 기기인지 알려주세요. 예) `3번 건조기 알림 걸어줘`"
+            if reply and not claims_outcome(reply) and not claims_false_limit(reply):
+                return reply, None
+            return ask, None
 
         info = find_unit(status_data, tower_id, unit_type)
         if not info:
