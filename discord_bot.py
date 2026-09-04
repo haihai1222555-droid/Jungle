@@ -2796,6 +2796,17 @@ async def cmd_report(interaction: discord.Interaction):
         view=ReportKindView(), ephemeral=True)
 
 
+@bot.tree.command(name="업데이트", description="최근 업데이트 내용을 봅니다.")
+async def cmd_release(interaction: discord.Interaction):
+    rel = await asyncio.to_thread(read_latest_release)
+    if not rel:
+        await interaction.response.send_message(
+            "업데이트 기록을 찾지 못했어요.", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        embed=build_release_embed(rel), ephemeral=True)
+
+
 @bot.tree.command(name="제보목록", description="접수된 제보를 확인합니다. (관리자 전용)")
 async def cmd_report_list(interaction: discord.Interaction):
     if not is_admin_user(interaction.user.id):
@@ -3464,12 +3475,116 @@ async def on_ready():
     BOT_STATUS.update(name=str(bot.user), guilds=len(bot.guilds))
     set_bot_status("연결됨", f"{len(bot.guilds)}개 서버", online=True)
 
+    # 새 버전으로 떴으면 무엇이 바뀌었는지 알린다 (한 번만)
+    await announce_update()
+
     if not rotate_presence.is_running():
         rotate_presence.start()
 
     if not check_laundry_alarms.is_running():
         check_laundry_alarms.start()
         print("⏰ [Alarm Daemon] 10초 주기 실시간 세탁실 센서 감시 루프 가동 시작!")
+
+# =========================================================
+# 업데이트 공지
+# ---------------------------------------------------------
+# 새 버전으로 뜨면 관리자 DM 과 참여 서버에 무엇이 바뀌었는지 알린다.
+# 바뀐 것을 모르면 새 기능을 안 쓰게 된다.
+#
+# 한 번만 알린다. 서버가 재시작될 때마다 알리면 소음이 되므로,
+# 이미 알린 버전은 저장소에 남겨 두고 건너뛴다.
+# =========================================================
+CHANGELOG_PATH = os.path.join(BASE_DIR, "CHANGELOG.md")
+
+
+def read_latest_release():
+    """CHANGELOG.md 맨 위 항목을 읽는다. 없으면 None.
+
+    형식: "## 1.3.0 · 2026-09-04" 다음 줄부터 "- " 로 시작하는 항목들.
+    """
+    try:
+        with io.open(CHANGELOG_PATH, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except Exception:
+        return None
+
+    version = date = None
+    items = []
+    for ln in lines:
+        if ln.startswith("## "):
+            if version:                      # 두 번째 항목을 만나면 멈춘다
+                break
+            head = ln[3:].strip()
+            parts = [p.strip() for p in head.split("·")]
+            version = parts[0] if parts else head
+            date = parts[1] if len(parts) > 1 else ""
+        elif version and ln.strip().startswith("- "):
+            items.append(ln.strip()[2:].strip())
+    if not version or not items:
+        return None
+    return {"version": version, "date": date, "items": items}
+
+
+def build_release_embed(rel, for_admin=False):
+    """업데이트 내용을 카드로 만든다."""
+    body = "\n".join(f"• {it}" for it in rel["items"][:10])
+    embed = discord.Embed(
+        title=f"\U0001f9fa 세탁봇이 업데이트되었어요  ·  v{rel['version']}",
+        description=body,
+        color=0x00E87A,
+    )
+    if rel.get("date"):
+        embed.set_footer(text=f"{rel['date']} 적용")
+    if for_admin:
+        embed.add_field(
+            name="\u200b",
+            value="-# 참여 중인 서버에도 함께 알렸습니다.",
+            inline=False)
+    return embed
+
+
+async def announce_update():
+    """새 버전이면 관리자와 서버에 알린다.
+
+    저장소를 못 쓰는 상황에서도 봇이 멈추면 안 되므로,
+    무슨 일이 생기든 조용히 넘어간다.
+    """
+    try:
+        rel = await asyncio.to_thread(read_latest_release)
+        if not rel:
+            return
+        seen = await asyncio.to_thread(state_load, "announced_version", "")
+        if seen == rel["version"]:
+            return                          # 이미 알린 버전이다
+
+        # 관리자에게 먼저 (내용을 확인할 사람)
+        sent_admin = 0
+        for uid in ADMIN_USER_IDS:
+            try:
+                user = await resolve_user(int(uid))
+                if user:
+                    await user.send(embed=build_release_embed(rel, for_admin=True))
+                    sent_admin += 1
+            except Exception as e:
+                print(f"[업데이트] 관리자 DM 실패({uid}): {e}")
+
+        # 대화 채널로 설정된 곳에 알린다.
+        # 아무 채널에나 보내면 초대만 해둔 서버에서 소음이 된다.
+        sent_ch = 0
+        for cid in list(assistant_channels):
+            try:
+                ch = bot.get_channel(int(cid)) or await bot.fetch_channel(int(cid))
+                if ch:
+                    await ch.send(embed=build_release_embed(rel))
+                    sent_ch += 1
+            except Exception as e:
+                print(f"[업데이트] 채널 알림 실패({cid}): {e}")
+
+        await asyncio.to_thread(state_save, "announced_version", rel["version"])
+        print(f"[업데이트] v{rel['version']} 알림 — 관리자 {sent_admin}명 · 채널 {sent_ch}곳")
+    except Exception as e:
+        print(f"[업데이트] 공지 중 문제: {e}")
+
 
 # 슬래시 명령어를 이미 등록했는지. on_ready 가 재연결마다 불리기 때문에 필요하다.
 _COMMANDS_SYNCED = False
