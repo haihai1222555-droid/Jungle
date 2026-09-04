@@ -1747,31 +1747,44 @@ def parse_by_rules(text, ctx=None):
             seg = t[m.start():end]
             step = parse_device_segment(seg)
             if step is None and m.group(2) is None:
-                # 종류를 안 밝힌 조각이다. 자리만 잡아 두고 뒤에서 물려받는다.
-                step = {"action": "unit_status", "towerId": int(m.group(1)),
-                        "unitType": None, "_needType": True}
+                # 종류를 안 밝힌 조각이다. 종류는 나중에 정하되,
+                # 시킨 말(걸어줘/취소)은 여기서 읽어 둔다.
+                tid = int(m.group(1))
+                if not (1 <= tid <= 9):
+                    continue
+                if any(k in seg for k in CANCEL_WORDS):
+                    act, has_verb = "cancel", True
+                elif any(k in seg for k in REGISTER_WORDS):
+                    act, has_verb = "register", True
+                else:
+                    act, has_verb = "unit_status", False
+                step = {"action": act, "towerId": tid, "unitType": None,
+                        "_needType": True, "_verb": has_verb}
             if step:
                 steps.append(step)
         # 종류를 밝힌 기기가 있으면 안 밝힌 쪽이 그것을 따른다.
         # "4번이랑 6번 건조기" 는 사람이 보기에 둘 다 건조기다.
         known = next((st["unitType"] for st in steps
                       if st.get("unitType") and not st.get("_needType")), None)
-        if known:
-            for st in steps:
-                if st.get("_needType"):
-                    st["unitType"] = known
-        steps = [st for st in steps if st.get("unitType")]
         for st in steps:
+            if st.get("_needType"):
+                # 물려받을 종류가 없으면 비워 둔 채로 넘긴다.
+                # 지금 무엇이 돌아가는지 아는 쪽(infer_unit_type)이 정한다.
+                st["unitType"] = known
             st.pop("_needType", None)
         if len(steps) >= 2:
-            # "1번 세탁기랑 2번 건조기 알림 걸어줘" 처럼 시킨 말이 뒤에만 붙은 경우,
-            # 그 앞에 있는 기기들도 같은 동사로 본다.
-            # 반대로 뒤에 오는 조각은 자기 말이 따로 있는 것이므로 건드리지 않는다.
-            first = next((i for i, st in enumerate(steps) if st.get("_verb")), None)
-            if first:
-                for st in steps[:first]:
-                    if st["action"] == "unit_status":
-                        st["action"] = steps[first]["action"]
+            # 시킨 말(등록/취소)을 앞뒤 양쪽으로 물려준다.
+            # "1번이랑 2번 건조기 알림 걸어줘" 는 말이 뒤에만 붙어 있고,
+            # "3번 알림 걸고 5번도 걸어줘" 는 앞에만 붙어 있다.
+            # 둘 다 사람은 전부 같은 동작으로 읽는다.
+            verbs = [i for i, st in enumerate(steps) if st.get("_verb")]
+            if verbs:
+                for i, st in enumerate(steps):
+                    if st.get("_verb") or st["action"] != "unit_status":
+                        continue
+                    # 자기와 가장 가까운 동사를 따른다
+                    nearest = min(verbs, key=lambda j: abs(j - i))
+                    st["action"] = steps[nearest]["action"]
             for st in steps:
                 st.pop("_verb", None)
             return {"actions": steps}
@@ -1780,6 +1793,17 @@ def parse_by_rules(text, ctx=None):
     if one:
         one.pop("_verb", None)
         return one
+
+    # 종류 없이 번호만 말한 경우도 잡는다. 예) "2번 알림 걸어줘", "4번 취소"
+    # 어떤 기기인지는 실제 상태를 아는 쪽(infer_unit_type)이 정한다.
+    m = DEVICE_LOOSE_RE.search(t)
+    if m and m.group(2) is None:
+        tid = int(m.group(1))
+        if 1 <= tid <= 9:
+            if any(k in t for k in CANCEL_WORDS):
+                return {"action": "cancel", "towerId": tid, "unitType": None}
+            if any(k in t for k in REGISTER_WORDS):
+                return {"action": "register", "towerId": tid, "unitType": None}
 
     # 기기 번호 없이 이어서 말한 경우, 그 사람이 직전에 말한 기기를 쓴다.
     # (문맥은 사람별로 따로 보관하므로 다른 사람 요청과 섞이지 않는다)
@@ -1902,8 +1926,13 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
         "- chat: 위 어디에도 해당하지 않음. reply 에 답을 직접 써라\n"
         "한 문장에 요청이 여러 개면(예: '3번 건조기 알림 취소하고 7번 세탁기 예약') "
         "actions 배열에 말한 순서대로 모두 담아라. 요청이 하나뿐이면 actions 는 비워두고 "
+        "요청 개수에 제한이 없다. 세 개든 다섯 개든 말한 만큼 전부 담아라. 하나라도 빠뜨리면 사용자는 그것이 되지 않은 줄도 모른다\n"
+        "종류(세탁기/건조기)를 안 밝힌 번호도 그냥 담아라. towerId 만 채우고 unitType 은 비운다. 되묻지 말고 넘겨라. 예) '2번 4번 6번 알림 걸어줘' -> register 세 개, unitType 은 모두 비움\n"
+        "제보(report)도 다른 동작과 섞일 수 있다. 예) '1번 5번 세탁기 건조기 걸어주고 버그 제보 하려고' 는 register 네 개(1·5번 각각 세탁기와 건조기)와 report 한 개다. 제보가 섞였다고 나머지를 버리지 마라\n"
+        "'세탁기 건조기 둘 다', '전부' 처럼 여러 종류를 함께 말하면 각각을 따로 담는다. 예) '1번 세탁기 건조기 걸어줘' -> register 두 개\n"
+        "사진·배치도를 함께 요청하면 status 를 같이 담는다. 예) '5번 알림 걸고 사진도 보여줘' -> register 와 status\n"
         "여러 대를 한 번에 거는 것은 문제없이 된다. '한 번에 하나만 가능하다' 같은 말은 사실이 아니므로 절대 하지 마라. 기기 종류(세탁기/건조기)를 말하지 않았으면 물어보되, 여러 대라서 안 된다는 식으로 답하지 마라\n"
-        "번호만 말하고 종류를 안 밝힌 경우(예: 1번이랑 3번 알림), 지금 그 번호에서 돌아가는 기기가 한 종류뿐이면 그것으로 바로 등록한다. 둘 다 돌아가고 있을 때만 어느 쪽인지 되묻는다\n"
+        "번호만 말하고 종류를 안 밝혔어도 register(또는 cancel)로 넘겨라. towerId 만 채우고 unitType 은 비워 둔다. 지금 무엇이 돌아가는지는 코드가 알고 있어서 하나뿐이면 알아서 고르고, 애매할 때만 되묻는다. 네가 미리 '어떤 기기인가요' 라고 chat 으로 답하면 될 일도 안 된다\n"
         "action 에만 담아라.\n\n"
         "[지금 시각]\n" + _now_line() + "\n\n"
         "[지금 기기 상태]\n" + "\n".join(lines) + "\n\n"
@@ -1956,7 +1985,8 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                             "properties": {
                                 "action": {"type": "STRING",
                                            "enum": ["register", "cancel", "cancel_all",
-                                                    "list_alarms", "status", "unit_status"]},
+                                                    "list_alarms", "status", "unit_status",
+                                                    "test_alarm", "report", "info"]},
                                 "towerId": {"type": "INTEGER"},
                                 "unitType": {"type": "STRING", "enum": ["washer", "dryer"]},
                             },
@@ -2397,6 +2427,7 @@ async def _run_steps(user_id, steps, reply, status_data):
         head = ""
     if head:
         texts.append(head)
+    view = None
     for step in steps:
         mine = [a for a in active_alarms if a.get("userId") == user_id]
         t, e, b, v = _norm(await _do_step(user_id, step, status_data, mine))
@@ -2406,7 +2437,41 @@ async def _run_steps(user_id, steps, reply, status_data):
             embed = e
         if b and not board:
             board = b
-    return "\n".join(texts), embed, board
+        # 제보처럼 눌러서 이어가야 하는 단계가 섞여 있으면 그 버튼을 살린다.
+        # 예) "1번 알림 걸어주고 버그 제보하려고" -> 등록 결과 + 제보 버튼
+        if v is not None and view is None:
+            view = v
+    return "\n".join(texts), embed, board, view
+
+
+def infer_unit_type(user_id, tower_id, action, status_data):
+    """번호만 말했을 때 세탁기인지 건조기인지 짐작한다. 애매하면 None.
+
+    취소라면 그 번호에 걸어둔 알림에서 찾는다.
+    등록이라면 그 번호에서 지금 돌아가는 기기에서 찾는다.
+    둘 다 해당되면 사람도 헷갈리므로 되묻는 편이 맞다.
+    """
+    if action in ("cancel",):
+        hits = [a["unitType"] for a in active_alarms
+                if a.get("userId") == user_id and a.get("towerId") == tower_id]
+        return hits[0] if len(set(hits)) == 1 else None
+
+    if action in ("register", "unit_status"):
+        tower = next((t for t in TOWERS if t["id"] == tower_id), None)
+        if not tower:
+            return None
+        data = (status_data or {}).get(tower["name"]) or {}
+        running = []
+        for ut in ("washer", "dryer"):
+            u = data.get(ut) or {}
+            state = (u.get("runState") or {}).get("currentState")
+            t = u.get("timer") or {}
+            mins = t.get("remainHour", 0) * 60 + t.get("remainMinute", 0)
+            if state not in (None, "POWER_OFF", "INITIAL") and mins > 0:
+                running.append(ut)
+        return running[0] if len(running) == 1 else None
+
+    return None
 
 
 async def _do_step(user_id, plan, status_data, mine):
@@ -2416,7 +2481,15 @@ async def _do_step(user_id, plan, status_data, mine):
     if action == "report":
         # 말로 제보하겠다고 하면 적을 창을 띄운다.
         # 여기서 바로 받아 적으면 대화가 길어지고, 무엇을 적어야 하는지도 흐려진다.
-        return (reply or "제보 고마워요! 아래에서 골라 적어주세요."), None, False, ReportKindView()
+        #
+        # 아직 아무것도 적지 않았으므로 '전달했다' 는 말이 나가면 안 된다.
+        # 그 말을 들으면 다 됐다고 알고 창을 닫아 버린다.
+        head = (reply or "").strip()
+        if not head or claims_outcome(head) or any(
+                w in head for w in ("전달할게", "전달하겠", "전달해 드리", "전달됐",
+                                    "접수했", "접수되", "확인할게요", "반영할게")):
+            head = "제보 고마워요!"
+        return (head + "\n-# 아래에서 골라 적어주시면 그때 전달됩니다."), None, False, ReportKindView()
 
     if action == "test_alarm":
         user = bot.get_user(user_id)
@@ -2450,6 +2523,13 @@ async def _do_step(user_id, plan, status_data, mine):
 
     if action in ("register", "cancel", "unit_status"):
         tower_id, unit_type = plan.get("towerId"), plan.get("unitType")
+
+        # 번호만 말했으면 굳이 되묻지 않는다. 하나로 좁혀지면 그것으로 본다.
+        if tower_id and not unit_type:
+            unit_type = infer_unit_type(user_id, tower_id, action, status_data)
+            if unit_type:
+                plan = dict(plan, unitType=unit_type)
+
         if not tower_id or not unit_type:
             # 아무것도 하지 않았으므로 "등록했어요" 같은 말이 나가면 안 된다.
             ask = "어떤 기기인지 알려주세요. 예) `3번 건조기 알림 걸어줘`"
