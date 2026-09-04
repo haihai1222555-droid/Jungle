@@ -1016,6 +1016,8 @@ body {
 }
 .legend-idle .dot { background-color: var(--text-dim); }
 .legend-running .dot { background-color: var(--color-running); box-shadow: 0 0 6px var(--color-running); }
+/* 건조기가 도는 동안은 주황이다 (카드의 is-drying 과 같은 색) */
+.legend-drying .dot { background-color: var(--color-drying); box-shadow: 0 0 6px var(--color-drying); }
 .legend-wrinkle .dot { background-color: var(--color-wrinkle); }
 .legend-error .dot { background-color: var(--color-error); }
 
