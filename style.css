@@ -1015,8 +1015,11 @@ body {
   border-radius: 50%;
 }
 .legend-idle .dot { background-color: var(--text-dim); }
+/* 카드 위 배지와 같은 색을 쓴다 (pill-both / pill-washing / pill-drying).
+   범례가 설명하는 것은 카드 안쪽이 아니라 그 배지다. */
+.legend-both .dot,
 .legend-running .dot { background-color: var(--color-running); box-shadow: 0 0 6px var(--color-running); }
-/* 건조기가 도는 동안은 주황이다 (카드의 is-drying 과 같은 색) */
+.legend-washing .dot { background-color: var(--color-wrinkle); box-shadow: 0 0 6px var(--color-wrinkle); }
 .legend-drying .dot { background-color: var(--color-drying); box-shadow: 0 0 6px var(--color-drying); }
 .legend-wrinkle .dot { background-color: var(--color-wrinkle); }
 .legend-error .dot { background-color: var(--color-error); }
@@ -4083,3 +4086,52 @@ body.light-theme .help-note {
 
 /* 최소 글자 수에 못 미치면 알려 준다 (보내기도 잠근다) */
 .report-count.is-short { color: var(--color-drying); }
+
+
+/* ── 제보 창: 라이트 모드 ─────────────────────────────
+   어두운 배경을 전제로 한 색들이라 그대로 두면 흰 카드 위에
+   잿빛 판이 얹힌 것처럼 보인다. 입력칸·버튼을 밝게 맞춘다. */
+body.light-theme .report-text {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+body.light-theme .report-text:focus {
+  border-color: var(--jungle-green);
+}
+body.light-theme .report-text::placeholder {
+  color: #94a3b8;
+}
+
+body.light-theme .report-kind-btn {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+body.light-theme .report-kind-btn small { color: #94a3b8; }
+body.light-theme .report-kind-btn.is-active {
+  border-color: var(--jungle-green);
+  background: rgba(0, 232, 122, 0.12);
+  color: #0f172a;
+}
+body.light-theme .report-kind-btn.is-active small { color: #475569; }
+
+body.light-theme .report-send {
+  background: #00b862;          /* 흰 바탕에서 형광 초록은 눈에 부담이라 한 톤 낮춘다 */
+  color: #ffffff;
+}
+body.light-theme .report-send:disabled {
+  background: #cbd5e1;
+  color: #ffffff;
+  opacity: 1;                   /* 반투명 대신 회색으로 (흐릿해 보이지 않게) */
+}
+
+body.light-theme .report-fab {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+body.light-theme .report-fab:hover {
+  color: #0f172a;
+  border-color: var(--jungle-green);
+}
