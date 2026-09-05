@@ -4189,6 +4189,17 @@ body.light-theme .report-fab:hover {
   font-size: 0.82rem;
   color: var(--text-dim);
 }
+/* 도움말 안의 링크. 지정하지 않으면 브라우저 기본 파란색이라
+   어두운 배경에서 거의 안 보인다. */
+#helpModal a {
+  color: var(--jungle-green);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+#helpModal a:hover { opacity: .8; }
+body.light-theme #helpModal a { color: #047857; }
+
 .footer-doc-links a {
   color: var(--text-dim);
   text-decoration: none;
