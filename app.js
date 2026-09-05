@@ -1049,7 +1049,13 @@ setInterval(() => {
     }
 
     // 3) 내가 선택한 특정 기기 완료 시 알림 & 웹사이트 알림 자동 해제!
-    const isFinished = remainMin === 0 || runState === 'END' || runState === 'COMPLETE' || runState === 'WRINKLE_CARE' || (now >= item.targetMs && !isUnitRunning(runState));
+    // 남은 시간 0분이 곧 완료는 아니다. 무게 감지(DETECTING) 중에는
+    // 시간이 아직 안 잡혀서 0 분으로 온다. 그때 완료라고 하면 거짓말이다.
+    const stillGoing = ['RUNNING', 'WASHING', 'RINSING', 'SPINNING',
+                        'DRYING', 'COOLING', 'DETECTING'].includes(runState);
+    const isFinished = !stillGoing && (
+      remainMin === 0 || runState === 'END' || runState === 'COMPLETE'
+      || runState === 'WRINKLE_CARE' || now >= item.targetMs);
     if (!isError && isFinished && !item.notified0Min) {
       item.notified0Min = true;
       changed = true;

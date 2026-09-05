@@ -128,6 +128,9 @@ STALE_PICKUP_SEC = int(os.environ.get('STALE_PICKUP_SEC') or 15 * 60)
 
 # 가동 중으로 볼 상태들 (완료 후 이 상태가 되면 = 다음 사람이 새로 돌린 것)
 RUNNING_STATES = ('RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING')
+# DETECTING(무게 감지 중)은 방금 돌리기 시작한 것이다.
+# 이때는 남은 시간이 아직 0 이라 완료로 오해하기 쉽다.
+STARTED_STATES = RUNNING_STATES + ('DETECTING',)
 
 # 구독 파일에 대한 읽기/쓰기를 직렬화한다 (워커 스레드와 요청 스레드가 동시에 접근)
 SUBS_LOCK = threading.Lock()
@@ -389,6 +392,9 @@ def background_push_worker():
 
                 # 실시간 상태를 실제로 받아왔는지 (못 받아온 상태에서 '완료' 로 오판하면 안 된다)
                 has_live = bool(unit_data)
+                # 남은 시간 0분이 곧 완료는 아니다. 무게 감지(DETECTING) 중에는
+                # 시간이 아직 안 잡혀서 0 분으로 온다.
+                still_going = has_live and run_state in STARTED_STATES
 
                 # ⭐ 기기가 알려주는 실제 남은 시간을 우선한다.
                 #    건조기 옷감 감지로 9분 -> 4분처럼 줄거나, 반대로 늘어나는 경우가 잦은데
@@ -445,7 +451,7 @@ def background_push_worker():
                         'endpoint': sub_info.get('endpoint'),
                     })
 
-                elif not notified_0min and (
+                elif not notified_0min and not still_going and (
                     remain_min <= 0
                     or (has_live and run_state in ('END', 'COMPLETE', 'WRINKLE_CARE', 'POWER_OFF', 'INITIAL'))
                 ):

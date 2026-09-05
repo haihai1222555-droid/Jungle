@@ -3479,8 +3479,13 @@ async def check_laundry_alarms():
                 except Exception as e:
                     print(f"[DM Send Error] {e}")
 
-        # 🏁 3) 완료되었을 때 (0분 또는 완료 상태)
-        if (remain_min == 0 or run_state in ('COMPLETE', 'POWER_OFF', 'WRINKLE_CARE')) and not item.get("notified0Min"):
+        # 🏁 3) 완료되었을 때
+        # 남은 시간 0분이 곧 완료는 아니다. 무게 감지(DETECTING) 중에는
+        # 시간이 아직 안 잡혀서 0 분으로 온다. 그때 완료라고 하면 거짓말이다.
+        # 기기가 아직 돌고 있지 않을 때만 0분을 완료로 읽는다.
+        finished = (run_state in ('COMPLETE', 'END', 'POWER_OFF', 'WRINKLE_CARE')
+                    or (remain_min == 0 and run_state not in STARTED_STATES))
+        if finished and not item.get("notified0Min"):
             item["notified0Min"] = True
             item["completedAt"] = now_ts
             changed = True
