@@ -2103,7 +2103,7 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
         "예: '저는 정글 생활 안내 봇이라 코딩 질문은 도와드리기 어려워요! 🫧 "
         "그건 동료들과 페어 프로그래밍으로 풀어보시고, 저에게는 세탁실이나 캠퍼스 생활을 물어봐 주세요!'\n"
         "아래 [정글 생활 안내]에 근거가 있으면 반드시 그 내용대로 답하고, 없는 내용은 지어내지 마라. "
-        "모르면 담당 코치나 운영사무실에 문의하라고 안내해라.\n"
+        f"모르면 {_CONTACT_PHRASE}에 문의하라고 안내해라.\n"
         "정글 생활 관련 질문에 답할 때는 [안내 페이지 링크]에서 관련된 것을 골라 "
         "답변 맨 끝에 '-# 자세히: <링크>' 형태로 한 줄만 덧붙여라. "
         "세탁기 알림 등록처럼 링크가 필요 없는 요청에는 붙이지 마라.\n\n"
@@ -3902,6 +3902,12 @@ async def announce_update():
         print(f"[업데이트] v{rel['version']} 알림 — 관리자 {sent_admin}명 · 채널 {sent_ch}곳")
     except Exception as e:
         print(f"[업데이트] 공지 중 문제: {e}")
+
+
+# 운영 문의처. 기관마다 다르므로 코드에 박지 않고 환경변수로 받는다.
+# 없으면 문구에서 빠지고, 답변은 "담당자에게 문의" 로만 안내한다.
+SUPPORT_CONTACT = (os.environ.get("SUPPORT_CONTACT") or "").strip()
+_CONTACT_PHRASE = f"담당 코치나 운영사무실({SUPPORT_CONTACT})" if SUPPORT_CONTACT else "담당 코치나 운영사무실"
 
 
 # 슬래시 명령어를 이미 등록했는지. on_ready 가 재연결마다 불리기 때문에 필요하다.
