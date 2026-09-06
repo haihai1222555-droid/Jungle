@@ -1529,17 +1529,22 @@ function compactUnitInfo(data, unitType) {
   const mins = (timer.remainHour || 0) * 60 + (timer.remainMinute || 0);
   const err = !!u.error || state === 'ERROR';
 
-  if (err) return { cls: 'cu-error', label: '점검 필요', time: '—' };
+  const base = { state, mins };
+  if (err) return { ...base, cls: 'cu-error', label: '점검 필요', time: '—' };
   if (mins > 0) {
-    return { cls: unitType === 'dryer' ? 'cu-dry' : 'cu-wash',
-             label: STATE_TRANSLATION[state]?.label || '작동 중',
+    // 좁은 칸이라 '작동 중' 의 '중' 까지 넣으면 시간과 부딪혀 잘린다.
+    // 시간이 함께 보이므로 '중' 이 없어도 뜻은 그대로다.
+    const full = STATE_TRANSLATION[state]?.label || '작동 중';
+    return { ...base,
+             cls: unitType === 'dryer' ? 'cu-dry' : 'cu-wash',
+             label: full.replace(/\s*중$/, ''),
              time: formatTimer(timer.remainHour, timer.remainMinute) };
   }
-  if (state === 'WRINKLE_CARE') return { cls: 'cu-done', label: '수거 가능', time: '—' };
-  if (state === 'COMPLETE' || state === 'END') return { cls: 'cu-done', label: '완료', time: '—' };
-  if (state === 'INITIAL') return { cls: 'cu-wait', label: '시작 기다리는 중', time: '—' };
-  if (!isUnitFree(state)) return { cls: 'cu-wait', label: '사용 중', time: '—' };
-  return { cls: 'cu-free', label: '사용 가능', time: '—' };
+  if (state === 'WRINKLE_CARE') return { ...base, cls: 'cu-done', label: '수거 가능', time: '—' };
+  if (state === 'COMPLETE' || state === 'END') return { ...base, cls: 'cu-done', label: '완료', time: '—' };
+  if (state === 'INITIAL') return { ...base, cls: 'cu-wait', label: '시작 전', time: '—' };
+  if (!isUnitFree(state)) return { ...base, cls: 'cu-wait', label: '사용 중', time: '—' };
+  return { ...base, cls: 'cu-free', label: '사용 가능', time: '—' };
 }
 
 // 휴대폰용 압축 카드. 9대를 한 화면에서 훑을 수 있게 한 칸을 작게 만든다.
@@ -1560,9 +1565,16 @@ function createCompactCardElement(tower) {
   else if (running === 1) { pill = '가동 중'; pillCls = 'cp-run'; }
   else { pill = '사용 가능'; pillCls = 'cp-free'; }
 
-  const alarmDot = (unitType) =>
-    myLaundryAlarms.some(a => a.key === `${tower.id}_${unitType}`)
-      ? '<span class="cu-bell" title="알림 켜짐">🔔</span>' : '';
+  // 가동 중인 칸에만 종을 붙인다. 이미 걸어둔 칸은 켜진 모양으로 둔다.
+  // 상세창까지 들어가지 않고 여기서 바로 걸 수 있어야 한다.
+  const bell = (unitType, info) => {
+    const on = myLaundryAlarms.some(a => a.key === `${tower.id}_${unitType}`);
+    if (!on && !isUnitCycleActive(info.state, info.mins)) return '';
+    const name = `${tower.label} ${unitType === 'dryer' ? '건조기' : '세탁기'}`;
+    return `<button class="cu-bell-btn${on ? ' on' : ''}"
+              title="${on ? '알림 끄기' : '완료 5분 전 알림'}"
+              onclick="event.stopPropagation(); toggleLaundryAlarm(${tower.id}, '${unitType}', '${name}', ${info.mins})">🔔</button>`;
+  };
 
   const el = document.createElement('div');
   el.className = `compact-card wt-card-${tower.zone}` + (noData ? ' is-nodata' : '')
@@ -1578,8 +1590,9 @@ function createCompactCardElement(tower) {
     : `<div class="cu-row">
          <span class="cu-icon">${icon}</span>
          <span class="cu-name">${name}</span>
-         <span class="cu-state ${info.cls}">${info.label}${alarmDot(unitType)}</span>
+         <span class="cu-state ${info.cls}">${info.label}</span>
          <span class="cu-time ${info.time === '—' ? 'dim' : ''}">${info.time}</span>
+         ${bell(unitType, info)}
        </div>`;
 
   el.innerHTML = `
@@ -1753,11 +1766,14 @@ function renderSmartSummary() {
     menFreeWashers.sort((a, b) => a.cycles - b.cycles);
     const bestMenWash = menFreeWashers[0];
     menFreeDryers.sort((a, b) => a.cycles - b.cycles);
-    const bestMenDry = menFreeDryers[0]?.tower.label || '대기 중인 건조기 없음';
+    // 빈 건조기가 없을 때 '건조기 대기 중인 건조기 없음' 처럼 겹쳐 나왔다
+    const menDryPart = menFreeDryers[0]
+      ? ` · 건조기 ${menFreeDryers[0].tower.label}`
+      : ' · 빈 건조기 없음';
     menRecPill.textContent = '즉시 세탁 가능';
     menRecPill.style.background = 'rgba(0, 232, 122, 0.15)';
     menRecPill.style.color = 'var(--jungle-green)';
-    menRecTitle.textContent = `세탁기 ${bestMenWash.tower.label} · 건조기 ${bestMenDry}`;
+    menRecTitle.textContent = `세탁기 ${bestMenWash.tower.label}${menDryPart}`;
     menRecDesc.textContent = `현재 ${bestMenWash.tower.label} 세탁기가 대기 중이며, 누적 ${bestMenWash.cycles}회로 가장 쾌적합니다.`;
   } else {
     menRecPill.textContent = '가동 중';
@@ -1782,11 +1798,13 @@ function renderSmartSummary() {
     womenFreeWashers.sort((a, b) => a.cycles - b.cycles);
     const bestWomenWash = womenFreeWashers[0];
     womenFreeDryers.sort((a, b) => a.cycles - b.cycles);
-    const bestWomenDry = womenFreeDryers[0]?.tower.label || '대기 중인 건조기 없음';
+    const womenDryPart = womenFreeDryers[0]
+      ? ` · 건조기 ${womenFreeDryers[0].tower.label}`
+      : ' · 빈 건조기 없음';
     womenRecPill.textContent = '즉시 사용 가능';
     womenRecPill.style.background = 'rgba(236, 72, 153, 0.15)';
     womenRecPill.style.color = '#f472b6';
-    womenRecTitle.textContent = `세탁기 ${bestWomenWash.tower.label} · 건조기 ${bestWomenDry}`;
+    womenRecTitle.textContent = `세탁기 ${bestWomenWash.tower.label}${womenDryPart}`;
     womenRecDesc.textContent = `여성 구역 ${bestWomenWash.tower.label} 세탁기(누적 ${bestWomenWash.cycles}회)가 가장 쾌적하게 대기 중입니다.`;
   } else {
     womenRecPill.textContent = '가동 중';
