@@ -1,0 +1,61 @@
+#!/bin/sh
+# 커밋에 API 키가 섞여 들어가는 것을 막는다.
+#
+# 한 번 겪어서 만들었다. app.js 에 제미나이·Groq 키를 적어 두었는데,
+# 그 파일은 사이트에 들어온 누구나 받아 갈 수 있는 파일이었다.
+# 저장소를 공개하자 몇 시간 만에 검색에 잡혔고 폐기 통보를 받았다.
+# 사람이 기억해서 막는 것은 언젠가 실패한다. 그래서 기계가 막는다.
+#
+# 켜는 법 (한 번만):
+#     git config core.hooksPath .githooks
+#
+# 정말 필요하면 건너뛸 수 있다. 다만 왜 건너뛰는지 스스로 답할 수 있어야 한다.
+#     git commit --no-verify
+
+added=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$added" ] && exit 0
+
+# 실제 키만 걸리게 짠 것들. 코드에 적힌 '검사용 정규식' 은 걸리지 않는다.
+# (예: discord_bot.py 의 "gsk_[A-Za-z0-9]{20,}" 는 대괄호가 섞여 있어 안 걸린다)
+found=0
+for f in $added; do
+    [ -f "$f" ] || continue
+    case "$f" in
+        .githooks/*) continue ;;      # 이 파일 자신
+    esac
+
+    hit=$(git show ":$f" 2>/dev/null | grep -nE \
+        -e 'gsk_[A-Za-z0-9]{40,}' \
+        -e 'AIzaSy[0-9A-Za-z_-]{33}' \
+        -e 'AQ\.Ab8RN6[A-Za-z0-9_-]{40,}' \
+        -e 'sk-[A-Za-z0-9]{40,}' \
+        -e '[MNO][A-Za-z0-9_-]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}' \
+        -e 'A[A-Z][A-Za-z0-9_-]{8}A[Aa]{2}[A-Za-z0-9_-]{30,}' \
+        | head -3)
+
+    if [ -n "$hit" ]; then
+        if [ $found -eq 0 ]; then
+            echo ""
+            echo "  커밋을 멈췄다. API 키로 보이는 것이 들어 있다."
+            echo ""
+            found=1
+        fi
+        echo "  $f"
+        echo "$hit" | sed 's/^/      /' | cut -c1-100
+    fi
+done
+
+if [ $found -eq 1 ]; then
+    cat <<'MSG'
+
+  키는 코드가 아니라 설정이다. .env 에 넣고 코드에서는 환경변수로 읽는다.
+  브라우저가 쓰는 키라면 서버에 두고 /api/ai/... 를 거치게 한다.
+  (app.js 는 사이트에 들어온 누구나 받아 갈 수 있는 파일이다)
+
+  키가 아니라고 확신하면:  git commit --no-verify
+
+MSG
+    exit 1
+fi
+
+exit 0
