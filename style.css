@@ -600,6 +600,8 @@ body {
 }
 
 .traffic-signal-box {
+  /* 옆 글자가 길어지면 flex 가 이 칸을 줄여 동그라미가 타원이 된다 */
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -612,8 +614,10 @@ body {
 }
 
 .signal-dot {
+  flex: none;
   width: 22px;
   height: 22px;
+  aspect-ratio: 1 / 1;
   border-radius: 50%;
   transition: all 0.3s ease;
 }
@@ -4533,4 +4537,12 @@ body.light-theme .cu-bell-btn.on {
   .quick-stats-row .stat-val { font-size: 15px !important; line-height: 1.2 !important; }
   .rec-column { padding: 7px 9px !important; }
   .dual-rec-grid { gap: 6px !important; }
+}
+
+/* 휴대폰: 구역 탭에서 괄호 범위를 감춰 네 개가 한 줄에 들어가게 한다.
+   잘린 채 가로 스크롤로 두면 넘길 수 있다는 걸 모르고 지나친다. */
+@media (max-width: 768px) {
+  .tab-range { display: none; }
+  .zone-tabs { overflow-x: visible !important; }
+  .zone-tabs .tab-btn { flex: 1 1 auto !important; text-align: center; }
 }

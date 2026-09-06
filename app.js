@@ -1543,6 +1543,10 @@ function compactUnitInfo(data, unitType) {
   if (state === 'WRINKLE_CARE') return { ...base, cls: 'cu-done', label: '수거 가능', time: '—' };
   if (state === 'COMPLETE' || state === 'END') return { ...base, cls: 'cu-done', label: '완료', time: '—' };
   if (state === 'INITIAL') return { ...base, cls: 'cu-wait', label: '시작 전', time: '—' };
+  // 무게 감지는 남은 시간이 아직 0 이라 위 가지에 안 걸린다.
+  // '사용 중' 으로 뭉뚱그리면 방금 돌리기 시작한 것을 알 수 없다.
+  if (state === 'DETECTING') return { ...base, cls: 'cu-wash', label: '무게 감지', time: '—' };
+  if (state === 'PAUSE') return { ...base, cls: 'cu-wait', label: '일시정지', time: '—' };
   if (!isUnitFree(state)) return { ...base, cls: 'cu-wait', label: '사용 중', time: '—' };
   return { ...base, cls: 'cu-free', label: '사용 가능', time: '—' };
 }
