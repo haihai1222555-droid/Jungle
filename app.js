@@ -31,32 +31,10 @@ const TOWERS = [
 ];
 
 
-const INITIAL_STATS_SNAPSHOT = {
-  "days": 7,
-  "counts": [
-    {"device":"워시타워_1","id":1,"zone":"men","type":"dryer","count":46},{"device":"워시타워_1","id":1,"zone":"men","type":"washer","count":19},
-    {"device":"워시타워_2","id":2,"zone":"men","type":"dryer","count":41},{"device":"워시타워_2","id":2,"zone":"men","type":"washer","count":37},
-    {"device":"워시타워_3","id":3,"zone":"men","type":"dryer","count":41},{"device":"워시타워_3","id":3,"zone":"men","type":"washer","count":36},
-    {"device":"워시타워_4","id":4,"zone":"men","type":"dryer","count":41},{"device":"워시타워_4","id":4,"zone":"men","type":"washer","count":42},
-    {"device":"워시타워_5","id":5,"zone":"men","type":"dryer","count":63},{"device":"워시타워_5","id":5,"zone":"men","type":"washer","count":41},
-    {"device":"워시타워_6","id":6,"zone":"common","type":"dryer","count":54},{"device":"워시타워_6","id":6,"zone":"common","type":"washer","count":37},
-    {"device":"워시타워_7","id":7,"zone":"common","type":"dryer","count":59},{"device":"워시타워_7","id":7,"zone":"common","type":"washer","count":40},
-    {"device":"워시타워_8","id":8,"zone":"women","type":"dryer","count":28},{"device":"워시타워_8","id":8,"zone":"women","type":"washer","count":30},
-    {"device":"워시타워_9","id":9,"zone":"women","type":"dryer","count":31},{"device":"워시타워_9","id":9,"zone":"women","type":"washer","count":22}
-  ],
-  "totals": {"dryer": 404, "washer": 304},
-  "recent": [
-    {"device":"워시타워_3","type":"dryer","event":"end","state":"PAUSE","time":"2026-09-01 14:43:09"},
-    {"device":"워시타워_4","type":"washer","event":"start","state":"RUNNING","time":"2026-09-01 14:43:09"},
-    {"device":"워시타워_7","type":"dryer","event":"start","state":"RUNNING","time":"2026-09-01 14:33:00"},
-    {"device":"워시타워_7","type":"washer","event":"end","state":"END","time":"2026-09-01 14:22:44"},
-    {"device":"워시타워_6","type":"dryer","event":"end","state":"END","time":"2026-09-01 14:17:35"},
-    {"device":"워시타워_3","type":"dryer","event":"start","state":"RUNNING","time":"2026-09-01 14:17:35"},
-    {"device":"워시타워_6","type":"washer","event":"start","state":"RUNNING","time":"2026-09-01 14:07:34"},
-    {"device":"워시타워_5","type":"dryer","event":"error","state":"ERROR","time":"2026-09-01 13:11:27"},
-    {"device":"워시타워_1","type":"dryer","event":"error","state":"ERROR","time":"2026-09-01 12:56:03"}
-  ]
-};
+// 통계를 아직 못 받았을 때 쓸 값은 두지 않는다.
+// 예전에는 며칠 전 스냅샷이 통째로 박혀 있어서, 처음 들어온 사람이
+// 남의 옛 숫자를 잠깐 진짜인 줄 알고 봤다.
+// 비어 있으면 화면이 '집계 중' 으로 그린다. 그게 사실이다.
 
 // 첫 그림에 쓸 값. 코드에 박힌 옛 스냅샷을 그대로 쓰면
 // 페이지를 열 때마다 지어낸 상태가 잠깐 보인다.
@@ -66,7 +44,7 @@ const _lastGood = (() => {
   try { return loadLastGoodSnapshot(); } catch (e) { return null; }
 })();
 let globalStatusData = _lastGood?.status || {};
-let globalStatsData = _lastGood?.stats || INITIAL_STATS_SNAPSHOT;
+let globalStatsData = _lastGood?.stats || {};
 let currentZoneFilter = 'all';
 let usageChartInstance = null;
 
@@ -1101,10 +1079,13 @@ setInterval(() => {
 
 // 📊 최근 통계 데이터 기반 24시간 시간대별 혼잡도 분석기
 function analyzeStatisticalPatterns(statsData) {
-  const totals = statsData.totals || { washer: 304, dryer: 404 };
-  const totalRuns = (totals.washer || 0) + (totals.dryer || 0);
+  // 통계가 아직 안 왔으면 숫자를 지어내지 않는다.
+  // 예전에는 304/404 라는 값을 대신 넣고 "실측" 이라고 적어 보여줬다.
+  const totals = statsData.totals;
+  const hasTotals = !!totals && (totals.washer != null || totals.dryer != null);
+  const totalRuns = hasTotals ? (totals.washer || 0) + (totals.dryer || 0) : null;
   const days = statsData.days || 7;
-  const avgDailyRuns = Math.round(totalRuns / days);
+  const avgDailyRuns = hasTotals ? Math.round(totalRuns / days) : null;
 
   const now = new Date();
   const currentHour = now.getHours();
@@ -1119,7 +1100,7 @@ function analyzeStatisticalPatterns(statsData) {
       label: '새벽 야간 골든타임',
       desc: '대기 0명! 야간 코딩러 강력 추천',
       sharePercent: 8,
-      avgRuns: Math.max(1, Math.round(avgDailyRuns * 0.08)),
+      avgRuns: hasTotals ? Math.max(1, Math.round(avgDailyRuns * 0.08)) : null,
       utilizationRate: 15,
       level: 'best',
       badgeText: '매우 여유 🔵',
@@ -1134,7 +1115,7 @@ function analyzeStatisticalPatterns(statsData) {
       label: '오전 등교/학습 시간',
       desc: '등교 전후 여유로운 세탁 가능',
       sharePercent: 14,
-      avgRuns: Math.max(1, Math.round(avgDailyRuns * 0.14)),
+      avgRuns: hasTotals ? Math.max(1, Math.round(avgDailyRuns * 0.14)) : null,
       utilizationRate: 28,
       level: 'good',
       badgeText: '여유 🟢',
@@ -1149,7 +1130,7 @@ function analyzeStatisticalPatterns(statsData) {
       label: '오후 틈새 타임',
       desc: '점심/오후 1~2대 대기 없이 사용 가능',
       sharePercent: 26,
-      avgRuns: Math.max(1, Math.round(avgDailyRuns * 0.26)),
+      avgRuns: hasTotals ? Math.max(1, Math.round(avgDailyRuns * 0.26)) : null,
       utilizationRate: 45,
       level: 'normal',
       badgeText: '보통 🟡',
@@ -1164,7 +1145,7 @@ function analyzeStatisticalPatterns(statsData) {
       label: '저녁 식사/복귀 시간',
       desc: '식사 후 몰림 시작 (잔여시간 확인)',
       sharePercent: 20,
-      avgRuns: Math.max(1, Math.round(avgDailyRuns * 0.20)),
+      avgRuns: hasTotals ? Math.max(1, Math.round(avgDailyRuns * 0.20)) : null,
       utilizationRate: 68,
       level: 'caution',
       badgeText: '혼잡 🟠',
@@ -1179,7 +1160,7 @@ function analyzeStatisticalPatterns(statsData) {
       label: '몰입 종료 심야 피크',
       desc: '코딩 종료 후 샤워&빨래 집중 (대기 필수)',
       sharePercent: 32,
-      avgRuns: Math.max(1, Math.round(avgDailyRuns * 0.32)),
+      avgRuns: hasTotals ? Math.max(1, Math.round(avgDailyRuns * 0.32)) : null,
       utilizationRate: 88,
       level: 'busy',
       badgeText: '매우 혼잡 🔴',
@@ -1199,7 +1180,9 @@ function analyzeStatisticalPatterns(statsData) {
       if (!m) return;
       s.utilizationRate = m.utilizationRate;
       s.sharePercent = m.sharePercent;
-      s.avgRuns = Math.max(1, Math.round(avgDailyRuns * m.sharePercent / 100));
+      s.avgRuns = hasTotals
+        ? Math.max(1, Math.round(avgDailyRuns * m.sharePercent / 100))
+        : null;
       s.level = m.utilizationRate >= 80 ? 'busy'
               : m.utilizationRate >= 60 ? 'caution'
               : m.utilizationRate >= 40 ? 'normal'
@@ -1215,6 +1198,7 @@ function analyzeStatisticalPatterns(statsData) {
   const currentSlot = slots.find(s => s.isCurrent) || slots[2];
 
   return {
+    hasTotals,
     totalRuns,
     days,
     avgDailyRuns,
@@ -1246,9 +1230,13 @@ function renderCongestionStatus() {
   }
   if (statsSummaryEl) {
     // 총 가동횟수/일평균은 API 실측값. 시간대별 분포는 생활패턴 기반 추정치이므로 구분해서 표기한다.
+    // 가동 횟수를 못 받았으면 그 자리를 비운다. 지어낸 수를 '실측' 이라 적지 않는다.
+    const runs = statAnalysis.hasTotals
+      ? `최근 ${statAnalysis.days}일 실측 ${statAnalysis.totalRuns}회 (일평균 ${statAnalysis.avgDailyRuns}회)`
+      : '가동 횟수 집계 중';
     statsSummaryEl.textContent = statAnalysis.measured
-      ? `최근 ${statAnalysis.days}일 실측 ${statAnalysis.totalRuns}회 (일평균 ${statAnalysis.avgDailyRuns}회) · 시간대별 혼잡도는 실제 관측값${statAnalysis.measuredAt ? ` (${statAnalysis.measuredAt} 갱신)` : ''}`
-      : `최근 ${statAnalysis.days}일 실측 ${statAnalysis.totalRuns}회 (일평균 ${statAnalysis.avgDailyRuns}회) · 시간대 분포는 추정치 (관측 수집 중)`;
+      ? `${runs} · 시간대별 혼잡도는 실제 관측값${statAnalysis.measuredAt ? ` (${statAnalysis.measuredAt} 갱신)` : ''}`
+      : `${runs} · 시간대 분포는 추정치 (관측 수집 중)`;
   }
 
   // 실시간 여유 대수 계산
@@ -1311,7 +1299,7 @@ function renderCongestionStatus() {
         <div class="gt-label">${s.label}</div>
         <div class="gt-stat-metric">
           <span>예상 혼잡도 <b>${s.utilizationRate}%</b></span>
-          <span>(일평균 ${s.avgRuns}회)</span>
+          ${s.avgRuns == null ? '' : `<span>(일평균 ${s.avgRuns}회)</span>`}
         </div>
         <p class="gt-tip">${s.desc}</p>
       </div>
@@ -2417,13 +2405,17 @@ async function processNaturalLanguageQuery(userText) {
 [크래프톤 정글 기숙사 세탁실 현실 & 에티켓 가이드]
 • 상황: 빡빡하게 코딩하는 동기들이 함께 쓰는 '공용 세탁실'입니다.
 • ⚠️ 민폐 민간요법 절대 금지: 식초, 구연산 담그기, 베이킹소다 범벅 같은 번거롭거나 세탁기에 잔여물이 남는 민간요법은 절대 권장하지 마세요!
-• 💡 기숙사 실전 깔끔 세탁법:
-  - 냄새(담배/땀/찌든내) 제거: [온수 40~60℃ 세탁 + 헹굼 3회 추가 + 고온 건조기 열풍 건조]로 섬유 속 냄새 분자를 날려버리는 것이 가장 깔끔하고 정석입니다.
-  - 수건: 섬유유연제 없이 [타월 코스 + 표준 건조] (흡수력 유지)
-  - 데일리 빨래: [표준 + 터보샷 (39분)]
-  - 정글 에티켓: 세탁/건조 끝나면 다음 사람 위해 즉시 수거하기, 건조 후 먼지 필터 털어주기.
+• 💡 기숙사 실전 깔끔 세탁법 (이 기기에 실제로 있는 코스 이름으로 안내하세요):
+  - 냄새(담배/땀/찌든내): 세탁 [알뜰삶음] → 건조 [스팀살균]
+  - 수건: 세탁 [타올] → 건조 [타올], 섬유유연제는 넣지 않기 (흡수력 유지)
+  - 데일리 빨래: 세탁 [표준] (5방향 터보샷이 들어가 빠릅니다)
+  - 니트·울: 세탁 [울·섬세], 건조기는 줄어들 수 있어 널어 말리기 권장
+  - 세탁조가 찝찝할 때: 빨래를 모두 뺀 빈 상태로 [통살균]
+  - 정글 에티켓: 끝나면 바로 수거하기, 건조 후 2중 안심필터 털어주기.
+• ⚠️ 화재 주의: 드라이클리닝 세제·헤어젤·왁스·기름이 묻은 옷은 건조기에 절대 넣지 마세요. 열이 닿으면 불이 납니다.
 • 구역: 1~5호기(남성 전용), 6~7호기(공용), 8~9호기(여성 전용)
-• 기기: LG 트롬 워시타워 W22KJUR (2024년형, 세탁기+건조기 일체형, 물통 없는 자동 직배수, 조작부는 Center Control 한 곳)
+• 기기: LG 트롬 워시타워 W22KJUR (2024년형) · 세탁 25kg / 건조 22kg
+  세탁기+건조기 일체형, 물통 없는 자동 직배수, 조작부는 가운데 Center Control 한 곳
 • ⚠️ 코스 이름·버튼 위치·용량처럼 확인되지 않은 것은 지어내지 말고
   "기기 조작부에서 직접 확인해 주세요" 라고 안내하세요. 그럴듯하게 틀린 안내가 모른다고 하는 것보다 나쁩니다.
 
