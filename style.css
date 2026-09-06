@@ -4546,3 +4546,21 @@ body.light-theme .cu-bell-btn.on {
   .zone-tabs { overflow-x: visible !important; }
   .zone-tabs .tab-btn { flex: 1 1 auto !important; text-align: center; }
 }
+
+/* 늘어날 수 있는 시간. 남은 시간 오른쪽에 작게 붙인다.
+   큰 화면의 '⏱️ +10~20분 연장 유력 (습도 판정)' 과 같은 판정이다. */
+.cu-delta {
+  flex: none;
+  margin-left: 3px;
+  font-size: 9px;
+  font-weight: 800;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, .14);
+  border-radius: 4px;
+  padding: 1px 4px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+body.light-theme .cu-delta { color: #b45309; background: #fef3c7; }
+/* 늘어날 시간이 붙으면 상태 글자는 빼고 시간에 자리를 준다.
+   시간이 보이면 이미 돌고 있다는 뜻이라 상태를 또 적을 필요가 적다. */

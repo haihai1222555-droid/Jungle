@@ -499,6 +499,7 @@ function analyzeDynamicTimeFluctuation(unitType, runState, timer, cycleCount, er
       return {
         status: 'likely_extend',
         tagText: '⏱️ +10~20분 연장 유력 (습도 판정)',
+        deltaLabel: '+10~20분',
         tagClass: 'fluc-extend',
         confidence: 75,
         predictedDeltaMin: 15,
@@ -528,6 +529,7 @@ function analyzeDynamicTimeFluctuation(unitType, runState, timer, cycleCount, er
       return {
         status: 'possible_extend',
         tagText: isHighCycle ? '⏱️ +5~15분 지연 가능 (탈수·배수 센싱)' : '⏱️ +5~10분 변동 가능 (탈수 밸런스)',
+        deltaLabel: isHighCycle ? '+5~15분' : '+5~10분',
         tagClass: 'fluc-extend',
         confidence: 55,
         predictedDeltaMin: 10,
@@ -1530,15 +1532,20 @@ function compactUnitInfo(data, unitType) {
   const err = !!u.error || state === 'ERROR';
 
   const base = { state, mins };
-  if (err) return { ...base, cls: 'cu-error', label: '점검 필요', time: '—' };
+  if (err) return { ...base, cls: 'cu-error', label: '점검 필요', time: '—', delta: '' };
   if (mins > 0) {
+    // 큰 화면에 이미 있는 판정을 그대로 쓴다. 값을 새로 지어내지 않는다.
+    const cycles = data.washer?.cycle?.cycleCount || 0;
+    const fl = analyzeDynamicTimeFluctuation(unitType, state, timer, cycles, u.error);
+    const delta = fl.deltaLabel || '';
     // 좁은 칸이라 '작동 중' 의 '중' 까지 넣으면 시간과 부딪혀 잘린다.
     // 시간이 함께 보이므로 '중' 이 없어도 뜻은 그대로다.
     const full = STATE_TRANSLATION[state]?.label || '작동 중';
     return { ...base,
              cls: unitType === 'dryer' ? 'cu-dry' : 'cu-wash',
              label: full.replace(/\s*중$/, ''),
-             time: formatTimer(timer.remainHour, timer.remainMinute) };
+             time: formatTimer(timer.remainHour, timer.remainMinute),
+             delta };
   }
   if (state === 'WRINKLE_CARE') return { ...base, cls: 'cu-done', label: '수거 가능', time: '—' };
   if (state === 'COMPLETE' || state === 'END') return { ...base, cls: 'cu-done', label: '완료', time: '—' };
@@ -1594,8 +1601,9 @@ function createCompactCardElement(tower) {
     : `<div class="cu-row">
          <span class="cu-icon">${icon}</span>
          <span class="cu-name">${name}</span>
-         <span class="cu-state ${info.cls}">${info.label}</span>
+         ${info.delta ? '' : `<span class="cu-state ${info.cls}">${info.label}</span>`}
          <span class="cu-time ${info.time === '—' ? 'dim' : ''}">${info.time}</span>
+         ${info.delta ? `<span class="cu-delta" title="늘어날 수 있는 시간">${info.delta}</span>` : ''}
          ${bell(unitType, info)}
        </div>`;
 
