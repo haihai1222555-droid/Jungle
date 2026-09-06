@@ -259,7 +259,7 @@ def record_congestion_sample(status_data):
             if not isinstance(unit, dict):
                 continue
             total += 1
-            state = (unit.get("runState") or {}).get("currentState", "POWER_OFF")
+            state = unit_state(unit)
             if state in RUNNING_STATES:
                 busy += 1
     if not total:
@@ -390,7 +390,7 @@ def background_push_worker():
                 tower_key = f"워시타워_{tower_id}"
                 tower_data = (CACHED_STATUS.get(tower_key) or {})
                 unit_data = (tower_data.get('dryer' if unit_type == 'dryer' else 'washer') or {})
-                run_state = (unit_data.get('runState') or {}).get('currentState', 'POWER_OFF')
+                run_state = unit_state(unit_data)
 
                 # 실시간 상태를 실제로 받아왔는지 (못 받아온 상태에서 '완료' 로 오판하면 안 된다)
                 has_live = bool(unit_data)
@@ -1178,6 +1178,24 @@ def report_allowed(who):
                 _REPORT_LAST.pop(k, None)
     return True
 
+
+
+def unit_state(unit):
+    """이 기기가 지금 무엇을 하는지. 상태가 안 왔으면 지어내지 않는다.
+
+    원본이 runState 를 통째로 빼고 보낼 때가 있다. 남은 시간만 온다.
+    예전에는 그럴 때 POWER_OFF 로 메웠는데, 그러면 완료 판정이
+    POWER_OFF 를 '끝남' 으로 보기 때문에 아직 한참 남은 기기에
+    완료 푸시가 나갈 수 있었다.
+    """
+    if not isinstance(unit, dict):
+        return "UNKNOWN"
+    state = (unit.get("runState") or {}).get("currentState")
+    if state:
+        return state
+    timer = unit.get("timer") or {}
+    remain = (timer.get("remainHour") or 0) * 60 + (timer.get("remainMinute") or 0)
+    return "UNKNOWN_RUNNING" if remain > 0 else "UNKNOWN"
 
 
 def discord_bot_health():

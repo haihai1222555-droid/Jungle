@@ -571,8 +571,8 @@ def render_floorplan_image(status_data):
         no_data = not tower_has_data(status_data, t["name"])
         data = (status_data.get(t["name"]) or {})
         d, w = (data.get("dryer") or {}), (data.get("washer") or {})
-        d_state = (d.get("runState") or {}).get("currentState", "POWER_OFF")
-        w_state = (w.get("runState") or {}).get("currentState", "POWER_OFF")
+        d_state = unit_state(d)
+        w_state = unit_state(w)
         d_min = ((d.get("timer") or {}).get("remainHour", 0) * 60) + (d.get("timer") or {}).get("remainMinute", 0)
         w_min = ((w.get("timer") or {}).get("remainHour", 0) * 60) + (w.get("timer") or {}).get("remainMinute", 0)
         d_err = bool(d.get("error")) or d_state == "ERROR"
@@ -733,8 +733,8 @@ def get_running_options(status_data):
         w = (data.get("washer") or {})
         d = (data.get("dryer") or {})
 
-        w_state = (w.get("runState") or {}).get("currentState", "POWER_OFF")
-        d_state = (d.get("runState") or {}).get("currentState", "POWER_OFF")
+        w_state = unit_state(w)
+        d_state = unit_state(d)
         w_min = ((w.get("timer") or {}).get("remainHour", 0) * 60) + (w.get("timer") or {}).get("remainMinute", 0)
         d_min = ((d.get("timer") or {}).get("remainHour", 0) * 60) + (d.get("timer") or {}).get("remainMinute", 0)
         
@@ -934,6 +934,9 @@ def build_floorplan_embed():
 # 상태 조회 명령어 (/세탁기 · /건조기 · /정보)
 # =========================================================
 STATE_LABELS = {
+    # 아래 둘은 기기가 준 이름이 아니다. 상태가 안 왔을 때 우리가 붙인다.
+    "UNKNOWN_RUNNING": "사용 중 (상태 확인 불가)",
+    "UNKNOWN": "정보 없음",
     "POWER_OFF": "대기 중", "INITIAL": "선택 완료(시작 기다리는 중...)", "COMPLETE": "완료 (수거 대기)",
     "END": "완료", "RUNNING": "작동 중", "WASHING": "세탁 중", "RINSING": "헹굼 중",
     "SPINNING": "탈수 중", "DRYING": "건조 중", "COOLING": "쿨링 중",
@@ -968,7 +971,7 @@ def build_unit_list_embed(unit_type):
         lines = []
         for t in [x for x in TOWERS if x["zone"] == zone_key]:
             unit = (status_data.get(t["name"]) or {}).get(unit_type) or {}
-            state = (unit.get("runState") or {}).get("currentState", "POWER_OFF")
+            state = unit_state(unit)
             timer = unit.get("timer") or {}
             minutes = (timer.get("remainHour", 0) or 0) * 60 + (timer.get("remainMinute", 0) or 0)
             is_err = state == "ERROR" or bool(unit.get("error"))
@@ -1682,6 +1685,27 @@ def tower_has_data(status_data, tower_name):
     return isinstance(d, dict) and bool(d)
 
 
+def unit_state(unit):
+    """이 기기가 지금 무엇을 하는지. 상태가 안 왔으면 지어내지 않는다.
+
+    원본이 runState 를 통째로 빼고 보낼 때가 있다. 남은 시간만 온다.
+    예전에는 그럴 때 POWER_OFF 로 메웠는데, 그러면 두 가지가 어긋났다.
+      - 돌아가는 기기가 '사용 가능' 으로 세어져 추천까지 됐다.
+      - 완료 판정이 POWER_OFF 를 '끝남' 으로 보기 때문에,
+        1시간 23분 남은 기기에 완료 알림이 나갈 수 있었다.
+    모르면 모른다고 둔다. 다만 남은 시간이 있으면 돌아가는 중인 것은
+    분명하므로 거기까지는 말해 준다.
+    """
+    if not isinstance(unit, dict):
+        return "UNKNOWN"
+    state = (unit.get("runState") or {}).get("currentState")
+    if state:
+        return state
+    timer = unit.get("timer") or {}
+    remain = (timer.get("remainHour") or 0) * 60 + (timer.get("remainMinute") or 0)
+    return "UNKNOWN_RUNNING" if remain > 0 else "UNKNOWN"
+
+
 def find_unit(status_data, tower_id, unit_type):
     """해당 기기의 현재 상태와 남은 시간을 돌려준다."""
     tower = next((t for t in TOWERS if t["id"] == tower_id), None)
@@ -1690,7 +1714,7 @@ def find_unit(status_data, tower_id, unit_type):
     unit = (status_data.get(tower["name"]) or {}).get(unit_type) or {}
     timer = unit.get("timer") or {}
     minutes = (timer.get("remainHour", 0) or 0) * 60 + (timer.get("remainMinute", 0) or 0)
-    state = (unit.get("runState") or {}).get("currentState", "POWER_OFF")
+    state = unit_state(unit)
     return {
         "tower": tower,
         "state": state,
@@ -2028,7 +2052,7 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
         cycle = ((d.get("washer") or {}).get("cycle") or {}).get("cycleCount", 0)
         for ut, label in (("washer", "세탁기"), ("dryer", "건조기")):
             u = d.get(ut) or {}
-            st = (u.get("runState") or {}).get("currentState", "POWER_OFF")
+            st = unit_state(u)
             tm = u.get("timer") or {}
             mnt = (tm.get("remainHour", 0) or 0) * 60 + (tm.get("remainMinute", 0) or 0)
             err = u.get("error")
@@ -2817,7 +2841,7 @@ def describe_why_ambiguous(tower_id, status_data):
     running = []
     for ut, label in (("washer", "세탁기"), ("dryer", "건조기")):
         u = data.get(ut) or {}
-        state = (u.get("runState") or {}).get("currentState")
+        state = unit_state(u)
         t = u.get("timer") or {}
         mins = t.get("remainHour", 0) * 60 + t.get("remainMinute", 0)
         if state not in (None, "POWER_OFF", "INITIAL") and mins > 0:
@@ -2851,7 +2875,7 @@ def infer_unit_type(user_id, tower_id, action, status_data):
         running = []
         for ut in ("washer", "dryer"):
             u = data.get(ut) or {}
-            state = (u.get("runState") or {}).get("currentState")
+            state = unit_state(u)
             t = u.get("timer") or {}
             mins = t.get("remainHour", 0) * 60 + t.get("remainMinute", 0)
             if state not in (None, "POWER_OFF", "INITIAL") and mins > 0:
@@ -2986,7 +3010,7 @@ async def _do_step(user_id, plan, status_data, mine):
                 continue
             for ut in ("washer", "dryer"):
                 u = (status_data.get(t["name"]) or {}).get(ut) or {}
-                if (u.get("runState") or {}).get("currentState", "POWER_OFF") in FREE_STATES:
+                if unit_state(u) in FREE_STATES:
                     free += 1
         head = (reply + "\n") if reply else ""
         tail = f"-# 지금 비어 있는 기기: **{free}대**"
@@ -3295,7 +3319,7 @@ def _presence_units(status_data):
         data = status_data.get(tower["name"]) or {}
         for unit, box in (("washer", "w"), ("dryer", "d")):
             u = data.get(unit) or {}
-            state = (u.get("runState") or {}).get("currentState")
+            state = unit_state(u)
             if state in FREE_STATES:
                 if box == "w":
                     free_w += 1
@@ -3313,7 +3337,7 @@ def _presence_soonest(status_data):
         data = status_data.get(tower["name"]) or {}
         for unit, label in (("washer", "세탁기"), ("dryer", "건조기")):
             u = data.get(unit) or {}
-            state = (u.get("runState") or {}).get("currentState")
+            state = unit_state(u)
             if state in (None, "POWER_OFF", "INITIAL", "WRINKLE_CARE"):
                 continue
             t = u.get("timer") or {}
@@ -3413,7 +3437,7 @@ async def check_laundry_alarms():
         data = (status_data.get(tower["name"]) or {})
         unit_data = (data.get("dryer") or {}) if item["unitType"] == "dryer" else (data.get("washer") or {})
         timer = (unit_data.get("timer") or {})
-        run_state = (unit_data.get("runState") or {}).get("currentState", "POWER_OFF")
+        run_state = unit_state(unit_data)
         
         remain_min = (timer.get("remainHour", 0) * 60) + timer.get("remainMinute", 0)
         is_error = run_state == "ERROR" or bool(unit_data.get("error"))

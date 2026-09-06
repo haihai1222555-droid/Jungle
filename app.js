@@ -70,7 +70,24 @@ const STATE_TRANSLATION = {
   WRINKLE_CARE: { label: '구김 방지 중',        isFree: false, isError: false },
   PAUSE:        { label: '일시정지',           isFree: false, isError: false },
   ERROR:        { label: '기기 점검/에러',       isFree: false, isError: true },
+  // 아래 둘은 기기가 준 이름이 아니다. 상태가 안 왔을 때 우리가 붙인다.
+  // 빈 것으로 세지 않는다(isFree: false). 모르는 것을 비었다고 하면 안 된다.
+  UNKNOWN_RUNNING: { label: '사용 중 (상태 확인 불가)', isFree: false, isError: false },
+  UNKNOWN:         { label: '정보 없음',                isFree: false, isError: false },
 };
+
+// 기기가 상태를 안 줄 때가 있다. 남은 시간만 오고 runState 가 통째로 빠진다.
+// 그때 'POWER_OFF' 로 메우면 돌아가는 기기가 '사용 가능' 이 된다.
+// 실제로 7호기 건조기가 1시간 23분 남은 채 그렇게 떠 있었다.
+function unitState(u) {
+  const s = u && u.runState && u.runState.currentState;
+  if (s) return s;
+  if (!u) return 'UNKNOWN';
+  const t = u.timer || {};
+  const remain = (t.remainHour || 0) * 60 + (t.remainMinute || 0);
+  // 남은 시간이 있으면 돌아가는 중인 것은 분명하다. 거기까지만 말한다.
+  return remain > 0 ? 'UNKNOWN_RUNNING' : 'UNKNOWN';
+}
 
 // 🌟 LG 트롬 워시타워 코스 사전 및 번역기
 const COURSE_TRANSLATION = {
@@ -252,7 +269,9 @@ function isUnitFree(state) {
 }
 
 function isUnitRunning(state) {
-  return ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING', 'WRINKLE_CARE', 'DETECTING'].includes(state);
+  return ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING',
+          'WRINKLE_CARE', 'DETECTING',
+          'UNKNOWN_RUNNING'].includes(state);
 }
 
 // 실질적인 세탁/건조 가동 중 여부 (구김 방지, 대기, 에러, 남은시간 0분 제외)
@@ -260,7 +279,8 @@ function isUnitCycleActive(state, remainMinutes) {
   if (!state || ['POWER_OFF', 'INITIAL', 'COMPLETE', 'END', 'ERROR', 'WRINKLE_CARE'].includes(state)) {
     return false;
   }
-  return ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING', 'PAUSE'].includes(state) && remainMinutes > 0;
+  return ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING', 'PAUSE',
+          'UNKNOWN_RUNNING'].includes(state) && remainMinutes > 0;
 }
 
 // 🔔 알림 버튼 동적 렌더러 (구김 방지 및 5분 이하 스마트 라벨 대응)
@@ -903,7 +923,7 @@ function updateAlarmDockUI() {
     const data = tower ? (globalStatusData[tower.name] || {}) : {};
     const unitData = item.unitType === 'dryer' ? (data.dryer || {}) : (data.washer || {});
     const unitTimer = unitData.timer || {};
-    const runState = unitData.runState?.currentState || 'POWER_OFF';
+    const runState = unitState(unitData);
     const isError = runState === 'ERROR' || !!unitData.error || (data.error && (item.unitType === 'dryer' ? data.dryer?.error : data.washer?.error));
     
     let remainMin = (unitTimer.remainHour || 0) * 60 + (unitTimer.remainMinute || 0);
@@ -954,7 +974,7 @@ setInterval(() => {
     const data = tower ? (globalStatusData[tower.name] || {}) : {};
     const unitData = item.unitType === 'dryer' ? (data.dryer || {}) : (data.washer || {});
     const unitTimer = unitData.timer || {};
-    const runState = unitData.runState?.currentState || 'POWER_OFF';
+    const runState = unitState(unitData);
 
     // ❓ 기기 값이 아예 안 올 때는 완료로 볼 수 없다.
     //    빈 값은 0분 · POWER_OFF 로 읽혀 곧바로 '완료!' 가 떠 버린다.
@@ -1245,8 +1265,8 @@ function renderCongestionStatus() {
     // 값이 안 온 기기는 비어 있다고 셀 수 없다
     if (!towerHasData(t.name)) return;
     const data = globalStatusData[t.name] || {};
-    const wState = data.washer?.runState?.currentState || 'POWER_OFF';
-    const dState = data.dryer?.runState?.currentState || 'POWER_OFF';
+    const wState = unitState(data.washer);
+    const dState = unitState(data.dryer);
     const dErr = data.dryer?.error || data.washer?.error;
     if (isUnitFree(wState)) freeCount++;
     if (isUnitFree(dState) && !dErr) freeCount++;
@@ -1316,8 +1336,8 @@ function createTowerCardElement(tower, isFloorplan = false) {
   const washer = data.washer || {};
   const dryer = data.dryer || {};
 
-  const wState = washer.runState?.currentState || 'POWER_OFF';
-  const dState = dryer.runState?.currentState || 'POWER_OFF';
+  const wState = unitState(washer);
+  const dState = unitState(dryer);
   const wTimer = washer.timer || {};
   const dTimer = dryer.timer || {};
   
@@ -1514,7 +1534,7 @@ function isCompactScreen() {
 // 압축 카드에 쓸 한 칸 요약. 카드와 같은 기준으로 읽는다.
 function compactUnitInfo(data, unitType) {
   const u = data[unitType] || {};
-  const state = u.runState?.currentState || 'POWER_OFF';
+  const state = unitState(u);
   const timer = u.timer || {};
   const mins = (timer.remainHour || 0) * 60 + (timer.remainMinute || 0);
   const err = !!u.error || state === 'ERROR';
@@ -1701,8 +1721,8 @@ function renderSmartSummary() {
     // 누적 0회로 읽혀 '가장 쾌적한 기기' 로 뽑히는 일이 있었다.
     if (!towerHasData(t.name)) return;
     const data = globalStatusData[t.name] || {};
-    const wState = data.washer?.runState?.currentState || 'POWER_OFF';
-    const dState = data.dryer?.runState?.currentState || 'POWER_OFF';
+    const wState = unitState(data.washer);
+    const dState = unitState(data.dryer);
     const dError = data.dryer?.error || data.washer?.error || null;
     const cycles = data.washer?.cycle?.cycleCount || 0;
 
@@ -1725,8 +1745,8 @@ function renderSmartSummary() {
   womenTowers.forEach(t => {
     if (!towerHasData(t.name)) return;
     const data = globalStatusData[t.name] || {};
-    const wState = data.washer?.runState?.currentState || 'POWER_OFF';
-    const dState = data.dryer?.runState?.currentState || 'POWER_OFF';
+    const wState = unitState(data.washer);
+    const dState = unitState(data.dryer);
     const dError = data.dryer?.error || data.washer?.error || null;
     const cycles = data.washer?.cycle?.cycleCount || 0;
 
@@ -1746,8 +1766,8 @@ function renderSmartSummary() {
   commonTowers.forEach(t => {
     if (!towerHasData(t.name)) return;
     const data = globalStatusData[t.name] || {};
-    const wState = data.washer?.runState?.currentState || 'POWER_OFF';
-    const dState = data.dryer?.runState?.currentState || 'POWER_OFF';
+    const wState = unitState(data.washer);
+    const dState = unitState(data.dryer);
     const dError = data.dryer?.error || data.washer?.error || null;
     if (dError || wState === 'ERROR' || dState === 'ERROR') errorCount++;
     if (isUnitFree(wState)) commonFreeWash++;
@@ -1905,13 +1925,13 @@ function openTowerModal(tower, data, wFluc, dFluc) {
   const cycleCount = washer.cycle?.cycleCount || dryer.cycle?.cycleCount || 0;
   const lgCare = getLgCareStatus(cycleCount);
 
-  const wFlucObj = wFluc || analyzeDynamicTimeFluctuation('washer', washer.runState?.currentState || 'POWER_OFF', wTimer, cycleCount, errCode);
-  const dFlucObj = dFluc || analyzeDynamicTimeFluctuation('dryer', dryer.runState?.currentState || 'POWER_OFF', dTimer, cycleCount, errCode);
+  const wFlucObj = wFluc || analyzeDynamicTimeFluctuation('washer', unitState(washer), wTimer, cycleCount, errCode);
+  const dFlucObj = dFluc || analyzeDynamicTimeFluctuation('dryer', unitState(dryer), dTimer, cycleCount, errCode);
 
-  const isAnyRunning = isUnitRunning(washer.runState?.currentState) || isUnitRunning(dryer.runState?.currentState);
+  const isAnyRunning = isUnitRunning(unitState(washer)) || isUnitRunning(unitState(dryer));
 
-  const dCourse = getUnitCourseLabel('dryer', dryer, dryer.runState?.currentState || 'POWER_OFF');
-  const wCourse = getUnitCourseLabel('washer', washer, washer.runState?.currentState || 'POWER_OFF');
+  const dCourse = getUnitCourseLabel('dryer', dryer, unitState(dryer));
+  const wCourse = getUnitCourseLabel('washer', washer, unitState(washer));
 
   content.innerHTML = `
     <div class="modal-info-row">
@@ -1920,7 +1940,7 @@ function openTowerModal(tower, data, wFluc, dFluc) {
     </div>
     <div class="modal-info-row">
       <span class="modal-info-label">세탁기 상태</span>
-      <span class="modal-info-value modal-val-cyan">${STATE_TRANSLATION[washer.runState?.currentState]?.label || '대기 중'}</span>
+      <span class="modal-info-value modal-val-cyan">${STATE_TRANSLATION[unitState(washer)]?.label || '대기 중'}</span>
     </div>
     <div class="modal-info-row">
       <span class="modal-info-label">세탁기 가동 코스</span>
@@ -1932,7 +1952,7 @@ function openTowerModal(tower, data, wFluc, dFluc) {
     </div>
     <div class="modal-info-row">
       <span class="modal-info-label">건조기 상태</span>
-      <span class="modal-info-value modal-val-amber">${STATE_TRANSLATION[dryer.runState?.currentState]?.label || '대기 중'}</span>
+      <span class="modal-info-value modal-val-amber">${STATE_TRANSLATION[unitState(dryer)]?.label || '대기 중'}</span>
     </div>
     <div class="modal-info-row">
       <span class="modal-info-label">건조기 가동 코스</span>
@@ -1949,8 +1969,8 @@ function openTowerModal(tower, data, wFluc, dFluc) {
 
     <!-- 🔔 내 알리미 등록 액션 바 (구김방지 제외 실가동 중 기기만 스마트 노출) -->
     ${(() => {
-      const wBtn = renderUnitAlarmButton(tower.id, 'washer', `${tower.label} 세탁기`, (wTimer.remainHour||0)*60 + (wTimer.remainMinute||0), washer.runState?.currentState, false, true);
-      const dBtn = renderUnitAlarmButton(tower.id, 'dryer', `${tower.label} 건조기`, (dTimer.remainHour||0)*60 + (dTimer.remainMinute||0), dryer.runState?.currentState, false, true);
+      const wBtn = renderUnitAlarmButton(tower.id, 'washer', `${tower.label} 세탁기`, (wTimer.remainHour||0)*60 + (wTimer.remainMinute||0), unitState(washer), false, true);
+      const dBtn = renderUnitAlarmButton(tower.id, 'dryer', `${tower.label} 건조기`, (dTimer.remainHour||0)*60 + (dTimer.remainMinute||0), unitState(dryer), false, true);
       if (!wBtn && !dBtn) return '';
       return `<div class="modal-alarm-actions">${wBtn}${dBtn}</div>`;
     })()}
@@ -1963,14 +1983,14 @@ function openTowerModal(tower, data, wFluc, dFluc) {
           <span class="modal-fluc-badge">실시간 감지</span>
         </div>
         
-        ${isUnitRunning(dryer.runState?.currentState) ? `
+        ${isUnitRunning(unitState(dryer)) ? `
           <div class="modal-fluc-unit">
             <span class="fluc-unit-name dry">[상단 건조기]</span> <b>${dFlucObj.tagText}</b><br>
             <span class="fluc-unit-sub">• <b>센서 분석:</b> ${dFlucObj.sensorType} (${dFlucObj.reason})</span>
           </div>
         ` : ''}
 
-        ${isUnitRunning(washer.runState?.currentState) ? `
+        ${isUnitRunning(unitState(washer)) ? `
           <div class="modal-fluc-unit">
             <span class="fluc-unit-name wash">[하단 세탁기]</span> <b>${wFlucObj.tagText}</b><br>
             <span class="fluc-unit-sub">• <b>센서 분석:</b> ${wFlucObj.sensorType} (${wFlucObj.reason})</span>
@@ -2127,8 +2147,8 @@ function getCompactContextSummary() {
         + `"현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요."`;
     }
     const d = globalStatusData[t.name] || {};
-    const wState = d.washer?.runState?.currentState || 'POWER_OFF';
-    const dState = d.dryer?.runState?.currentState || 'POWER_OFF';
+    const wState = unitState(d.washer);
+    const dState = unitState(d.dryer);
     const wTime = formatTimer(d.washer?.timer?.remainHour, d.washer?.timer?.remainMinute);
     const dTime = formatTimer(d.dryer?.timer?.remainHour, d.dryer?.timer?.remainMinute);
     const err = d.dryer?.error || d.washer?.error;
@@ -2638,7 +2658,7 @@ function freeUnitsIn(zone, unitType) {
     if (!towerHasData(t.name)) return false;
     const u = (globalStatusData[t.name] || {})[unitType] || {};
     if (u.error) return false;
-    return isUnitFree(u.runState?.currentState || 'POWER_OFF');
+    return isUnitFree(unitState(u));
   });
 }
 
