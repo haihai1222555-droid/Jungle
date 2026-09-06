@@ -2094,6 +2094,29 @@ const GEMINI_MODELS = [
   'gemini-3.5-flash',        // 실측 3.57초 — 또 다른 한도
 ];
 
+// Groq 은 요청 크기 제한이 빡빡하다(분당 8,000토큰).
+// 정글 안내 전문 17,816자를 그대로 보내면 413 이 나서 한 번도 못 쓴다.
+// 질문에 걸리는 대목만 추려 보낸다. 봇의 kb_limit 과 같은 취지다.
+const GROQ_KB_MAX_CHARS = 3500;
+function kbForGroq(question) {
+  if (typeof JUNGLE_KB !== 'string') return '';
+  // [제목] 이 줄 맨 앞에 오는 것을 경계로 토막을 낸다
+  const blocks = JUNGLE_KB.split(/\n(?=\[)/);
+  if (blocks.length < 2) return JUNGLE_KB.slice(0, GROQ_KB_MAX_CHARS);
+  const q = (question || '').replace(/\s/g, '');
+  const scored = blocks.map((b, i) => {
+    let hit = 0;
+    for (const w of b.match(/[가-힣]{2,}/g) || []) if (q.includes(w)) hit++;
+    return { b, i, hit };
+  });
+  const picked = scored.filter(x => x.hit > 0 && x.i > 0)
+                       .sort((a, b) => b.hit - a.hit)
+                       .map(x => x.b);
+  // 기본 정보는 질문과 무관하게 늘 넣는다
+  const out = [blocks[0], ...picked].join('\n');
+  return out.slice(0, GROQ_KB_MAX_CHARS);
+}
+
 // ⚡ 토큰 수 80% 압축: LLM 처리 속도 극대화 + 동적 시간 변동 센서 정보 주입
 function getCompactContextSummary() {
   const lines = TOWERS.map(t => {
@@ -2476,8 +2499,13 @@ ${typeof JUNGLE_KB === 'string' ? JUNGLE_KB : '(안내 지식을 불러오지 �
         } catch (err) {
           console.warn(`Gemini ${modelName} 실패:`, err);
         }
-        // 이 키의 한도 초과일 때만 다음 키를 써 본다
-        if (status !== 429) break;
+        // 다음 키를 써 볼 만한 경우인지 본다.
+        //   429 = 이 키의 한도 초과
+        //   401·403 = 이 키가 정지·삭제됨 (기다려도 안 살아난다)
+        // 둘 다 '키의 문제' 라 다음 키로 넘어가야 한다.
+        // 예전에는 429 만 넘어가서, 정지된 키에 걸리면 살아 있는 키를
+        // 시도조차 못 하고 예비 엔진으로 떨어졌다.
+        if (status !== 429 && status !== 401 && status !== 403) break;
       }
     }
   }
@@ -2487,8 +2515,13 @@ ${typeof JUNGLE_KB === 'string' ? JUNGLE_KB : '(안내 지식을 불러오지 �
   if (GROQ_API_KEY) {
     for (const modelName of GROQ_MODELS) {
       try {
+        // 안내 지식을 통째로 보내면 요청이 너무 커서 413 이 난다.
+        // 질문에 걸리는 대목만 남긴 지시문을 따로 만들어 보낸다.
+        const groqInstruction = (typeof JUNGLE_KB === 'string' && systemInstruction.includes(JUNGLE_KB))
+          ? systemInstruction.replace(JUNGLE_KB, kbForGroq(q))
+          : systemInstruction;
         const groqMessages = [
-          { role: 'system', content: systemInstruction },
+          { role: 'system', content: groqInstruction },
           ...recentHistory
         ];
 
