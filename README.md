@@ -3,7 +3,7 @@
 크래프톤 정글 기숙사 세탁실의 **LG 트롬 워시타워 9대(세탁기 + 건조기 = 18개 모듈)** 실시간 현황판.
 빨래가 끝나기 5분 전에 폰으로 알림이 오고, 앱을 꺼둬도 온다.
 
-**🔗 https://jungle-wash.onrender.com**
+**🔗 https://krafton-jungle.duckdns.org**
 
 ---
 
@@ -151,7 +151,7 @@ python build_bot_zip.py     # zip 생성 (.env 가 있으면 함께 담김)
 ## 구조
 
 ```
-브라우저 ─→ Render (jungle-wash.onrender.com)
+브라우저 ─→ Oracle Cloud (krafton-jungle.duckdns.org)
               ├─ 사이트 (index.html / app.js / style.css)
               ├─ /api/status, /api/stats  → 원본 서버 프록시
               └─ 알림 등록 + 5초마다 감시 + 발송
@@ -190,6 +190,7 @@ UptimeRobot ─→ /api/health  5분마다 핑 (Render 가 잠들지 않게)
 ## 로컬 실행
 
 ```bash
+cp jungle_kb.example.py jungle_kb.py    # 안내 지식 (아래 설명 참고)
 pip install -r requirements.txt
 python start_server.py
 ```
@@ -226,7 +227,7 @@ Render 배포 절차, 환경변수, UptimeRobot 설정은 **[DEPLOYMENT_GUIDE.md
 **1) 서버가 살아있는지**
 
 ```bash
-curl https://jungle-wash.onrender.com/api/health
+curl https://krafton-jungle.duckdns.org/api/health
 ```
 
 `{"ok": true, "webpush": true, "alarms": N}` 이 나와야 한다.
@@ -237,7 +238,7 @@ curl https://jungle-wash.onrender.com/api/health
 알림을 등록한 뒤 아래를 실행하면 **즉시** 테스트 알림이 온다.
 
 ```bash
-curl -X POST https://jungle-wash.onrender.com/api/test-push -H "Content-Type: application/json" -d "{}"
+curl -X POST https://krafton-jungle.duckdns.org/api/test-push -H "Content-Type: application/json" -d "{}"
 ```
 
 **3) Render 로그 확인**
@@ -282,3 +283,28 @@ curl -X POST https://jungle-wash.onrender.com/api/test-push -H "Content-Type: ap
 ---
 
 <sub>KRAFTON JUNGLE · Dedicated Laundry System · Data powered by LG ThinQ API</sub>
+
+
+---
+
+## 안내 지식은 저장소에 없다
+
+`jungle_kb.py` 와 `assets/` 사진은 **기관 내부 자료라 올리지 않는다.**
+출결·공가·벌점 규정, 연락처, 시설 사진 같은 것들이라 공개할 성격이 아니다.
+
+대신 본보기를 뒀다. 복사해서 자기 자료로 채우면 된다.
+
+```bash
+cp jungle_kb.example.py jungle_kb.py
+```
+
+| 채울 것 | 내용 |
+| --- | --- |
+| `BASE` | 매 질문마다 함께 보낼 기본 정보 (짧게) |
+| `SECTIONS` | 주제별 안내. `keywords` 에 걸리면 그 항목만 골라 보낸다 |
+| `IMAGES` | 질문에 맞춰 보낼 사진. `assets/` 에 같은 이름으로 넣는다 |
+| `LINK_BLOCK` | 답변 끝에 붙일 링크 목록 |
+
+**없어도 돌아간다.** 세탁실 기능은 그대로고 생활 안내만 답하지 못한다.
+
+문의처는 `.env` 의 `SUPPORT_CONTACT` 로 받는다. 비워 두면 번호 없이 안내한다.
