@@ -1567,13 +1567,16 @@ function createCompactCardElement(tower) {
   const w = compactUnitInfo(data, 'washer');
   const d = compactUnitInfo(data, 'dryer');
   const hasErr = w.cls === 'cu-error' || d.cls === 'cu-error';
-  const running = [w, d].filter(x => x.cls === 'cu-wash' || x.cls === 'cu-dry').length;
+  // 무엇이 도는지까지 적는다. '가동 중' 만으로는 세탁인지 건조인지 알 수 없다.
+  const wRun = w.cls === 'cu-wash';
+  const dRun = d.cls === 'cu-dry';
 
-  let pill, pillCls;
-  if (noData) { pill = '정보 없음'; pillCls = 'cp-nodata'; }
-  else if (hasErr) { pill = '점검 필요'; pillCls = 'cp-error'; }
-  else if (running === 2) { pill = '전체 가동'; pillCls = 'cp-both'; }
-  else if (running === 1) { pill = '가동 중'; pillCls = 'cp-run'; }
+  let pill, pillCls, edge = '';
+  if (noData) { pill = '정보 없음'; pillCls = 'cp-nodata'; edge = ' is-nodata'; }
+  else if (hasErr) { pill = '점검 필요'; pillCls = 'cp-error'; edge = ' is-error'; }
+  else if (wRun && dRun) { pill = '전체 가동 중'; pillCls = 'cp-both'; edge = ' is-active-both'; }
+  else if (wRun) { pill = '세탁 중'; pillCls = 'cp-wash'; edge = ' is-active-wash'; }
+  else if (dRun) { pill = '건조 중'; pillCls = 'cp-dry'; edge = ' is-active-dry'; }
   else { pill = '사용 가능'; pillCls = 'cp-free'; }
 
   // 가동 중인 칸에만 종을 붙인다. 이미 걸어둔 칸은 켜진 모양으로 둔다.
@@ -1588,8 +1591,7 @@ function createCompactCardElement(tower) {
   };
 
   const el = document.createElement('div');
-  el.className = `compact-card wt-card-${tower.zone}` + (noData ? ' is-nodata' : '')
-               + (hasErr ? ' is-error' : '');
+  el.className = `compact-card wt-card-${tower.zone}${edge}`;
   el.onclick = () => openTowerModal(tower, data, null, null);
 
   const row = (icon, name, info, unitType) => noData

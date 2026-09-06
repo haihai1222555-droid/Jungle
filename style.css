@@ -4564,3 +4564,39 @@ body.light-theme .cu-bell-btn.on {
 body.light-theme .cu-delta { color: #b45309; background: #fef3c7; }
 /* 늘어날 시간이 붙으면 상태 글자는 빼고 시간에 자리를 준다.
    시간이 보이면 이미 돌고 있다는 뜻이라 상태를 또 적을 필요가 적다. */
+
+/* =========================================================
+   압축 카드 마무리
+   ========================================================= */
+
+/* 무엇이 도는지에 맞춘 뱃지 색. 큰 화면 범례와 같은 기준이다. */
+.cp-wash { background: rgba(56, 189, 248, .18); color: #38bdf8; }
+.cp-dry  { background: rgba(245, 158, 11, .18); color: #fbbf24; }
+body.light-theme .cp-wash { background: #e0f2fe; color: #0369a1; }
+body.light-theme .cp-dry  { background: #fef3c7; color: #b45309; }
+
+/* 상태별 테두리. 아홉 대를 훑을 때 색만으로 구분되게 한다.
+   좁은 화면에서 요란해지지 않도록 큰 화면보다 옅게 준다. */
+.compact-card.is-active-both { border-color: rgba(0, 232, 122, .45); }
+.compact-card.is-active-wash { border-color: rgba(56, 189, 248, .45); }
+.compact-card.is-active-dry  { border-color: rgba(245, 158, 11, .45); }
+body.light-theme .compact-card.is-active-both { border-color: #34d399; }
+body.light-theme .compact-card.is-active-wash { border-color: #38bdf8; }
+body.light-theme .compact-card.is-active-dry  { border-color: #f59e0b; }
+
+/* 줄 높이를 종 버튼 기준으로 고정한다.
+   버튼이 없는 줄이 8px 낮아서, 옆에 짝이 없는 마지막 카드만 작아 보였다. */
+.cu-row {
+  /* 종 버튼이 있는 줄과 없는 줄의 높이를 맞춘다.
+     버튼(24px) + 위아래 여백이 29px 라 그 값에 맞춘다. */
+  min-height: 29px;
+  box-sizing: border-box;
+}
+
+/* 줄 높이를 통일하면서 세로가 늘었다. 종 버튼(터치 영역)은 그대로 두고
+   여백에서만 되찾는다. */
+@media (max-width: 768px) {
+  .washtower-grid.is-compact { gap: 6px !important; }
+  .compact-card { padding: 7px 9px 6px !important; }
+  .cc-head { margin-bottom: 4px !important; }
+}
