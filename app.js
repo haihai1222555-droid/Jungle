@@ -2066,23 +2066,34 @@ function appendChatMessage(sender, htmlText) {
   return msgEl;
 }
 
-// ⚡ 최상위 고지능 초대형 LLM (Groq 120B & Gemini 3.7/3.6 Flash)
-const GROQ_API_KEY = '***REMOVED***';
+// AI 키는 이 파일에 두지 않는다.
+// 이 파일은 사이트에 들어온 누구나 받아 갈 수 있어서, 여기 적은 키는
+// 곧 남의 손에 들어간다(실제로 그렇게 새서 폐기 통보를 받았다).
+// 브라우저는 서버(/api/ai/...)만 부르고, 키는 서버 .env 안에만 있다.
+//
+// 다만 '키가 몇 개인지' 는 알아야 한다. 막힌 키를 건너뛰며 차례로
+// 시도하는 아래 반복문이 그 개수만큼 돌기 때문이다. 개수는 비밀이 아니다.
+let AI_GEMINI_KEY_COUNT = 0;
+let AI_HAS_GROQ = false;
+let _aiConfigOnce = null;
+
+function loadAiConfig() {
+  // 한 번만 물어보고 그 뒤로는 같은 약속을 돌려준다
+  if (!_aiConfigOnce) {
+    _aiConfigOnce = fetch('/api/ai/config')
+      .then(r => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then(c => {
+        AI_GEMINI_KEY_COUNT = (c && Number(c.gemini)) || 0;
+        AI_HAS_GROQ = !!(c && c.groq);
+      });
+  }
+  return _aiConfigOnce;
+}
+
 // 실측: 120b 1.24초 / qwen3.8 1.12초 / 20b 1.02초, 셋 다 정답.
 // groq/compound 는 요청 크기 제한에 걸리고 9초 넘게 걸려 뺐다.
 const GROQ_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'];
-// 제미나이 키는 여러 개를 넣을 수 있다.
-// 한 키가 한도(429)에 걸리면 다음 키로 넘어간다.
-// ⚠️ 같은 구글 프로젝트에서 만든 키끼리는 한도를 같이 쓰므로 효과가 없다.
-//    반드시 서로 다른 계정 또는 프로젝트에서 받은 키를 넣어야 한다.
-const GEMINI_API_KEYS = [
-  // 앞에서부터 쓴다. 한도가 남아 있는 키를 앞에 둔다.
-  // ⚠️ 같은 구글 프로젝트에서 만든 키끼리는 한도를 같이 쓰므로 효과가 없다.
-  '***REMOVED***',   // 3번 키
-  '***REMOVED***',   // 2번 키
-  '***REMOVED***',   // 1번 키 (한도 소진)
-].filter(k => k && k.trim());
-const GEMINI_API_KEY = GEMINI_API_KEYS[0] || '';
 // 앞에서부터 시도한다. 앞쪽이 더 똑똑하고, 뒤로 갈수록 가볍고 빠르다.
 // (앞 모델이 혼잡(503)하면 자동으로 뒤로 넘어간다)
 // 무료 한도는 모델마다 따로 걸린다. 그래서 서로 '다른' 모델을 늘어놓아야
@@ -2138,12 +2149,18 @@ function getCompactContextSummary() {
     const dFluc = analyzeDynamicTimeFluctuation('dryer', dState, d.dryer?.timer || {}, cycle, err);
     const wFluc = analyzeDynamicTimeFluctuation('washer', wState, d.washer?.timer || {}, cycle, err);
 
+    // 기기가 주는 상태는 영어 코드다(SPINNING, RINSING ...).
+    // 그대로 넘기면 AI 가 '쓰는 중' 인 줄 모르고 빈 기기라고 답한다.
+    // 실제로 탈수 중인 4·5호기를 "모두 대기 중" 이라고 말한 적이 있다.
+    // 화면에 쓰는 우리말 이름표를 그대로 쓰고, 앞에 '사용중' 을 붙인다.
+    const busyWord = st => `사용중(${(STATE_TRANSLATION[st] || {}).label || st}`;
+
     const wStr = wState === 'INITIAL'
       ? '세탁:사용중(코스만 고르고 시작 전 — 빨래가 들어 있을 수 있어 빈 기기가 아님)'
-      : (isUnitFree(wState) ? '세탁:대기(사용가능)' : `세탁:${wState}(${wTime}남음, ${wFluc.tagText})`);
+      : (isUnitFree(wState) ? '세탁:대기(사용가능)' : `세탁:${busyWord(wState)}, ${wTime}남음, ${wFluc.tagText})`);
     const dStr = dState === 'INITIAL'
       ? '건조:사용중(코스만 고르고 시작 전 — 빨래가 들어 있을 수 있어 빈 기기가 아님)'
-      : (isUnitFree(dState) && !err ? '건조:대기(사용가능)' : `건조:${dState}(${dTime || '가동중'}${err ? ',배수점검필요' : ', ' + dFluc.tagText})`);
+      : (isUnitFree(dState) && !err ? '건조:대기(사용가능)' : `건조:${busyWord(dState)}, ${dTime || '가동중'}${err ? ',배수점검필요' : ', ' + dFluc.tagText})`);
     return `• ${t.label}(${t.zoneName}): ${wStr} / ${dStr} / 누적${cycle}회${cycle >= 30 ? '[통살균필요]' : ''}`;
   });
   return lines.join('\n');
@@ -2423,7 +2440,9 @@ ${typeof JUNGLE_KB === 'string' ? JUNGLE_KB : '(안내 지식을 불러오지 �
 
   // ── [1순위: Gemini (문맥 기억 스트리밍) ──
   //     답이 가장 정확하고 빠르다. 6초 안에 응답이 없으면 아래 Groq 으로 넘어간다 ──
-  if (GEMINI_API_KEY) {
+  await loadAiConfig();
+
+  if (AI_GEMINI_KEY_COUNT > 0) {
     const geminiContents = recentHistory.map(msg => ({
       role: msg.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: msg.content }]
@@ -2434,18 +2453,23 @@ ${typeof JUNGLE_KB === 'string' ? JUNGLE_KB : '(안내 지식을 불러오지 �
     // 남은 키를 헛되이 시도하지 않고 바로 다음 모델로 넘어간다.
     // (예: 3.7-flash 가 혼잡하면 503 이 뜨는데, 키를 바꿔도 똑같이 막힌다)
     for (const modelName of GEMINI_MODELS) {
-      for (const apiKey of GEMINI_API_KEYS) {
+      for (let keyIndex = 0; keyIndex < AI_GEMINI_KEY_COUNT; keyIndex++) {
         let status = 0;
         try {
-          const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${apiKey}`;
-          const res = await fetchAiWithTimeout(geminiEndpoint, {
+          // 키를 보내지 않는다. 몇 번째 키를 쓸지만 알려주면
+          // 서버가 그 자리의 키를 붙여 대신 물어봐 준다.
+          const res = await fetchAiWithTimeout('/api/ai/gemini', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              systemInstruction: { parts: [{ text: systemInstruction }] },
-              contents: geminiContents,
-              // 상위 모델은 내부 추론에도 토큰을 쓰므로 넉넉히 준다 (답이 중간에 끊기지 않도록)
-              generationConfig: { temperature: 0.6, maxOutputTokens: 2048 }
+              model: modelName,
+              keyIndex: keyIndex,
+              body: {
+                systemInstruction: { parts: [{ text: systemInstruction }] },
+                contents: geminiContents,
+                // 상위 모델은 내부 추론에도 토큰을 쓰므로 넉넉히 준다 (답이 중간에 끊기지 않도록)
+                generationConfig: { temperature: 0.6, maxOutputTokens: 2048 }
+              }
             })
           });
           status = res.status;
@@ -2512,7 +2536,7 @@ ${typeof JUNGLE_KB === 'string' ? JUNGLE_KB : '(안내 지식을 불러오지 �
 
   // ── [2순위: Groq 예비 엔진 (Gemini 가 막혔을 때만 쓴다)] ──
   //     제미나이보다 답이 무른 편이라 뒤에 둔다 ──
-  if (GROQ_API_KEY) {
+  if (AI_HAS_GROQ) {
     for (const modelName of GROQ_MODELS) {
       try {
         // 안내 지식을 통째로 보내면 요청이 너무 커서 413 이 난다.
@@ -2525,18 +2549,18 @@ ${typeof JUNGLE_KB === 'string' ? JUNGLE_KB : '(안내 지식을 불러오지 �
           ...recentHistory
         ];
 
-        const res = await fetchAiWithTimeout('https://api.groq.com/openai/v1/chat/completions', {
+        // 여기도 키를 보내지 않는다. 서버가 붙인다.
+        const res = await fetchAiWithTimeout('/api/ai/groq', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${GROQ_API_KEY}`
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: modelName,
-            messages: groqMessages,
-            temperature: 0.6,
-            max_tokens: 600,
-            stream: true
+            body: {
+              model: modelName,
+              messages: groqMessages,
+              temperature: 0.6,
+              max_tokens: 600,
+              stream: true
+            }
           })
         });
 

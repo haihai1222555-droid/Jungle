@@ -4,7 +4,9 @@ import http.server
 import socketserver
 import urllib.request
 import urllib.error
+import urllib.parse
 import json
+import re
 import threading
 import state_store
 import time
@@ -602,6 +604,15 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(build_congestion_profile(), ensure_ascii=False).encode('utf-8'))
             return
 
+        # 브라우저는 키를 받지 않는다. '몇 개나 있는지' 만 알면
+        # 지금처럼 막힌 키를 건너뛰며 차례로 시도할 수 있다.
+        if req_path == '/api/ai/config':
+            self._json_out(200, {
+                "gemini": len(AI_GEMINI_KEYS),
+                "groq": bool(AI_GROQ_KEY),
+            })
+            return
+
         if req_path == '/api/vapid-public-key':
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -740,13 +751,40 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             return fwd
         return self.client_address[0] if self.client_address else '?'
 
+    def _read_body(self, limit):
+        """요청 본문을 바이트로 읽는다. 너무 크거나 형식이 틀리면 None.
+
+        Content-Length 만 보면 안 된다. 브라우저가 HTTP/2 로 들어오면
+        Caddy 는 그 헤더 없이 조각내어(chunked) 넘기기 때문이다.
+        그때 길이가 0 으로 읽혀 본문이 통째로 사라졌다.
+        """
+        if 'chunked' in (self.headers.get('Transfer-Encoding') or '').lower():
+            buf = b''
+            while True:
+                line = self.rfile.readline(1024).strip()
+                if not line:
+                    return None
+                try:
+                    size = int(line.split(b';')[0], 16)
+                except ValueError:
+                    return None
+                if size == 0:
+                    self.rfile.readline(1024)      # 끝을 알리는 빈 줄
+                    return buf
+                if len(buf) + size > limit:
+                    return None
+                buf += self.rfile.read(size)
+                self.rfile.read(2)                 # 조각 끝의 줄바꿈
+        n = int(self.headers.get('Content-Length') or 0)
+        if n <= 0 or n > limit:
+            return None
+        return self.rfile.read(n)
+
     def _read_json(self, limit=8000):
         """요청 본문을 JSON 으로 읽는다. 형식이 틀리면 None."""
         try:
-            n = int(self.headers.get('Content-Length') or 0)
-            if n <= 0 or n > limit:
-                return None
-            return json.loads(self.rfile.read(n).decode('utf-8'))
+            raw = self._read_body(limit)
+            return json.loads(raw.decode('utf-8')) if raw else None
         except Exception:
             return None
 
@@ -758,8 +796,113 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _ai_relay(self, url, body, headers):
+        """AI 서버에 대신 물어보고, 오는 대로 브라우저에 흘려보낸다.
+
+        받은 것을 모아뒀다 한꺼번에 주면 글자가 한 자씩 나타나는
+        지금 모습이 사라진다. 그래서 조각이 오는 즉시 내보낸다.
+
+        실패했을 때의 상태 코드(429·401·403 …)도 그대로 넘긴다.
+        브라우저가 그 값을 보고 다음 키로 넘어가기 때문이다.
+        """
+        req = urllib.request.Request(
+            url, data=json.dumps(body).encode('utf-8'), headers=headers)
+        try:
+            up = urllib.request.urlopen(req, timeout=30)
+        except urllib.error.HTTPError as e:
+            detail = ''
+            try:
+                detail = e.read().decode('utf-8', 'replace')[:300]
+            except Exception:
+                pass
+            print(f"[웹AI] {e.code} {detail}")
+            self._json_out(e.code, {"error": f"HTTP {e.code}"})
+            return
+        except Exception as e:
+            print(f"[웹AI] 연결 실패: {e}")
+            self._json_out(502, {"error": str(e)})
+            return
+
+        self.send_response(200)
+        self.send_header('Content-Type',
+                         up.headers.get('Content-Type') or 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.end_headers()
+        try:
+            while True:
+                chunk = up.read(1024)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except Exception:
+            # 브라우저가 먼저 끊은 것. 흔한 일이라 조용히 넘어간다.
+            pass
+        finally:
+            try:
+                up.close()
+            except Exception:
+                pass
+
+    def _ai_precheck(self):
+        """중계해도 되는 요청인지 본다. 되면 (본문, None), 아니면 (None, 이유)."""
+        if not ai_allowed(self._client_key()):
+            return None, (429, "요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요.")
+        data = self._read_json(limit=AI_BODY_MAX)
+        if not isinstance(data, dict) or not isinstance(data.get('body'), dict):
+            return None, (400, "형식이 올바르지 않습니다.")
+        return data, None
+
     def do_POST(self):
-        if self.path.split('?')[0] == '/api/report':
+        _p = self.path.split('?')[0]
+
+        # ── 제미나이 중계 ──
+        # 브라우저가 보내는 것: {"model": 모델, "keyIndex": 몇 번째 키, "body": 요청}
+        # 키는 서버가 붙인다.
+        if _p == '/api/ai/gemini':
+            data, bad = self._ai_precheck()
+            if bad:
+                self._json_out(bad[0], {"error": bad[1]})
+                return
+            model = str(data.get('model') or '')
+            idx = data.get('keyIndex')
+            if not AI_MODEL_OK.match(model):
+                self._json_out(400, {"error": "모델 이름이 올바르지 않습니다."})
+                return
+            if not isinstance(idx, int) or not (0 <= idx < len(AI_GEMINI_KEYS)):
+                self._json_out(503, {"error": "쓸 수 있는 키가 없습니다."})
+                return
+            body = data['body']
+            ai_clamp_tokens(body)
+            self._ai_relay(
+                'https://generativelanguage.googleapis.com/v1beta/models/'
+                f'{model}:streamGenerateContent?alt=sse'
+                f'&key={urllib.parse.quote(AI_GEMINI_KEYS[idx])}',
+                body, {'Content-Type': 'application/json'})
+            return
+
+        # ── Groq 중계 (제미나이가 막혔을 때 쓰는 예비 엔진) ──
+        if _p == '/api/ai/groq':
+            data, bad = self._ai_precheck()
+            if bad:
+                self._json_out(bad[0], {"error": bad[1]})
+                return
+            if not AI_GROQ_KEY:
+                self._json_out(503, {"error": "쓸 수 있는 키가 없습니다."})
+                return
+            body = data['body']
+            if not AI_MODEL_OK.match(str(body.get('model') or '')):
+                self._json_out(400, {"error": "모델 이름이 올바르지 않습니다."})
+                return
+            ai_clamp_tokens(body)
+            self._ai_relay(
+                'https://api.groq.com/openai/v1/chat/completions', body,
+                {'Content-Type': 'application/json',
+                 'Authorization': f'Bearer {AI_GROQ_KEY}',
+                 # 이 헤더가 없으면 Cloudflare 가 막는다 (403 error code 1010)
+                 'User-Agent': 'JungleWash/1.0'})
+            return
+
+        if _p == '/api/report':
             data = self._read_json()
             if not isinstance(data, dict):
                 self._json_out(400, {"ok": False, "error": "형식이 올바르지 않습니다."})
@@ -919,49 +1062,6 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
                 return
 
-        if req_path == '/api/chat':
-            try:
-                payload = json.loads(post_data.decode('utf-8'))
-                user_msg = payload.get('message', '').strip()
-                client_api_key = payload.get('apiKey', '').strip()
-                selected_model = payload.get('model', 'gemini-flash-lite-latest').strip()
-                api_key = client_api_key or '***REMOVED***'
-
-                system_instruction = (
-                    "당신은 크래프톤 정글 스마트 세탁실 & 기숙사 생활 전용 AI 비서입니다.\n"
-                    "핵심만 친절하고 명쾌하게 답변하세요.\n"
-                    f"[실시간 상태]:\n{json.dumps(CACHED_STATUS, ensure_ascii=False)}"
-                )
-
-                gemini_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{selected_model}:generateContent?key={api_key}"
-                req_body = {
-                    "systemInstruction": {"parts": [{"text": system_instruction}]},
-                    "contents": [{"role": "user", "parts": [{"text": user_msg}]}],
-                    "generationConfig": {"temperature": 0.4, "maxOutputTokens": 800}
-                }
-
-                gemini_req = urllib.request.Request(
-                    gemini_endpoint,
-                    data=json.dumps(req_body).encode('utf-8'),
-                    headers={'Content-Type': 'application/json'}
-                )
-
-                with urllib.request.urlopen(gemini_req, timeout=12) as gemini_res:
-                    gemini_json = json.loads(gemini_res.read().decode('utf-8'))
-                    ai_reply = gemini_json['candidates'][0]['content']['parts'][0]['text']
-
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/json; charset=utf-8')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"reply": ai_reply}, ensure_ascii=False).encode('utf-8'))
-                    return
-            except Exception as e:
-                self.send_response(500)
-                self.send_header('Content-Type', 'application/json; charset=utf-8')
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
-                return
-
         self.send_response(404)
         self.end_headers()
 
@@ -976,6 +1076,92 @@ REPORT_MIN_GAP = 30          # 초
 REPORT_MAX_LEN = 1000
 _REPORT_LAST = {}            # 보낸 곳 -> 마지막 시각
 _REPORT_LOCK = threading.Lock()
+
+
+# =========================================================
+# 웹 AI 중계
+# ---------------------------------------------------------
+# 키는 여기(서버)에만 있고 브라우저로는 절대 내려가지 않는다.
+# .env 의 적는 방식은 봇과 같다:
+#   GEMINI_API_KEY=키1,키2      (쉼표로 여러 개)
+#   GEMINI_API_KEY_2=키3        (따로따로도 된다)
+#   GROQ_API_KEY=키
+# =========================================================
+def _load_ai_gemini_keys():
+    """봇과 같은 방식으로 제미나이 키를 모은다.
+
+    봇 모듈을 import 하지 않는다. RUN_DISCORD_BOT=0 으로 웹만 띄우는
+    경우에도 AI 가 동작해야 하기 때문이다.
+    """
+    keys, seen = [], set()
+    raw = [os.environ.get("GEMINI_API_KEY") or "",
+           os.environ.get("GEMINI_API_KEYS") or ""]
+    for i in range(2, 9):
+        raw.append(os.environ.get(f"GEMINI_API_KEY_{i}") or "")
+    for chunk in raw:
+        for k in chunk.split(","):
+            k = k.strip()
+            if k and k not in seen:
+                seen.add(k)
+                keys.append(k)
+    return keys
+
+
+AI_GEMINI_KEYS = _load_ai_gemini_keys()
+AI_GROQ_KEY = (os.environ.get("GROQ_API_KEY") or "").strip()
+
+# 모델 이름은 브라우저가 정해서 보낸다. 그대로 주소에 넣으므로
+# 이상한 글자가 섞이지 못하게 막는다(주소 조작 방지).
+AI_MODEL_OK = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/-]{0,60}$')
+
+# 한 사람이 계속 두드려 하루 한도를 혼자 태우지 못하게 한다.
+# 채팅창은 원래부터 누구나 쓸 수 있으니 새로 열리는 문은 없다.
+# 다만 사람이 손으로 쓰는 속도를 넘는 것만 걸러낸다.
+AI_RATE_WINDOW = 300           # 초
+AI_RATE_BURST = 30             # 5분에 30번
+AI_RATE_DAY = 300              # 하루 300번
+AI_BODY_MAX = 200_000          # 요청 본문 크기 상한 (바이트)
+AI_OUT_TOKENS_MAX = 1200       # 답변 길이 상한
+_AI_HITS = {}                  # 보낸 곳 -> [시각, ...]
+_AI_LOCK = threading.Lock()
+
+
+def ai_allowed(who):
+    """너무 자주 부르는 것을 막는다. 불러도 되면 True."""
+    now = time.time()
+    with _AI_LOCK:
+        hits = [t for t in _AI_HITS.get(who, []) if now - t < 86400]
+        if len(hits) >= AI_RATE_DAY:
+            _AI_HITS[who] = hits
+            return False
+        if len([t for t in hits if now - t < AI_RATE_WINDOW]) >= AI_RATE_BURST:
+            _AI_HITS[who] = hits
+            return False
+        hits.append(now)
+        _AI_HITS[who] = hits
+        if len(_AI_HITS) > 500:        # 무한정 쌓이지 않게
+            for k in [k for k, v in _AI_HITS.items()
+                      if not v or now - v[-1] > 86400]:
+                _AI_HITS.pop(k, None)
+    return True
+
+
+def ai_clamp_tokens(body):
+    """답변 길이 상한을 서버가 다시 정한다.
+
+    브라우저가 보낸 값을 그대로 믿으면 한 번에 한도를 다 태울 수 있다.
+    """
+    if not isinstance(body, dict):
+        return
+    cfg = body.get("generationConfig")
+    if isinstance(cfg, dict):
+        want = cfg.get("maxOutputTokens")
+        cfg["maxOutputTokens"] = min(int(want), AI_OUT_TOKENS_MAX) \
+            if isinstance(want, int) and want > 0 else AI_OUT_TOKENS_MAX
+    if "max_tokens" in body:
+        want = body.get("max_tokens")
+        body["max_tokens"] = min(int(want), AI_OUT_TOKENS_MAX) \
+            if isinstance(want, int) and want > 0 else AI_OUT_TOKENS_MAX
 
 
 def report_allowed(who):
