@@ -4207,3 +4207,149 @@ body.light-theme #helpModal a { color: #047857; }
 }
 .footer-doc-links a:hover { color: var(--jungle-green); }
 .footer-dot { margin: 0 8px; opacity: .5; }
+
+
+/* =========================================================
+   휴대폰 압축 카드 (기본 카드 뷰)
+   ---------------------------------------------------------
+   큰 카드는 한 대에 376px 라 9대를 다 보려면 화면을 일곱 번 넘게
+   내려야 했다. 세탁실에 갈지 말지 보려는 사람에게는 너무 멀다.
+   한 칸을 작게 만들어 두 열로 세운다. 자세한 것은 눌러서 연다.
+   ========================================================= */
+.washtower-grid.is-compact {
+  display: grid;
+  /* 아래쪽 모바일 규칙이 1열을 !important 로 못박아 두어 같은 강도로 맞선다. */
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+}
+
+.compact-card {
+  background: var(--wt-chassis);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 9px 10px 10px;
+  cursor: pointer;
+  transition: border-color .16s ease, transform .12s ease;
+  min-width: 0;
+}
+.compact-card:active { transform: scale(.98); }
+.compact-card.is-error { border-color: rgba(239, 68, 68, .55); }
+.compact-card.is-nodata { border-color: rgba(148, 163, 184, .45); opacity: .82; }
+
+.cc-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+.cc-no {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text-main);
+  letter-spacing: -.3px;
+}
+.cc-zone {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.cc-pill {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+.cp-free   { background: rgba(255,255,255,.06); color: var(--text-dim); }
+.cp-run    { background: rgba(59,130,246,.18);  color: #60a5fa; }
+.cp-both   { background: rgba(0,232,122,.16);   color: #00e87a; }
+.cp-error  { background: rgba(239,68,68,.2);    color: #f87171; }
+.cp-nodata { background: rgba(148,163,184,.16); color: #94a3b8; }
+
+/* 기기 한 줄: [아이콘] 세탁 · 상태 ......... 남은 시간 */
+.cu-row {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 0;
+  min-width: 0;
+}
+.cu-row + .cu-row { border-top: 1px dashed rgba(255,255,255,.07); }
+.cu-icon { font-size: 11px; flex: none; }
+.cu-name {
+  font-size: 10px;
+  color: var(--text-dim);
+  flex: none;
+  font-weight: 600;
+}
+.cu-state {
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cu-time {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-main);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.cu-time.dim { color: var(--text-dim); font-weight: 600; }
+.cu-bell { font-size: 9px; margin-left: 3px; }
+
+.cu-free   { color: var(--text-dim); }
+.cu-wash   { color: #60a5fa; }
+.cu-dry    { color: #fbbf24; }
+.cu-done   { color: #38bdf8; }
+.cu-wait   { color: #cbd5e1; }
+.cu-error  { color: #f87171; }
+.cu-nodata { color: #94a3b8; }
+
+/* 라이트 모드 */
+body.light-theme .compact-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .04);
+}
+body.light-theme .compact-card.is-error  { border-color: #ef4444; }
+body.light-theme .compact-card.is-nodata { border-color: #94a3b8; }
+body.light-theme .cu-row + .cu-row { border-top-color: #e2e8f0; }
+body.light-theme .cp-free   { background: #f1f5f9; color: #64748b; }
+body.light-theme .cp-run    { background: #dbeafe; color: #1d4ed8; }
+body.light-theme .cp-both   { background: #d1fae5; color: #047857; }
+body.light-theme .cp-error  { background: #fee2e2; color: #b91c1c; }
+body.light-theme .cp-nodata { background: #e2e8f0; color: #475569; }
+body.light-theme .cu-wash  { color: #1d4ed8; }
+body.light-theme .cu-dry   { color: #b45309; }
+body.light-theme .cu-done  { color: #0369a1; }
+body.light-theme .cu-wait  { color: #475569; }
+body.light-theme .cu-error { color: #b91c1c; }
+
+/* 아주 좁은 화면에서도 두 열을 지킨다. 한 열이 되면 다시 길어진다. */
+@media (max-width: 360px) {
+  .washtower-grid.is-compact { gap: 6px !important; }
+  .compact-card { padding: 8px; }
+  .cc-no { font-size: 14px; }
+  .cu-state { font-size: 10px; }
+}
+
+/* 휴대폰에서는 기기 현황을 맨 위로 올린다.
+   세탁실에 갈지 말지 보려고 들어오는 사람이 대부분인데,
+   추천·혼잡도를 지나 화면 1.8개를 내려야 기기가 보였다.
+   순서만 바꾼다. 내용은 그대로 아래에 남는다. */
+@media (max-width: 768px) {
+  .toolbar-section         { order: 1; }
+  .washtower-container     { order: 2; }
+  .summary-hero            { order: 3; }
+  .congestion-section      { order: 4; }
+  .quick-guide-section     { order: 5; }
+  .voice-assistant-section { order: 6; }
+}

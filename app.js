@@ -1515,6 +1515,85 @@ function createTowerCardElement(tower, isFloorplan = false) {
   return cardEl;
 }
 
+// 휴대폰인지. 폭으로만 판단한다 (기기 종류를 캐면 틀리기 쉽다).
+const COMPACT_MAX_WIDTH = 768;
+function isCompactScreen() {
+  return window.innerWidth <= COMPACT_MAX_WIDTH;
+}
+
+// 압축 카드에 쓸 한 칸 요약. 카드와 같은 기준으로 읽는다.
+function compactUnitInfo(data, unitType) {
+  const u = data[unitType] || {};
+  const state = u.runState?.currentState || 'POWER_OFF';
+  const timer = u.timer || {};
+  const mins = (timer.remainHour || 0) * 60 + (timer.remainMinute || 0);
+  const err = !!u.error || state === 'ERROR';
+
+  if (err) return { cls: 'cu-error', label: '점검 필요', time: '—' };
+  if (mins > 0) {
+    return { cls: unitType === 'dryer' ? 'cu-dry' : 'cu-wash',
+             label: STATE_TRANSLATION[state]?.label || '작동 중',
+             time: formatTimer(timer.remainHour, timer.remainMinute) };
+  }
+  if (state === 'WRINKLE_CARE') return { cls: 'cu-done', label: '수거 가능', time: '—' };
+  if (state === 'COMPLETE' || state === 'END') return { cls: 'cu-done', label: '완료', time: '—' };
+  if (state === 'INITIAL') return { cls: 'cu-wait', label: '시작 기다리는 중', time: '—' };
+  if (!isUnitFree(state)) return { cls: 'cu-wait', label: '사용 중', time: '—' };
+  return { cls: 'cu-free', label: '사용 가능', time: '—' };
+}
+
+// 휴대폰용 압축 카드. 9대를 한 화면에서 훑을 수 있게 한 칸을 작게 만든다.
+// 자세한 것(코스·에러 조치·알림 걸기)은 눌러서 여는 창에 그대로 있다.
+function createCompactCardElement(tower) {
+  const noData = !towerHasData(tower.name);
+  const data = globalStatusData[tower.name] || {};
+
+  const w = compactUnitInfo(data, 'washer');
+  const d = compactUnitInfo(data, 'dryer');
+  const hasErr = w.cls === 'cu-error' || d.cls === 'cu-error';
+  const running = [w, d].filter(x => x.cls === 'cu-wash' || x.cls === 'cu-dry').length;
+
+  let pill, pillCls;
+  if (noData) { pill = '정보 없음'; pillCls = 'cp-nodata'; }
+  else if (hasErr) { pill = '점검 필요'; pillCls = 'cp-error'; }
+  else if (running === 2) { pill = '전체 가동'; pillCls = 'cp-both'; }
+  else if (running === 1) { pill = '가동 중'; pillCls = 'cp-run'; }
+  else { pill = '사용 가능'; pillCls = 'cp-free'; }
+
+  const alarmDot = (unitType) =>
+    myLaundryAlarms.some(a => a.key === `${tower.id}_${unitType}`)
+      ? '<span class="cu-bell" title="알림 켜짐">🔔</span>' : '';
+
+  const el = document.createElement('div');
+  el.className = `compact-card wt-card-${tower.zone}` + (noData ? ' is-nodata' : '')
+               + (hasErr ? ' is-error' : '');
+  el.onclick = () => openTowerModal(tower, data, null, null);
+
+  const row = (icon, name, info, unitType) => noData
+    ? `<div class="cu-row">
+         <span class="cu-icon">${icon}</span>
+         <span class="cu-name">${name}</span>
+         <span class="cu-state cu-nodata">정보 없음</span>
+       </div>`
+    : `<div class="cu-row">
+         <span class="cu-icon">${icon}</span>
+         <span class="cu-name">${name}</span>
+         <span class="cu-state ${info.cls}">${info.label}${alarmDot(unitType)}</span>
+         <span class="cu-time ${info.time === '—' ? 'dim' : ''}">${info.time}</span>
+       </div>`;
+
+  el.innerHTML = `
+    <div class="cc-head">
+      <span class="cc-no">No.${tower.id}</span>
+      <span class="cc-zone zone-tag-${tower.zone}">${tower.zoneName.replace(' 전용', '')}</span>
+      <span class="cc-pill ${pillCls}">${pill}</span>
+    </div>
+    ${row('🫧', '세탁', w, 'washer')}
+    ${row('💨', '건조', d, 'dryer')}
+  `;
+  return el;
+}
+
 // 3. 워시타워 뷰 렌더러 (기본 카드 뷰 vs 현실 배치 뷰)
 function renderTowers() {
   const container = document.getElementById('washtowerGrid');
@@ -1522,10 +1601,15 @@ function renderTowers() {
   container.innerHTML = '';
 
   if (currentViewMode === 'grid') {
-    container.className = 'washtower-grid';
+    // 휴대폰에서는 9대를 한눈에 볼 수 있게 압축 카드로 그린다.
+    // 큰 카드는 한 대에 376px 라 다 보려면 화면을 일곱 번 넘게 내려야 했다.
+    const compact = isCompactScreen();
+    container.className = compact ? 'washtower-grid is-compact' : 'washtower-grid';
     const filtered = TOWERS.filter(t => currentZoneFilter === 'all' || t.zone === currentZoneFilter);
     filtered.forEach(tower => {
-      container.appendChild(createTowerCardElement(tower, false));
+      container.appendChild(compact
+        ? createCompactCardElement(tower)
+        : createTowerCardElement(tower, false));
     });
   } else {
     // 🏢 현실 세탁실 배치 뷰 (Floorplan View)
@@ -2676,6 +2760,16 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 // 뷰 모드 전환 (기본 카드 뷰 vs 현실 2열 배치 뷰)
+// 가로·세로를 돌리거나 창을 줄이면 압축 여부가 달라진다. 그때만 다시 그린다.
+let _wasCompact = isCompactScreen();
+window.addEventListener('resize', () => {
+  const now = isCompactScreen();
+  if (now !== _wasCompact) {
+    _wasCompact = now;
+    renderTowers();
+  }
+});
+
 document.querySelectorAll('.view-tab-btn').forEach(btn => {
   btn.onclick = () => {
     document.querySelectorAll('.view-tab-btn').forEach(b => b.classList.remove('active'));
