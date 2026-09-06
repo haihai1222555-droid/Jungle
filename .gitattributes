@@ -1,0 +1,3 @@
+# 갈고리 스크립트는 줄바꿈이 LF 여야 한다.
+# CRLF 로 바뀌면 첫 줄(#!/bin/sh) 뒤에 CR 문자가 붙어 실행 자체가 안 된다.
+.githooks/* text eol=lf
