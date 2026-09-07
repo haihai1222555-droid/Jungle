@@ -31,6 +31,8 @@ bot_preview.png
 # 봇 런타임 데이터
 bot_settings.json
 discord_alarms.json
+# 기기 오류/일시정지 이력 (일주일치, 서버에만 둔다)
+device_events.json
 
 # =========================================================
 # 기관 내부 자료 — 절대 커밋하지 않는다

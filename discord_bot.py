@@ -17,6 +17,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from PIL import Image, ImageDraw, ImageFont
+import washtower
+import device_log
 
 try:
     import jungle_kb
@@ -559,11 +561,16 @@ def render_floorplan_image(status_data):
             draw.text((x + 34, by + 5), ("건조기" if is_dryer else "세탁기") + " 배수관 점검 필요",
                       fill=(254, 202, 202), font=f_badge)
         elif minutes > 0:
-            course = "표준 건조" if is_dryer else "표준 세탁"
-            cw_ = tw(course, f_badge)
+            # 예전에는 여기에 "표준 세탁" 이라고 적었다. 기기가 준 값이 아니라
+            # 그냥 박아 둔 말이었다. 코스는 원본 API 에 오지 않는다.
+            # 대신 기기가 실제로 잡아 둔 전체 가동 시간을 적는다.
+            # 코스마다 길이가 달라서 이편이 짐작에 쓸모 있다.
+            total = washtower.format_minutes(washtower.total_minutes(unit))
+            badge = ("총 " + total + " 코스") if total else "가동 중"
+            cw_ = tw(badge, f_badge)
             pill(tx, by, tx + cw_ + 26, by + 30, fill=(30, 41, 59), outline=(51, 65, 85))
             draw.ellipse([(tx + 10, by + 11), (tx + 18, by + 19)], fill=accent)
-            draw.text((tx + 24, by + 5), course, fill=(203, 213, 225), font=f_badge)
+            draw.text((tx + 24, by + 5), badge, fill=(203, 213, 225), font=f_badge)
 
 
     def draw_card(t, x, y, cw):
@@ -3082,6 +3089,28 @@ async def cmd_report(interaction: discord.Interaction):
         view=ReportKindView(), ephemeral=True)
 
 
+@bot.tree.command(name="코스", description="이 기기에 어떤 세탁·건조 코스가 있는지 봅니다.")
+async def cmd_courses(interaction: discord.Interaction):
+    emb = discord.Embed(
+        title="🧺 이 기기에 있는 코스",
+        description=(f"**{washtower.MODEL}** ({washtower.MODEL_YEAR})\n"
+                     f"{washtower.CAPACITY} · {washtower.CONTROL}"),
+        color=0x38BDF8)
+
+    def block(items):
+        # 임베드 한 칸은 1024자까지다. 넉넉하지만 잘릴 여지를 남겨 둔다.
+        return "\n".join(f"• **{c['name']}** — {c['hint']}" for c in items)[:1020]
+
+    emb.add_field(name="🧼 세탁 코스", value=block(washtower.WASH_COURSES), inline=False)
+    emb.add_field(name="💨 건조 코스", value=block(washtower.DRY_COURSES), inline=False)
+    emb.add_field(name="ℹ️ 알아둘 것",
+                  value=washtower.DOWNLOAD_NOTE + "\n" + washtower.DISCLAIMER, inline=False)
+    # 기기가 지금 무슨 코스로 도는지는 알 수 없다. 그렇게 말해 둔다.
+    emb.set_footer(text="지금 몇 호기가 무슨 코스로 도는지는 기기가 알려주지 않아요. "
+                        "대신 카드에 '총 ○○분 코스' 로 전체 시간을 적어둡니다.")
+    await interaction.response.send_message(embed=emb, ephemeral=True)
+
+
 @bot.tree.command(name="업데이트", description="최근 업데이트 내용을 봅니다.")
 async def cmd_release(interaction: discord.Interaction):
     rel = await asyncio.to_thread(read_latest_release)
@@ -3091,6 +3120,92 @@ async def cmd_release(interaction: discord.Interaction):
         return
     await interaction.response.send_message(
         embed=build_release_embed(rel), ephemeral=True)
+
+
+@bot.tree.command(
+    name="이력",
+    description="기기에 있었던 오류·일시정지 기록을 봅니다. (관리자 전용)")
+@app_commands.describe(
+    호기="1~9. 비우면 전체",
+    종류="비우면 전부. 오류 / 일시정지 / 값끊김",
+    개수="몇 개까지 볼지 (기본 15, 최대 40)")
+@app_commands.choices(종류=[
+    app_commands.Choice(name="오류", value="error"),
+    app_commands.Choice(name="일시정지", value="pause"),
+    app_commands.Choice(name="값끊김", value="nodata"),
+])
+async def cmd_history(interaction: discord.Interaction,
+                      호기: int = None,
+                      종류: app_commands.Choice[str] = None,
+                      개수: int = 15):
+    if not is_admin_user(interaction.user.id):
+        await interaction.response.send_message(
+            "\U0001f512 관리자만 볼 수 있어요.", ephemeral=True)
+        return
+
+    limit = max(1, min(int(개수 or 15), 40))
+    tower = ("%d호기" % 호기) if 호기 and 1 <= 호기 <= 9 else None
+    event = 종류.value if 종류 else None
+
+    items = await asyncio.to_thread(
+        device_log.recent, limit, tower, None, event)
+    summary = await asyncio.to_thread(device_log.summary)
+
+    title = "\U0001f9fe 기기 이력"
+    if tower:
+        title += " · " + tower
+    if 종류:
+        title += " · " + 종류.name
+
+    emb = discord.Embed(title=title, color=0xF59E0B)
+
+    if not items:
+        emb.description = ("해당하는 기록이 없어요.\n"
+                           "기록은 서버가 뜬 뒤부터 쌓이고, 일주일이 지나면 지워집니다.")
+        await interaction.response.send_message(embed=emb, ephemeral=True)
+        return
+
+    lines = []
+    for x in items:
+        t = datetime.fromtimestamp(x.get("ts") or 0, KST)
+        mark = {"error": "\U0001f534", "error_cleared": "\U0001f7e2",
+                "pause": "\u23f8\ufe0f", "resume": "\u25b6\ufe0f",
+                "nodata": "\u26aa", "nodata_cleared": "\U0001f7e2"}.get(x.get("event"), "\u2022")
+        lines.append(
+            "%s **%s %s** — %s\n"
+            "\u2003%s · %s"
+            % (mark, x.get("tower"), x.get("unit"), x.get("label"),
+               t.strftime("%m/%d(%a) %H:%M:%S"), x.get("reason") or "-"))
+
+    # 임베드 설명은 4096자까지다. 넘치면 뒤에서 자른다.
+    body = "\n".join(lines)
+    if len(body) > 3800:
+        body = body[:3800] + "\n…(너무 많아 여기까지)"
+    emb.description = body
+
+    top = summary.get("byDevice") or []
+    if top:
+        emb.add_field(
+            name="\U0001f4ca 일주일 동안 말썽이 잦은 기기",
+            value="\n".join("• %s — %d회" % (k, v) for k, v in top[:5]),
+            inline=False)
+
+    be = summary.get("byEvent") or {}
+    emb.add_field(
+        name="\U0001f5c2\ufe0f 일주일 합계",
+        value=("오류 %d · 일시정지 %d · 값끊김 %d (전체 기록 %d개)"
+               % (be.get("error", 0), be.get("pause", 0),
+                  be.get("nodata", 0), summary.get("total", 0))),
+        inline=False)
+
+    oldest = summary.get("oldest")
+    foot = "기록은 일주일만 보관하고 자동으로 지워집니다. 누가 썼는지는 남기지 않습니다."
+    if oldest:
+        foot = ("가장 오래된 기록 %s · " % datetime.fromtimestamp(oldest, KST)
+                .strftime("%m/%d %H:%M")) + foot
+    emb.set_footer(text=foot)
+
+    await interaction.response.send_message(embed=emb, ephemeral=True)
 
 
 @bot.tree.command(name="제보목록", description="접수된 제보를 확인합니다. (관리자 전용)")

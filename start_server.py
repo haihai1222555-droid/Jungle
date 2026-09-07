@@ -9,6 +9,8 @@ import json
 import re
 import threading
 import state_store
+import washtower
+import device_log
 import time
 from datetime import datetime, timedelta, timezone
 import base64
@@ -347,6 +349,7 @@ def background_push_worker():
                         CACHED_STATUS, ensure_ascii=False).encode('utf-8')
                     CACHED_STATUS_AT = time.time()
                     record_congestion_sample(CACHED_STATUS)
+                    record_device_events(CACHED_STATUS)
             except Exception:
                 pass
 
@@ -606,6 +609,12 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
 
         # 브라우저는 키를 받지 않는다. '몇 개나 있는지' 만 알면
         # 지금처럼 막힌 키를 건너뛰며 차례로 시도할 수 있다.
+        # 이 기기에 어떤 코스가 있는지. 목록은 washtower.py 한곳에만 있다.
+        # (지금 무슨 코스로 도는지는 원본 API 가 주지 않아 알 수 없다)
+        if req_path == '/api/courses':
+            self._json_out(200, washtower.as_dict())
+            return
+
         if req_path == '/api/ai/config':
             self._json_out(200, {
                 "gemini": len(AI_GEMINI_KEYS),
@@ -1178,6 +1187,28 @@ def report_allowed(who):
                 _REPORT_LAST.pop(k, None)
     return True
 
+
+
+def record_device_events(status):
+    """오류·일시정지·값 끊김이 생기거나 풀리면 적어 둔다.
+
+    5초마다 불린다. 달라진 것이 없으면 아무 일도 하지 않는다.
+    저장은 새 기록이 생겼을 때만 한 번에 한다.
+    """
+    if not isinstance(status, dict):
+        return
+    made = []
+    for i in range(1, 10):
+        tower = status.get("워시타워_%d" % i)
+        label = "%d호기" % i
+        for unit_type in ("washer", "dryer"):
+            unit = (tower or {}).get(unit_type) if isinstance(tower, dict) else None
+            made.extend(device_log.observe(label, unit_type, unit, unit_state(unit)))
+    if made:
+        device_log.append(made)
+        for m in made:
+            print("[이력] %s %s — %s (%s)"
+                  % (m["tower"], m["unit"], m["label"], m["reason"]))
 
 
 def unit_state(unit):

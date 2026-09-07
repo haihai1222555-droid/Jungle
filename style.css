@@ -4600,3 +4600,31 @@ body.light-theme .compact-card.is-active-dry  { border-color: #f59e0b; }
   .compact-card { padding: 7px 9px 6px !important; }
   .cc-head { margin-bottom: 4px !important; }
 }
+
+
+/* 사용법 안내 안의 코스 목록.
+   새 색을 만들지 않고 이미 쓰던 변수만 쓴다. 라이트/다크 둘 다 그대로 따라간다. */
+.help-course-head {
+  font-size: 12px;
+  font-weight: 700;
+  margin: 10px 0 6px;
+  opacity: 0.75;
+}
+.help-course-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 6px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.help-course-list li {
+  font-size: 12.5px;
+  line-height: 1.45;
+  padding: 4px 0;
+}
+.help-course-list b { font-weight: 700; }
+.help-course-list span { opacity: 0.72; }
+@media (max-width: 768px) {
+  .help-course-list { grid-template-columns: 1fr; }
+}
