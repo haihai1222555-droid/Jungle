@@ -527,6 +527,45 @@ def background_push_worker():
         except Exception as e:
             print(f"[Worker Error] {e}")
 
+# =========================================================
+# 웹으로 내줄 파일 (이 목록에 없으면 안 내준다)
+# ---------------------------------------------------------
+# 예전에는 폴더를 통째로 내주고 있었다. 그래서 .env(봇 토큰·API 키),
+# vapid_private.pem(푸시 개인키), server.log, reports.json,
+# 소스 코드까지 아무나 주소만 치면 받아 갈 수 있었다.
+#
+# 거부 목록으로 막으면 새 파일이 생길 때마다 빠뜨린다.
+# 실제로 기기 이력 파일을 새로 만들면서 아무도 그 생각을 안 했다.
+# 그래서 허용 목록으로 뒤집는다. 새 파일은 기본이 '안 내줌' 이다.
+# =========================================================
+PUBLIC_FILES = {
+    "/", "/index.html", "/privacy.html", "/terms.html",
+    "/app.js", "/style.css", "/doc.css", "/doc.js",
+    "/sw.js",                 # 서비스 워커 (웹 푸시)
+    "/manifest.json",         # 앱처럼 설치할 때 쓰는 것
+    "/jungle_kb.js",          # 웹 AI 가 브라우저에서 읽는 안내 지식
+    "/favicon.ico",
+}
+
+# 그림은 파일이 계속 늘어나므로 확장자로 연다.
+PUBLIC_DIRS = ("/assets/",)
+PUBLIC_EXTS = (".png", ".webp", ".jpg", ".jpeg", ".gif", ".svg", ".ico")
+
+
+def is_public_path(req_path):
+    """이 주소를 웹으로 내줘도 되는지."""
+    if req_path in PUBLIC_FILES:
+        return True
+    # 위로 거슬러 올라가는 주소는 무조건 막는다
+    if ".." in req_path:
+        return False
+    if req_path.lower().endswith(PUBLIC_EXTS):
+        # 그림은 최상위나 assets/ 아래만
+        rest = req_path.lstrip("/")
+        return "/" not in rest or req_path.startswith(PUBLIC_DIRS)
+    return False
+
+
 class RobustHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=BASE_DIR, **kwargs)
@@ -578,6 +617,11 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_HEAD(self):
         req_path = self.path.split('?')[0]
+        # HEAD 로도 새면 안 된다. 크기만 알려줘도 있다는 것이 드러난다.
+        if not req_path.startswith('/api/') and not is_public_path(req_path):
+            self.send_response(404)
+            self.end_headers()
+            return
         if req_path in ('/api/health', '/api/status', '/api/stats', '/'):
             self.send_response(200)
             self.end_headers()
@@ -586,6 +630,16 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         req_path = self.path.split('?')[0]
+
+        # /api/ 로 시작하지 않는 것은 파일 요청이다.
+        # 허용 목록에 없으면 있는지 없는지도 알려주지 않고 404 로 끝낸다.
+        if not req_path.startswith('/api/') and not is_public_path(req_path):
+            print(f"[차단] 공개 대상이 아닌 파일 요청: {req_path}")
+            self.send_response(404)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.end_headers()
+            self.wfile.write('Not Found'.encode('utf-8'))
+            return
         # UptimeRobot 등이 주기적으로 두드려 서비스가 잠들지 않게 하는 용도
         if req_path == '/api/health':
             self.send_response(200)
