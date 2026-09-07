@@ -650,6 +650,8 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 "webpush": HAS_WEBPUSH,
                 "alarms": len(load_subscriptions()),
                 "store": state_store.store_enabled(),
+                # 나가면 안 되는 파일이 나가고 있지 않은지. 밖에서도 보이게 둔다.
+                "exposure": EXPOSURE_STATUS,
                 **discord_bot_health(),
             }, ensure_ascii=False).encode('utf-8'))
             return
@@ -1283,6 +1285,70 @@ def unit_state(unit):
     return "UNKNOWN_RUNNING" if remain > 0 else "UNKNOWN"
 
 
+# =========================================================
+# 스스로 하는 노출 검사
+# ---------------------------------------------------------
+# 서버가 뜰 때 자기 자신에게 요청을 보내, 나가면 안 되는 파일이
+# 정말로 안 나가는지 확인한다.
+#
+# 왜 필요한가. 2026-09-04 부터 사흘 동안 .env 가 그대로 나갔다.
+# 봇 토큰, AI 키, 저장소 토큰이 전부 그 안에 있었고, 자동 스캐너가
+# 21번 받아 갔다. 코드를 고칠 때마다 사람이 기억해서 확인하는 것은
+# 언젠가 빠뜨린다. 실제로 빠뜨렸다.
+#
+# 검사 목록을 손으로 적지 않는다. 그러면 새 파일이 생길 때 또 빠뜨린다.
+# 폴더에 실제로 있는 파일 중 공개 대상이 아닌 것을 그때그때 골라 본다.
+# =========================================================
+EXPOSURE_STATUS = "확인 전"
+
+
+def run_exposure_check():
+    """공개 대상이 아닌 파일이 웹으로 나가는지 스스로 확인한다."""
+    global EXPOSURE_STATUS
+    try:
+        targets = []
+        for name in sorted(os.listdir(BASE_DIR)):
+            path = "/" + name
+            if os.path.isdir(os.path.join(BASE_DIR, name)):
+                continue
+            if is_public_path(path):      # 내줘도 되는 것은 건너뛴다
+                continue
+            targets.append(path)
+        # 폴더에 없더라도 늘 확인하는 것들
+        for extra in ("/.env", "/.git/config", "/../.env"):
+            if extra not in targets:
+                targets.append(extra)
+
+        leaked = []
+        for path in targets:
+            try:
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{PORT}{path}", method="GET")
+                with urllib.request.urlopen(req, timeout=3) as r:
+                    if r.status == 200:
+                        leaked.append(path)
+            except urllib.error.HTTPError:
+                pass                      # 404 면 정상이다
+            except Exception:
+                pass
+
+        if leaked:
+            EXPOSURE_STATUS = "새는 파일 %d개" % len(leaked)
+            print("=" * 60)
+            print("[노출 검사] 나가면 안 되는 파일이 웹으로 나가고 있습니다:")
+            for p in leaked:
+                print("   " + p)
+            print("[노출 검사] start_server.py 의 PUBLIC_FILES 를 확인하세요.")
+            print("=" * 60)
+        else:
+            EXPOSURE_STATUS = "정상"
+            print(f"[노출 검사] {len(targets)}개 확인 — 모두 막혀 있습니다.")
+    except Exception as e:
+        EXPOSURE_STATUS = "검사 실패"
+        print(f"[노출 검사] 검사하지 못했습니다: {e}")
+
+
+
 def discord_bot_health():
     """봇 상태를 /api/health 에 실어 보낸다.
 
@@ -1364,4 +1430,9 @@ if __name__ == '__main__':
         print("  Jungle Laundry 2.0 Web Server Running!")
         print(f"  URL: http://localhost:{PORT}")
         print("============================================================")
+        # 문이 열린 뒤에 스스로 확인한다. 자기 자신에게 요청을 보내는 것이라
+        # 서버가 받을 준비가 된 다음이어야 한다. 검사에 몇 초 걸리므로
+        # 따로 돌려서 서비스 시작을 붙잡지 않는다.
+        threading.Thread(target=run_exposure_check, daemon=True,
+                         name="exposure-check").start()
         httpd.serve_forever()
