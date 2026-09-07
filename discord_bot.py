@@ -561,12 +561,9 @@ def render_floorplan_image(status_data):
             draw.text((x + 34, by + 5), ("건조기" if is_dryer else "세탁기") + " 배수관 점검 필요",
                       fill=(254, 202, 202), font=f_badge)
         elif minutes > 0:
-            # 예전에는 여기에 "표준 세탁" 이라고 적었다. 기기가 준 값이 아니라
-            # 그냥 박아 둔 말이었다. 코스는 원본 API 에 오지 않는다.
-            # 대신 기기가 실제로 잡아 둔 전체 가동 시간을 적는다.
-            # 코스마다 길이가 달라서 이편이 짐작에 쓸모 있다.
-            total = washtower.format_minutes(washtower.total_minutes(unit))
-            badge = ("총 " + total + " 코스") if total else "가동 중"
+            # ⚠️ 기기가 준 값이 아니다. 코스는 원본 API 에 오지 않는다.
+            # 가장 흔한 코스를 기본값으로 적어 둔다.
+            badge = "표준 건조" if is_dryer else "표준 세탁"
             cw_ = tw(badge, f_badge)
             pill(tx, by, tx + cw_ + 26, by + 30, fill=(30, 41, 59), outline=(51, 65, 85))
             draw.ellipse([(tx + 10, by + 11), (tx + 18, by + 19)], fill=accent)
@@ -1051,6 +1048,7 @@ def build_info_embed(user_id=None):
             "`/알림` · 배치도 보고 기기 골라 알림 걸기\n"
             "`/내알림` · 걸어둔 알림 확인 · 해제\n"
             "`/세탁기` `/건조기` · 9대 현황 한눈에\n"
+            "`/코스` · 이 기기에 어떤 세탁·건조 코스가 있는지\n"
             "`/비서` · 말로 걸기 (예: 3번 건조기 알림 걸어줘)\n"
             "`/버그` · 버그 제보 · 개선 제안\n"
             "`/알림테스트` · 알림이 잘 오는지 지금 확인\n"
@@ -3191,11 +3189,25 @@ async def cmd_history(interaction: discord.Interaction,
             inline=False)
 
     be = summary.get("byEvent") or {}
+    bc = summary.get("byCause") or {}
+    # 일시정지를 왜 했는지 나눠 센다. 사람이 누른 것과 오류로 멈춘 것은
+    # 대응이 전혀 다르다. 앞엣것은 그냥 두면 되고 뒤엣것은 수리를 불러야 한다.
+    cause_txt = ""
+    if be.get("pause"):
+        parts = []
+        if bc.get("user"):
+            parts.append("사용자가 누름 %d" % bc["user"])
+        if bc.get("error"):
+            parts.append("오류로 멈춤 %d" % bc["error"])
+        if bc.get("unknown"):
+            parts.append("원인 불명 %d" % bc["unknown"])
+        if parts:
+            cause_txt = "\n-# 일시정지 내역 — " + " · ".join(parts)
     emb.add_field(
         name="\U0001f5c2\ufe0f 일주일 합계",
-        value=("오류 %d · 일시정지 %d · 값끊김 %d (전체 기록 %d개)"
+        value=("오류 %d · 일시정지 %d · 값끊김 %d (전체 기록 %d개)%s"
                % (be.get("error", 0), be.get("pause", 0),
-                  be.get("nodata", 0), summary.get("total", 0))),
+                  be.get("nodata", 0), summary.get("total", 0), cause_txt)),
         inline=False)
 
     oldest = summary.get("oldest")

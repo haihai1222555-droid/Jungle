@@ -128,21 +128,17 @@ function getUnitCourseLabel(unitType, unitData, runState, isFloorplan = false) {
 
   if (runState === 'WRINKLE_CARE') return isFloorplan ? '구김 방지' : '구김 방지 케어';
 
-  // 여기서부터는 예전에 코스 이름을 지어내던 자리다.
-  //   탈수 중이면 'AI 맞춤 세탁 (AI DD™)', 아니면 '표준 세탁 (터보샷)'
-  //   건조기 일시정지면 '이불 건조 (대용량)', 아니면 '표준 건조 (AI 센서)'
-  // 기기가 준 값이 아니라 상태를 보고 찍은 것이었다. 게다가 저 이름들은
-  // 이 기기(W22KJUR)의 실제 코스 목록에도 없다.
+  // ⚠️ 아래는 기기에서 읽어 온 값이 아니다.
+  // 원본 API 가 주는 것은 runState·timer·cycleCount·error 넷뿐이고
+  // 코스는 오지 않는다. 가장 흔한 코스를 기본값으로 적어 두는 것이다.
   //
-  // 코스는 원본 API 에 오지 않는다(runState·timer·cycleCount·error 뿐).
-  // 대신 기기가 실제로 잡아 둔 전체 가동 시간을 적는다.
-  // 코스마다 길이가 달라서 '총 39분' 인지 '총 2시간' 인지만 알아도 짐작이 된다.
-  const total = (unitData.timer?.totalHour || 0) * 60 + (unitData.timer?.totalMinute || 0);
-  if (total > 0) {
-    const h = Math.floor(total / 60), m = total % 60;
-    const t = h ? (m ? `${h}시간 ${m}분` : `${h}시간`) : `${m}분`;
-    return isFloorplan ? `총 ${t}` : `총 ${t} 코스`;
-  }
+  // 예전에는 여기에 더한 것이 있었다.
+  //   탈수 중이면       → 'AI 맞춤 세탁 (AI DD™)'
+  //   건조기 일시정지면 → '이불 건조 (대용량)'
+  // 탈수와 AI 코스는 아무 상관이 없고 일시정지와 이불 코스도 마찬가지라,
+  // 그 둘은 틀릴 이유가 특별히 많았다. 빼고 표준만 남긴다.
+  if (unitType === 'washer') return '표준 세탁';
+  if (unitType === 'dryer') return '표준 건조';
   return null;
 }
 
