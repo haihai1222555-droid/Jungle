@@ -543,7 +543,9 @@ PUBLIC_FILES = {
     "/app.js", "/style.css", "/doc.css", "/doc.js",
     "/sw.js",                 # 서비스 워커 (웹 푸시)
     "/manifest.json",         # 앱처럼 설치할 때 쓰는 것
-    "/jungle_kb.js",          # 웹 AI 가 브라우저에서 읽는 안내 지식
+    # /jungle_kb.js 는 더 이상 내주지 않는다.
+    # 브라우저가 프롬프트를 만들 때 필요했지만, 이제 서버가 끼워 넣는다.
+    # 그 안에는 출결·외출·공가 같은 기관 내부 안내가 들어 있다.
     "/favicon.ico",
 }
 
@@ -937,6 +939,8 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 self._json_out(503, {"error": "쓸 수 있는 키가 없습니다."})
                 return
             body = data['body']
+            # 안내 지식은 브라우저에 없다. 여기서 끼워 넣는다.
+            body = fill_kb(body, last_user_text(body))
             ai_clamp_tokens(body)
             self._ai_relay(
                 'https://generativelanguage.googleapis.com/v1beta/models/'
@@ -958,6 +962,8 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             if not AI_MODEL_OK.match(str(body.get('model') or '')):
                 self._json_out(400, {"error": "모델 이름이 올바르지 않습니다."})
                 return
+            # Groq 은 요청 크기 제한이 빡빡하다. 질문에 걸리는 항목만 넣는다.
+            body = fill_kb(body, last_user_text(body), limit=4)
             ai_clamp_tokens(body)
             self._ai_relay(
                 'https://api.groq.com/openai/v1/chat/completions', body,
@@ -1300,6 +1306,64 @@ def unit_state(unit):
 # 폴더에 실제로 있는 파일 중 공개 대상이 아닌 것을 그때그때 골라 본다.
 # =========================================================
 EXPOSURE_STATUS = "확인 전"
+
+
+# 브라우저가 보내오는 자리표시자. 이 자리에 안내 지식을 끼워 넣는다.
+KB_PLACEHOLDER = "{{JUNGLE_KB}}"
+_JUNGLE_KB = None
+
+
+def _kb_module():
+    """안내 지식 모듈. 없으면 None (그래도 세탁실 기능은 돌아간다)."""
+    global _JUNGLE_KB
+    if _JUNGLE_KB is None:
+        try:
+            import jungle_kb
+            _JUNGLE_KB = jungle_kb
+        except Exception as e:
+            print(f"[안내지식] 불러오지 못했습니다: {e}")
+            _JUNGLE_KB = False
+    return _JUNGLE_KB or None
+
+
+def fill_kb(body, question, limit=None):
+    """요청 안의 자리표시자를 안내 지식으로 바꾼다.
+
+    limit 을 주면 질문에 걸리는 항목 몇 개만 넣는다. Groq 은 요청 크기
+    제한이 빡빡해서 통째로 넣으면 413 이 난다. 봇이 쓰는 것과 같은 함수다.
+    """
+    kb = _kb_module()
+    if kb:
+        try:
+            text = kb.build_context(question or "", limit=limit)
+        except Exception as e:
+            print(f"[안내지식] 만들지 못했습니다: {e}")
+            text = ""
+    else:
+        text = ""
+    if not text:
+        text = "(안내 지식을 불러오지 못했습니다. 세탁실 관련만 답하세요.)"
+
+    raw = json.dumps(body, ensure_ascii=False)
+    if KB_PLACEHOLDER not in raw:
+        return body
+    # 지식 안의 따옴표·줄바꿈이 JSON 을 깨지 않도록 값으로 넣었다 뺀다
+    safe = json.dumps(text, ensure_ascii=False)[1:-1]
+    return json.loads(raw.replace(KB_PLACEHOLDER, safe))
+
+
+def last_user_text(body):
+    """이번에 사람이 물어본 말. 어떤 항목을 추릴지 정하는 데 쓴다."""
+    try:
+        for msg in reversed(body.get("contents") or []):        # 제미나이
+            if msg.get("role") in (None, "user"):
+                return "".join(p.get("text", "") for p in msg.get("parts") or [])
+        for msg in reversed(body.get("messages") or []):        # Groq
+            if msg.get("role") == "user":
+                return str(msg.get("content") or "")
+    except Exception:
+        pass
+    return ""
 
 
 def run_exposure_check():

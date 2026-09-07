@@ -567,8 +567,10 @@
     </div>
   </footer>
 
-  <!-- 정글 생활 안내 지식 (build_web_kb.py 가 jungle_kb.py 에서 생성) -->
-  <script src="jungle_kb.js"></script>
+  <!-- 안내 지식은 브라우저로 내려보내지 않는다.
+       예전에는 여기서 jungle_kb.js 를 읽어 프롬프트를 만들었는데,
+       그 파일은 주소만 치면 누구나 받을 수 있었다.
+       이제는 서버가 AI 에게 보낼 때 끼워 넣는다. -->
   <script src="app.js"></script>
 </body>
 </html>

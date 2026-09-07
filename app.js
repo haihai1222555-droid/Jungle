@@ -2117,28 +2117,15 @@ const GEMINI_MODELS = [
   'gemini-3.5-flash',        // 실측 3.57초 — 또 다른 한도
 ];
 
-// Groq 은 요청 크기 제한이 빡빡하다(분당 8,000토큰).
-// 정글 안내 전문 17,816자를 그대로 보내면 413 이 나서 한 번도 못 쓴다.
-// 질문에 걸리는 대목만 추려 보낸다. 봇의 kb_limit 과 같은 취지다.
-const GROQ_KB_MAX_CHARS = 3500;
-function kbForGroq(question) {
-  if (typeof JUNGLE_KB !== 'string') return '';
-  // [제목] 이 줄 맨 앞에 오는 것을 경계로 토막을 낸다
-  const blocks = JUNGLE_KB.split(/\n(?=\[)/);
-  if (blocks.length < 2) return JUNGLE_KB.slice(0, GROQ_KB_MAX_CHARS);
-  const q = (question || '').replace(/\s/g, '');
-  const scored = blocks.map((b, i) => {
-    let hit = 0;
-    for (const w of b.match(/[가-힣]{2,}/g) || []) if (q.includes(w)) hit++;
-    return { b, i, hit };
-  });
-  const picked = scored.filter(x => x.hit > 0 && x.i > 0)
-                       .sort((a, b) => b.hit - a.hit)
-                       .map(x => x.b);
-  // 기본 정보는 질문과 무관하게 늘 넣는다
-  const out = [blocks[0], ...picked].join('\n');
-  return out.slice(0, GROQ_KB_MAX_CHARS);
-}
+// 안내 지식은 브라우저에 두지 않는다.
+// 예전에는 /jungle_kb.js 로 48KB 를 내려받아 여기서 프롬프트에 넣었다.
+// 그 파일은 주소만 치면 누구나 받을 수 있었고, 안에는 출결·외출·공가 같은
+// 기관 내부 안내가 들어 있다.
+//
+// 이제는 자리표시자만 보낸다. 서버가 이 자리에 진짜 내용을 끼워 넣는다.
+// Groq 은 요청 크기 제한이 빡빡해서 질문에 걸리는 대목만 추려야 하는데,
+// 그 추리는 일도 지식이 있어야 하므로 서버가 함께 맡는다.
+const KB_PLACEHOLDER = '{{JUNGLE_KB}}';
 
 // ⚡ 토큰 수 80% 압축: LLM 처리 속도 극대화 + 동적 시간 변동 센서 정보 주입
 function getCompactContextSummary() {
@@ -2493,7 +2480,7 @@ ${describeNowForAI()}
 ${compactStatus}
 
 [정글 생활 안내]
-${typeof JUNGLE_KB === 'string' ? JUNGLE_KB : '(안내 지식을 불러오지 못했습니다. 세탁실 관련만 답하세요.)'}
+${KB_PLACEHOLDER}
 
 이전 대화 맥락을 기억하여 꼬리 질문(예: "다른 방법은?", "그럼 몇 번?")에도 자연스럽게 이어가세요.`;
 
@@ -2601,13 +2588,10 @@ ${typeof JUNGLE_KB === 'string' ? JUNGLE_KB : '(안내 지식을 불러오지 �
   if (AI_HAS_GROQ) {
     for (const modelName of GROQ_MODELS) {
       try {
-        // 안내 지식을 통째로 보내면 요청이 너무 커서 413 이 난다.
-        // 질문에 걸리는 대목만 남긴 지시문을 따로 만들어 보낸다.
-        const groqInstruction = (typeof JUNGLE_KB === 'string' && systemInstruction.includes(JUNGLE_KB))
-          ? systemInstruction.replace(JUNGLE_KB, kbForGroq(q))
-          : systemInstruction;
+        // 자리표시자 그대로 보낸다. 서버가 질문에 걸리는 대목만 추려
+        // 그 자리에 넣어 준다. 통째로 보내면 요청이 커서 413 이 난다.
         const groqMessages = [
-          { role: 'system', content: groqInstruction },
+          { role: 'system', content: systemInstruction },
           ...recentHistory
         ];
 
