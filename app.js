@@ -60,6 +60,8 @@ const STATE_TRANSLATION = {
   POWER_OFF:    { label: '대기 중 (사용 가능)', isFree: true, isError: false },
   INITIAL:      { label: '선택 완료(시작 기다리는 중...)', isFree: false, isError: false },
   COMPLETE:     { label: '세탁 완료 (수거 대기)', isFree: false, isError: false },
+  // END 도 '한 사이클이 끝났다' 는 뜻이다. 이름표가 없어 영어가 그대로 나갔다.
+  END:          { label: '세탁 완료 (수거 대기)', isFree: false, isError: false },
   RUNNING:      { label: '작동 중',             isFree: false, isError: false },
   DETECTING:    { label: '무게 감지 중',         isFree: false, isError: false },
   WASHING:      { label: '세탁 중',             isFree: false, isError: false },
@@ -69,6 +71,9 @@ const STATE_TRANSLATION = {
   COOLING:      { label: '쿨링 중',             isFree: false, isError: false },
   WRINKLE_CARE: { label: '구김 방지 중',        isFree: false, isError: false },
   PAUSE:        { label: '일시정지',           isFree: false, isError: false },
+  // 예약 걸어 둔 상태. 빨래는 이미 들어 있고 몇 시간 뒤에 시작한다.
+  // 남은 시간은 '끝날 때까지' 가 아니라 '시작할 때까지' 다.
+  RESERVED:     { label: '예약 대기 중',        isFree: false, isError: false },
   ERROR:        { label: '기기 점검/에러',       isFree: false, isError: true },
   // 아래 둘은 기기가 준 이름이 아니다. 상태가 안 왔을 때 우리가 붙인다.
   // 빈 것으로 세지 않는다(isFree: false). 모르는 것을 비었다고 하면 안 된다.
@@ -275,6 +280,10 @@ function isUnitFree(state) {
 function isUnitRunning(state) {
   return ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING',
           'WRINKLE_CARE', 'DETECTING',
+          // 예약은 아직 안 돌지만 빨래가 들어 있다. 비어 있지 않다는 뜻에서 여기 둔다.
+          // (5분전 알림 대상은 아니다. 남은 시간이 완료까지가 아니라 시작까지라서
+          //  '5분 뒤 완료' 라고 알리면 거짓말이 된다. isUnitCycleActive 는 그대로 둔다)
+          'RESERVED',
           'UNKNOWN_RUNNING'].includes(state);
 }
 
@@ -1382,8 +1391,10 @@ function createTowerCardElement(tower, isFloorplan = false) {
   const dTimerStr = formatTimer(dTimer.remainHour, dTimer.remainMinute);
   const wTimerStr = formatTimer(wTimer.remainHour, wTimer.remainMinute);
 
-  const dStateInfo = STATE_TRANSLATION[dState] || { label: dState };
-  const wStateInfo = STATE_TRANSLATION[wState] || { label: wState };
+  // 처음 보는 상태가 오면 영어 코드가 그대로 화면에 나간다. RESERVED 가 그랬다.
+  // 모르는 것은 모른다고 적되, 비어 있다고는 하지 않는다.
+  const dStateInfo = STATE_TRANSLATION[dState] || { label: '사용 중 (확인 필요)', isFree: false };
+  const wStateInfo = STATE_TRANSLATION[wState] || { label: '사용 중 (확인 필요)', isFree: false };
 
   const dFluc = analyzeDynamicTimeFluctuation('dryer', dState, dTimer, cycleCount, dError);
   const wFluc = analyzeDynamicTimeFluctuation('washer', wState, wTimer, cycleCount, wError);
@@ -2152,7 +2163,8 @@ function getCompactContextSummary() {
     // 그대로 넘기면 AI 가 '쓰는 중' 인 줄 모르고 빈 기기라고 답한다.
     // 실제로 탈수 중인 4·5호기를 "모두 대기 중" 이라고 말한 적이 있다.
     // 화면에 쓰는 우리말 이름표를 그대로 쓰고, 앞에 '사용중' 을 붙인다.
-    const busyWord = st => `사용중(${(STATE_TRANSLATION[st] || {}).label || st}`;
+    // 처음 보는 상태라도 영어 코드를 AI 에게 넘기지 않는다.
+    const busyWord = st => `사용중(${(STATE_TRANSLATION[st] || {}).label || '확인 필요'}`;
 
     const wStr = wState === 'INITIAL'
       ? '세탁:사용중(코스만 고르고 시작 전 — 빨래가 들어 있을 수 있어 빈 기기가 아님)'

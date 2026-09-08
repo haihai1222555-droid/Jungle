@@ -135,7 +135,9 @@ STALE_PICKUP_SEC = int(os.environ.get('STALE_PICKUP_SEC') or 15 * 60)
 RUNNING_STATES = ('RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING')
 # DETECTING(무게 감지 중)은 방금 돌리기 시작한 것이다.
 # 이때는 남은 시간이 아직 0 이라 완료로 오해하기 쉽다.
-STARTED_STATES = RUNNING_STATES + ('DETECTING',)
+# RESERVED(예약)도 넣는다. 예약 시간이 다 되어 남은 시간이 0 이 되는 순간
+# '끝났다' 로 읽히면, 기계가 이제 막 돌기 시작하는데 완료 알림이 나간다.
+STARTED_STATES = RUNNING_STATES + ('DETECTING', 'RESERVED')
 
 # 구독 파일에 대한 읽기/쓰기를 직렬화한다 (워커 스레드와 요청 스레드가 동시에 접근)
 SUBS_LOCK = threading.Lock()

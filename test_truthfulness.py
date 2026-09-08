@@ -96,10 +96,28 @@ def test_not_finished():
     # 무게 감지 중에는 시간이 아직 0 으로 온다. 이때 완료로 보면 안 된다
     check("DETECTING 이 가동 중인가", "DETECTING" in started, True)
 
+    # 예약도 '시작한 상태' 다. 예약 시간이 다 되어 남은 시간이 0 이 되는 순간
+    # '끝났다' 로 읽히면, 기계가 이제 막 돌기 시작하는데 완료 알림이 나간다.
+    check("RESERVED 가 가동 중인가", "RESERVED" in started, True)
+
     # 모르는 상태는 '끝남' 목록에 없어야 한다
     finished_states = ("COMPLETE", "END", "POWER_OFF", "WRINKLE_CARE")
-    for st in ("UNKNOWN", "UNKNOWN_RUNNING"):
+    for st in ("UNKNOWN", "UNKNOWN_RUNNING", "RESERVED"):
         check("끝난 걸로 보나: %s" % st, st in finished_states, False)
+
+
+def test_unknown_states():
+    """처음 보는 상태가 와도 빈 기기로 세지 않고 영어가 그대로 안 나가는지.
+
+    RESERVED 가 실제로 그랬다. 코드 어디에도 없어서 화면에 영어가 나갔다.
+    LG 상태 이름은 앞으로도 더 나온다.
+    """
+    check("예약 이름표", bot.STATE_LABELS.get("RESERVED"), "예약 대기 중")
+    # END 도 이름표가 없어 영어가 그대로 화면에 나갔다
+    check("END 이름표 있나", bool(bot.STATE_LABELS.get("END")), True)
+    check("예약을 빈 걸로 세나", "RESERVED" in bot.FREE_STATES, False)
+    # 아예 모르는 이름이 와도 빈 기기가 아니어야 한다
+    check("모르는 상태를 빈 걸로 세나", "WHAT_IS_THIS" in bot.FREE_STATES, False)
 
 
 # =========================================================
@@ -149,7 +167,7 @@ def test_course_not_from_device():
 
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
-             test_device_log, test_course_not_from_device]
+             test_unknown_states, test_device_log, test_course_not_from_device]
     for t in tests:
         try:
             t()
