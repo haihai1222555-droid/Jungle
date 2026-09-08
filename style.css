@@ -4628,3 +4628,18 @@ body.light-theme .compact-card.is-active-dry  { border-color: #f59e0b; }
 @media (max-width: 768px) {
   .help-course-list { grid-template-columns: 1fr; }
 }
+
+
+/* AI 답변에 붙는 주간 식단표 사진.
+   새 색을 만들지 않는다. 말풍선 안에 들어가므로 그 색을 그대로 쓴다. */
+.menu-bubble { max-width: 100%; }
+.menu-img {
+  display: block;
+  width: 100%;
+  max-width: 520px;
+  height: auto;
+  border-radius: 10px;
+  margin: 6px 0 4px;
+}
+.menu-cap { font-size: 12.5px; font-weight: 700; margin-bottom: 4px; }
+.menu-src { font-size: 11px; opacity: 0.62; }

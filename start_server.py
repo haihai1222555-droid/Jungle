@@ -11,6 +11,7 @@ import threading
 import state_store
 import washtower
 import device_log
+import cafeteria
 import time
 from datetime import datetime, timedelta, timezone
 import base64
@@ -353,6 +354,13 @@ def background_push_worker():
             except Exception:
                 pass
 
+            # 식단은 10분에 한 번만 실제로 나간다 (안에서 시간을 잰다).
+            # 기기 상태를 못 받아온 때에도 식단은 확인해야 하므로 밖에 둔다.
+            try:
+                cafeteria.refresh()
+            except Exception as e:
+                print(f"[식단] 갱신 중 오류: {e}")
+
             subs = load_subscriptions()
             if not subs:
                 continue
@@ -669,6 +677,18 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
         # 지금처럼 막힌 키를 건너뛰며 차례로 시도할 수 있다.
         # 이 기기에 어떤 코스가 있는지. 목록은 washtower.py 한곳에만 있다.
         # (지금 무슨 코스로 도는지는 원본 API 가 주지 않아 알 수 없다)
+        # 식단표와 오늘 메뉴. 사진 주소는 카카오 것을 그대로 준다
+        # (우리가 다시 올리지 않는다. 저쪽이 고치면 같이 바뀌는 편이 맞다)
+        if req_path == '/api/menu':
+            data = cafeteria.state() or {}
+            self._json_out(200, {
+                "weekly": data.get("weekly"),
+                "today": cafeteria.today_menus(),
+                "updatedLabel": cafeteria.fmt_when(
+                    (data.get("weekly") or {}).get("updatedAt")),
+            })
+            return
+
         if req_path == '/api/courses':
             self._json_out(200, washtower.as_dict())
             return
@@ -1343,6 +1363,15 @@ def fill_kb(body, question, limit=None):
         text = ""
     if not text:
         text = "(안내 지식을 불러오지 못했습니다. 세탁실 관련만 답하세요.)"
+
+    # 오늘 메뉴를 함께 넣는다. 짧으므로 Groq 으로 갈 때도 그대로 넣는다.
+    # 사진 주소는 넣지 않는다. AI 가 주소를 지어내면 엉뚱한 사진이 나간다.
+    try:
+        menu = cafeteria.summary_for_ai()
+        if menu:
+            text = text + "\n\n" + menu
+    except Exception as e:
+        print(f"[식단] AI 에게 넘길 글을 만들지 못했습니다: {e}")
 
     raw = json.dumps(body, ensure_ascii=False)
     if KB_PLACEHOLDER not in raw:

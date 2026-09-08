@@ -19,6 +19,7 @@ from discord.ext import commands, tasks
 from PIL import Image, ImageDraw, ImageFont
 import washtower
 import device_log
+import cafeteria
 
 try:
     import jungle_kb
@@ -1049,6 +1050,7 @@ def build_info_embed(user_id=None):
             "`/내알림` · 걸어둔 알림 확인 · 해제\n"
             "`/세탁기` `/건조기` · 9대 현황 한눈에\n"
             "`/코스` · 이 기기에 어떤 세탁·건조 코스가 있는지\n"
+            "`/식단` · 이번 주 식단표와 오늘 메뉴\n"
             "`/비서` · 말로 걸기 (예: 3번 건조기 알림 걸어줘)\n"
             "`/버그` · 버그 제보 · 개선 제안\n"
             "`/알림테스트` · 알림이 잘 오는지 지금 확인\n"
@@ -2074,6 +2076,16 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
 
     kb_text = jungle_kb.build_context(text, limit=kb_limit) if jungle_kb else ""
 
+    # 오늘 메뉴를 함께 넣는다. 짧아서 Groq 으로 갈 때도 부담이 없다.
+    # 사진 주소는 넣지 않는다. AI 가 주소를 지어내면 엉뚱한 사진이 나간다.
+    # 사진은 /식단 명령이 직접 붙인다.
+    try:
+        _menu = cafeteria.summary_for_ai()
+        if _menu:
+            kb_text = (kb_text + "\n\n" + _menu) if kb_text else _menu
+    except Exception as e:
+        print(f"[식단] 지시문에 넣지 못했습니다: {e}")
+
     if admin:
         # 운영자가 시험 중이다. 주제 제한을 풀고 무엇이든 답하게 한다.
         # 탈옥 방어(절대 규칙)도 이때만 빠진다. 다른 사람에게는 그대로 적용된다.
@@ -3085,6 +3097,49 @@ async def cmd_report(interaction: discord.Interaction):
         "무엇을 남기시겠어요?\n"
         "-# \U0001f41e 잘못 동작하는 것 · \U0001f4a1 있으면 좋겠는 기능",
         view=ReportKindView(), ephemeral=True)
+
+
+@bot.tree.command(name="식단", description="이번 주 식단표와 오늘 메뉴를 봅니다.")
+async def cmd_menu(interaction: discord.Interaction):
+    data = await asyncio.to_thread(cafeteria.state)
+    if not data:
+        await interaction.response.send_message(
+            "\U0001f37d\ufe0f 아직 식단을 가져오지 못했어요. 잠시 후 다시 시도해 주세요.",
+            ephemeral=True)
+        return
+
+    weekly = data.get("weekly") or {}
+    todays = await asyncio.to_thread(cafeteria.today_menus)
+    now = now_kst()
+
+    emb = discord.Embed(title="\U0001f371 정글 식당", color=0x22C55E)
+
+    if todays:
+        order = {"조식": 0, "중식": 1, "석식": 2}
+        for d in sorted(todays, key=lambda x: order.get(x["meal"], 9)):
+            emb.add_field(
+                name=f"{d['meal']} ({now.month}월 {now.day}일)",
+                value=(d["text"] or "메뉴 글이 없어요. 식단표 사진을 봐 주세요.")
+                      .replace(",", " · ")[:1020],
+                inline=False)
+    else:
+        emb.add_field(
+            name=f"오늘 ({now.month}월 {now.day}일) 메뉴",
+            value="아직 안 올라왔어요. 보통 점심은 11시쯤, 저녁은 17시쯤 올라옵니다.",
+            inline=False)
+
+    if weekly.get("image"):
+        emb.set_image(url=weekly["image"])
+        # 제목의 'N주차' 는 식당 쪽 표기라 실제 주와 다를 수 있다.
+        # 그래서 주차 대신 '언제 갱신됐는지' 를 적는다. 날짜는 사진 안에 있다.
+        emb.add_field(
+            name="\U0001f4c5 주간 식단표",
+            value=(f"{cafeteria.fmt_when(weekly.get('updatedAt'))} 갱신\n"
+                   f"[카카오 채널에서 보기]({weekly.get('link')})"),
+            inline=False)
+
+    emb.set_footer(text="출처: 카카오톡 채널 '정글 Cafeteria, Grab&Go' · 10분마다 확인합니다")
+    await interaction.response.send_message(embed=emb, ephemeral=True)
 
 
 @bot.tree.command(name="코스", description="이 기기에 어떤 세탁·건조 코스가 있는지 봅니다.")

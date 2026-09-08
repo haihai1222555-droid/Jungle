@@ -2667,6 +2667,51 @@ ${KB_PLACEHOLDER}
   fallbackLocalNlp(q);
 }
 
+// =========================================================
+// 식단표 사진 붙이기
+// ---------------------------------------------------------
+// AI 가 만든 글은 escape 해서 그리므로(탈옥 방어) AI 는 사진을 못 넣는다.
+// 그래야 맞다. 사진은 여기서 코드가 직접 붙인다.
+//
+// 주소는 서버(/api/menu)에서 받은 것만 쓴다. AI 가 말한 주소는 쓰지 않는다.
+// 지어낸 주소로 엉뚱한 사진이 나가면 안 된다.
+// =========================================================
+const MENU_WORDS = /식단|메뉴|밥|점심|저녁|아침|중식|석식|조식|먹을|먹지|뭐먹|식당|카페테리아/;
+
+async function maybeAppendMenuImage(question) {
+  if (!MENU_WORDS.test((question || '').replace(/\s/g, ''))) return;
+
+  let m = null;
+  try {
+    const r = await fetch('/api/menu');
+    if (r.ok) m = await r.json();
+  } catch (e) {}
+  const weekly = m && m.weekly;
+  if (!weekly || !weekly.image) return;
+
+  const chatBox = document.getElementById('aiChatBox');
+  if (!chatBox) return;
+
+  const el = document.createElement('div');
+  el.className = 'chat-message ai-msg';
+  // 주차 대신 '언제 갱신됐는지' 를 적는다. 제목의 N주차는 식당 쪽 표기라
+  // 실제 주와 다를 수 있고, 진짜 날짜는 사진 안에 찍혀 있다.
+  el.innerHTML =
+      '<div class="msg-bubble menu-bubble">'
+    + '<div class="menu-cap">🍱 주간 식단표 · ' + escapeHtml(m.updatedLabel || '') + ' 갱신</div>'
+    + '<a href="' + encodeURI(weekly.link || weekly.image) + '" target="_blank" rel="noopener noreferrer">'
+    // loading="lazy" 는 쓰지 않는다. 채팅창은 스크롤 컨테이너라, 붙는 순간
+    // 높이가 0 이면 브라우저가 '아직 안 보인다' 고 판정해 영영 안 불러온다.
+    // referrerpolicy 는 카카오가 나중에 외부 링크를 막을 때를 대비한 것이다.
+    + '<img class="menu-img" src="' + encodeURI(weekly.image)
+    + '" alt="주간 식단표" referrerpolicy="no-referrer">'
+    + '</a>'
+    + '<div class="menu-src">출처: 카카오톡 채널 · 눌러서 크게 보기</div>'
+    + '</div>';
+  chatBox.appendChild(el);
+  chatBox.scrollTop = chatBox.scrollHeight;
+}
+
 function jsonString(obj) {
   return JSON.stringify(obj);
 }
@@ -2920,7 +2965,7 @@ document.addEventListener('click', (e) => {
   if (chip) {
     const text = chip.dataset.prompt;
     if (text) {
-      processNaturalLanguageQuery(text);
+      processNaturalLanguageQuery(text).then(() => maybeAppendMenuImage(text));
     }
   }
 });
@@ -2934,7 +2979,7 @@ if (aiForm && aiInput) {
     e.preventDefault();
     const text = aiInput.value.trim();
     if (text) {
-      processNaturalLanguageQuery(text);
+      processNaturalLanguageQuery(text).then(() => maybeAppendMenuImage(text));
       aiInput.value = '';
     }
   };
@@ -2958,7 +3003,7 @@ if (btnVoiceMic) {
       const transcript = event.results[0][0].transcript;
       aiInput.value = transcript;
       btnVoiceMic.classList.remove('listening');
-      processNaturalLanguageQuery(transcript);
+      processNaturalLanguageQuery(transcript).then(() => maybeAppendMenuImage(transcript));
     };
 
     recognition.onerror = () => {

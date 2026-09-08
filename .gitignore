@@ -47,3 +47,6 @@ assets/*.webp
 assets/*.png
 assets/*.jpg
 assets/README.md
+
+# 식당 카카오 채널에서 가져온 식단 (서버에만 둔다)
+cafeteria.json
