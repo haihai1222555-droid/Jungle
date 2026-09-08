@@ -431,7 +431,19 @@ async function loadDashboardData() {
     const now = new Date();
     syncTime.textContent = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
     liveDot.style.background = '#00e87a';
-    statusText.textContent = '실시간 동기화 완료';
+
+    // 값이 실제로 몇 분 전 것인지 적는다.
+    // 원본 서버가 LG 를 5분에 한 번만 확인하므로, 우리가 아무리 자주
+    // 가져와도 값은 그보다 새로울 수 없다. '실시간' 이라고 적으면
+    // 기다리는 사람이 '왜 안 바뀌지' 하고 새로고침만 반복하게 된다.
+    const srcAge = parseInt(statusRes.headers.get('X-Source-Age') || '', 10);
+    if (Number.isFinite(srcAge)) {
+      const m = Math.floor(srcAge / 60);
+      statusText.textContent = m < 1 ? '방금 들어온 값'
+                             : `${m}분 전 값 (기기는 5분마다 알려줍니다)`;
+    } else {
+      statusText.textContent = '동기화 완료';
+    }
 
   } catch (err) {
     console.warn('API 연결 실패:', err);

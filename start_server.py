@@ -81,6 +81,15 @@ if HAS_WEBPUSH:
 
 CACHED_STATUS = {}
 CACHED_STATUS_AT = 0.0     # 마지막으로 받아온 시각
+
+# 원본이 LG 를 마지막으로 확인한 시각. 우리가 얼마나 자주 가져오든
+# 값 자체는 이보다 새로울 수 없다. 원본이 /api/health 로 알려준다.
+SOURCE_UPDATED_AT = 0.0    # epoch 초. 모르면 0
+SOURCE_INTERVAL = ""       # 원본이 말하는 갱신 주기 (예: "300초 (작동 중)")
+# 위 문장에서 숫자만 뽑아 둔 것. HTTP 머리말은 latin-1 만 실을 수 있어서
+# 한글이 든 문장을 그대로 넣으면 응답이 터진다. 머리말에는 이것을 쓴다.
+SOURCE_INTERVAL_SEC = 0
+_SOURCE_CHECKED = 0.0
 # 미리 만들어 둔 응답 본문. 요청마다 json.dumps 를 다시 도는 것은 낭비다.
 # 200명이 동시에 볼 때는 이 직렬화 비용이 그대로 지연으로 나타난다.
 CACHED_STATUS_BODY = b'{}'
@@ -353,6 +362,13 @@ def background_push_worker():
                     CACHED_STATUS_AT = time.time()
                     record_congestion_sample(CACHED_STATUS)
                     record_device_events(CACHED_STATUS)
+            except Exception:
+                pass
+
+            # 원본이 언제 갱신했는지 1분에 한 번 물어본다.
+            # 매번 물을 이유는 없다. 어차피 원본은 5분에 한 번 움직인다.
+            try:
+                refresh_source_age()
             except Exception:
                 pass
 
@@ -664,6 +680,10 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 "store": state_store.store_enabled(),
                 # 나가면 안 되는 파일이 나가고 있지 않은지. 밖에서도 보이게 둔다.
                 "exposure": EXPOSURE_STATUS,
+                # 원본이 LG 를 마지막으로 본 지 몇 초 됐는지.
+                # 우리가 아무리 자주 가져와도 값은 이보다 새로울 수 없다.
+                "sourceAgeSec": source_age_sec(),
+                "sourceInterval": SOURCE_INTERVAL,
                 **discord_bot_health(),
             }, ensure_ascii=False).encode('utf-8'))
             return
@@ -717,6 +737,18 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             age = int(time.time() - CACHED_STATUS_AT)
             body = CACHED_STATUS_BODY
             self.send_response(200)
+            # 값이 실제로 몇 초 묵었는지. 본문 모양은 그대로 두고 머리말로 보낸다
+            # (본문은 원본이 준 것 그대로여야 다른 코드가 안 깨진다).
+            # X-Cache-Age 는 '우리가 받아온 지' 이고, 이것은 '원본이 LG 를 본 지' 다.
+            # 우리가 아무리 자주 가져와도 값은 이보다 새로울 수 없다.
+            # 머리말에는 숫자만 넣는다. HTTP 머리말은 latin-1 만 실을 수 있어서
+            # "300초 (작동 중)" 같은 한글을 그대로 넣으면 응답이 통째로 터진다.
+            # 실제로 그렇게 해서 /api/status 가 전부 502 가 됐다.
+            _src = source_age_sec()
+            if _src is not None:
+                self.send_header('X-Source-Age', str(_src))
+            if SOURCE_INTERVAL_SEC:
+                self.send_header('X-Source-Interval', str(SOURCE_INTERVAL_SEC))
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
             self.send_header('X-Cache-Age', str(age))
@@ -1271,6 +1303,43 @@ def report_allowed(who):
                 _REPORT_LAST.pop(k, None)
     return True
 
+
+
+def refresh_source_age():
+    """원본이 LG 를 마지막으로 확인한 시각을 받아 둔다.
+
+    화면에 '실시간' 이라고 적어 두었지만 사실이 아니다. 원본이 5분에
+    한 번만 확인하므로 값은 최대 5분 묵은 것이다. 사실대로 적으려면
+    원본이 언제 봤는지를 알아야 한다.
+    """
+    global SOURCE_UPDATED_AT, SOURCE_INTERVAL, _SOURCE_CHECKED
+    now = time.time()
+    if now - _SOURCE_CHECKED < 60:
+        return
+    _SOURCE_CHECKED = now
+    req = urllib.request.Request(f"{TARGET_BASE}/api/health",
+                                 headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=5) as res:
+        d = json.loads(res.read().decode('utf-8'))
+    raw = d.get("last_update")
+    if raw:
+        # "2026-09-08 13:48:30.369750" — 원본 서버의 지역 시각(KST)이다
+        try:
+            t = datetime.strptime(str(raw)[:19], "%Y-%m-%d %H:%M:%S")
+            SOURCE_UPDATED_AT = t.replace(tzinfo=KST).timestamp()
+        except Exception:
+            pass
+    global SOURCE_INTERVAL_SEC
+    SOURCE_INTERVAL = str(d.get("current_interval") or "")
+    m = re.search(r"(\d+)", SOURCE_INTERVAL)
+    SOURCE_INTERVAL_SEC = int(m.group(1)) if m else 0
+
+
+def source_age_sec():
+    """원본 값이 몇 초 묵었는지. 모르면 None."""
+    if not SOURCE_UPDATED_AT:
+        return None
+    return max(0, int(time.time() - SOURCE_UPDATED_AT))
 
 
 def record_device_events(status):
