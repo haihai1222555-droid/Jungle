@@ -385,6 +385,12 @@ async def push_menu_alarms():
     fresh = await asyncio.to_thread(cafeteria.new_posts)
     if not fresh:
         return
+    if len(fresh) > cafeteria.MAX_BURST:
+        # 정상이라면 한 바퀴에 한두 개다. 이보다 많으면 무언가 잘못된 것이고,
+        # 그럴 때 쏟아붓는 것보다 조용한 편이 낫다. 표시는 이미 남았다.
+        print(f"[식단알림] 한 번에 {len(fresh)}개가 새 글로 잡혔습니다. "
+              "무언가 잘못된 것 같아 보내지 않았습니다.")
+        return
     if not subs:
         # 신청자가 없어도 '이미 봤다' 는 표시는 남는다(new_posts 안에서).
         # 나중에 신청한 사람에게 지난 메뉴가 몰려가지 않게 하려는 것이다.
@@ -1769,6 +1775,26 @@ def tower_has_data(status_data, tower_name):
     return isinstance(d, dict) and bool(d)
 
 
+def _mins(timer):
+    """남은 시간을 분으로. 숫자가 아니면 0 으로 본다.
+
+    원본이 늘 숫자를 준다는 보장이 없다. 문자열이 한 번이라도 오면
+    곱셈에서 터지고, 그 자리가 알림 루프 한가운데라 알림이 통째로 멈춘다.
+    모르면 0 으로 두되, 그것만으로 '비었다' 가 되지는 않는다.
+    상태(runState)를 따로 보기 때문이다.
+    """
+    t = timer if isinstance(timer, dict) else {}
+    out = 0
+    for k in ("remainHour", "remainMinute"):
+        v = t.get(k)
+        try:
+            v = int(v)
+        except (TypeError, ValueError):
+            v = 0
+        out += v * (60 if k == "remainHour" else 1)
+    return out
+
+
 def unit_state(unit):
     """이 기기가 지금 무엇을 하는지. 상태가 안 왔으면 지어내지 않는다.
 
@@ -1785,9 +1811,7 @@ def unit_state(unit):
     state = (unit.get("runState") or {}).get("currentState")
     if state:
         return state
-    timer = unit.get("timer") or {}
-    remain = (timer.get("remainHour") or 0) * 60 + (timer.get("remainMinute") or 0)
-    return "UNKNOWN_RUNNING" if remain > 0 else "UNKNOWN"
+    return "UNKNOWN_RUNNING" if _mins(unit.get("timer")) > 0 else "UNKNOWN"
 
 
 def find_unit(status_data, tower_id, unit_type):

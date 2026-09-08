@@ -52,6 +52,35 @@ CASES = [
 ]
 
 
+def test_no_flood():
+    """알림이 한꺼번에 쏟아지지 않는지.
+
+    카카오에서 못 받아온 상태에서 '이미 다 봤다' 고 저장해 버리면,
+    다음에 제대로 받아왔을 때 아홉 개가 전부 새 글이 되어
+    신청자 전원에게 한꺼번에 나간다.
+    """
+    fails = []
+    saved_cache, saved_seen = cf._CACHE, cf._SEEN
+    try:
+        # 못 받아온 상태에서는 표시를 남기지 않아야 한다
+        cf._CACHE = {"weekly": None, "daily": [], "fetchedAt": 0}
+        cf._SEEN = None
+        got = cf.new_posts(mark=True)
+        if got != []:
+            fails.append("못 받아왔는데 새 글을 돌려줌: %r" % got)
+        if cf._SEEN is not None:
+            fails.append("못 받아왔는데 '이미 봤다' 고 저장함: %r" % cf._SEEN)
+
+        # 한 번에 보낼 수 있는 수에 상한이 있어야 한다
+        if not isinstance(getattr(cf, "MAX_BURST", None), int):
+            fails.append("MAX_BURST 가 없다 (쏟아짐 상한)")
+        elif cf.MAX_BURST > 5:
+            fails.append("MAX_BURST 가 너무 크다: %d" % cf.MAX_BURST)
+    finally:
+        cf._CACHE, cf._SEEN = saved_cache, saved_seen
+    return fails
+
+
 def main():
     bad = []
     for title, pinned, want in CASES:
@@ -59,7 +88,10 @@ def main():
         if got != want:
             bad.append((title, pinned, want, got))
 
-    print("급식 공지 가려내기 — %d개 확인" % len(CASES))
+    for msg in test_no_flood():
+        bad.append((msg, "-", "-", "-"))
+
+    print("급식 공지 가려내기 %d가지 + 알림 쏟아짐 방지" % len(CASES))
     for title, pinned, want, got in bad:
         print("  틀림: %r (고정=%s) → %s (%s 여야 함)" % (title, pinned, got, want))
 

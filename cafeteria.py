@@ -121,7 +121,14 @@ def _text_of(item):
 def parse(raw):
     """받은 것을 우리가 쓰는 모양으로 간추린다."""
     weekly, daily = None, []
-    for it in (raw.get("items") or []):
+    items = raw.get("items") if isinstance(raw, dict) else None
+    if not isinstance(items, list):
+        # 모양이 다르면 아무것도 못 읽은 것으로 본다.
+        # 억지로 읽다 터지면 5초 루프가 통째로 멈춘다.
+        return {"weekly": None, "daily": [], "fetchedAt": time.time()}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
         title = (it.get("title") or "").strip()
         img = _pick_image(it)
         # 갱신 시각이 있으면 그것이 진짜다. 없으면 올린 시각.
@@ -253,6 +260,9 @@ def local_weekly_image(dirpath):
 
 
 SEEN_NAME = "cafeteria_seen"     # 이미 알린 글 번호
+# 한 번에 이보다 많이 나오면 무언가 잘못된 것이다. 그럴 때 쏟아붓지 않는다.
+# 정상이라면 한 바퀴에 한두 개다(점심 글 하나, 저녁 글 하나).
+MAX_BURST = 3
 _SEEN = None
 
 
@@ -279,6 +289,12 @@ def new_posts(mark=True):
         # 주간 식단표는 같은 글을 계속 다시 쓰신다. 글 번호는 그대로이고
         # 사진만 바뀐다. 그래서 사진 주소를 표시로 삼는다.
         ids.append("weekly:" + w["image"])
+
+    if not ids:
+        # 아직 못 받아왔다. 이때 '이미 다 봤다' 고 저장하면 안 된다.
+        # 빈 목록을 저장해 두면 다음에 제대로 받아왔을 때 아홉 개가 전부
+        # 새 글이 되어 신청자 전원에게 한꺼번에 나간다.
+        return []
 
     before = _seen()
     if before is None:                      # 처음이다

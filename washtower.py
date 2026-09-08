@@ -75,8 +75,15 @@ def total_minutes(unit):
     """
     if not isinstance(unit, dict):
         return 0
-    t = unit.get("timer") or {}
-    return (t.get("totalHour") or 0) * 60 + (t.get("totalMinute") or 0)
+    t = unit.get("timer")
+    t = t if isinstance(t, dict) else {}
+    out = 0
+    for k, mul in (("totalHour", 60), ("totalMinute", 1)):
+        try:
+            out += int(t.get(k)) * mul
+        except (TypeError, ValueError):
+            pass          # 숫자가 아니면 없는 것으로 본다. 지어내지 않는다.
+    return out
 
 
 def format_minutes(m):

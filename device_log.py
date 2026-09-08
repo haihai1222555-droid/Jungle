@@ -95,6 +95,9 @@ def reason_of(event, error_code, by_error=None, held=None):
     멀쩡히 돌다가 멈췄으면 사람이 버튼을 누른 것이다.
     기기가 알려준 것은 아니지만 상태 변화로 알 수 있는 것이라 적어 둔다.
     """
+    # 에러 코드가 문자열이 아닐 수도 있다. dict 가 오면 사전 조회에서 터진다.
+    if error_code is not None and not isinstance(error_code, str):
+        error_code = str(error_code)
     if event in ("error", "error_cleared"):
         if error_code:
             return ERROR_SHORT.get(error_code, "에러 코드 %s" % error_code)
@@ -144,6 +147,9 @@ def _snapshot(unit, state):
     err = None
     if isinstance(unit, dict):
         err = unit.get("error") or None
+        # 문자열이 아니면 사전 조회와 비교에서 문제가 된다. 글로 바꿔 둔다.
+        if err is not None and not isinstance(err, str):
+            err = str(err)
     return {
         "state": state,
         "error": err,

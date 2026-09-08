@@ -2704,6 +2704,14 @@ async function maybeAppendMenuImage(question) {
   const chatBox = document.getElementById('aiChatBox');
   if (!chatBox) return;
 
+  // 카카오가 준 주소를 그대로 링크로 만들지 않는다.
+  // https:// 로 시작하는 것만 쓴다. <a href> 는 javascript: 주소를 누르면
+  // 실행되기 때문이다(<img src> 는 실행되지 않지만 href 는 된다).
+  const safeUrl = u => (typeof u === 'string' && /^https:\/\//.test(u)) ? encodeURI(u) : '';
+  const imgUrl = safeUrl(weekly.image);
+  const linkUrl = safeUrl(weekly.link) || imgUrl;
+  if (!imgUrl) return;          // 주소가 이상하면 아예 안 붙인다
+
   const el = document.createElement('div');
   el.className = 'chat-message ai-msg';
   // 주차 대신 '언제 갱신됐는지' 를 적는다. 제목의 N주차는 식당 쪽 표기라
@@ -2711,11 +2719,11 @@ async function maybeAppendMenuImage(question) {
   el.innerHTML =
       '<div class="msg-bubble menu-bubble">'
     + '<div class="menu-cap">🍱 주간 식단표 · ' + escapeHtml(m.updatedLabel || '') + ' 갱신</div>'
-    + '<a href="' + encodeURI(weekly.link || weekly.image) + '" target="_blank" rel="noopener noreferrer">'
+    + '<a href="' + linkUrl + '" target="_blank" rel="noopener noreferrer">'
     // loading="lazy" 는 쓰지 않는다. 채팅창은 스크롤 컨테이너라, 붙는 순간
     // 높이가 0 이면 브라우저가 '아직 안 보인다' 고 판정해 영영 안 불러온다.
     // referrerpolicy 는 카카오가 나중에 외부 링크를 막을 때를 대비한 것이다.
-    + '<img class="menu-img" src="' + encodeURI(weekly.image)
+    + '<img class="menu-img" src="' + imgUrl
     + '" alt="주간 식단표" referrerpolicy="no-referrer">'
     + '</a>'
     + '<div class="menu-src">출처: 카카오톡 채널 · 눌러서 크게 보기</div>'
