@@ -334,6 +334,80 @@ def format_report(item, index=None):
     return "\n".join(lines)
 
 
+# =========================================================
+# 식단 알림 신청자
+# ---------------------------------------------------------
+# 신청한 사람에게만 보낸다. 하루 두 번 강제로 울리면 알림을 꺼 버린다.
+# =========================================================
+MENU_SUBS = set()
+_MENU_SUBS_LOADED = False
+
+
+def load_menu_subs():
+    global MENU_SUBS, _MENU_SUBS_LOADED
+    if not _MENU_SUBS_LOADED:
+        v = state_load("menu_subs", [])
+        MENU_SUBS = {str(x) for x in v} if isinstance(v, list) else set()
+        _MENU_SUBS_LOADED = True
+    return MENU_SUBS
+
+
+def save_menu_subs():
+    state_save("menu_subs", sorted(MENU_SUBS))
+
+
+def menu_embed(kind, item):
+    """알림으로 보낼 내용."""
+    if kind == "weekly":
+        emb = discord.Embed(
+            title="\U0001f4c5 이번 주 식단표가 올라왔어요",
+            description="%s 갱신" % cafeteria.fmt_when(item.get("updatedAt")),
+            color=0x22C55E)
+        if item.get("image"):
+            emb.set_image(url=item["image"])
+        return emb
+
+    emb = discord.Embed(
+        title="\U0001f371 %s" % item.get("title", "메뉴"),
+        description=(item.get("text") or "메뉴 글이 없어요. 식단표를 봐 주세요.")
+                    .replace(",", " · ")[:2000],
+        color=0x22C55E)
+    return emb
+
+
+async def push_menu_alarms():
+    """새로 올라온 급식 글을 신청자에게 보낸다.
+
+    급식으로 확실히 가른 것만 보낸다. 같은 채널에 Grab&Go 공지가 섞여 있어서,
+    잘못 가르면 "점심 메뉴 나왔어요" 하고 굿즈 판매 공지를 보내게 된다.
+    """
+    subs = load_menu_subs()
+    fresh = await asyncio.to_thread(cafeteria.new_posts)
+    if not fresh:
+        return
+    if not subs:
+        # 신청자가 없어도 '이미 봤다' 는 표시는 남는다(new_posts 안에서).
+        # 나중에 신청한 사람에게 지난 메뉴가 몰려가지 않게 하려는 것이다.
+        print(f"[식단알림] 새 글 {len(fresh)}개 — 신청자가 없어 보내지 않았습니다.")
+        return
+
+    for f in fresh:
+        emb = menu_embed(f["kind"], f["item"])
+        emb.set_footer(text="식단 알림 · /식단알림 으로 끌 수 있어요")
+        sent = 0
+        for uid in list(subs):
+            try:
+                user = await resolve_user(int(uid))
+                if not user:
+                    continue
+                await user.send(embed=emb)
+                sent += 1
+            except Exception as e:
+                print(f"[식단알림] DM 실패({uid}): {e}")
+            await asyncio.sleep(0.3)      # 한꺼번에 쏟지 않는다
+        print(f"[식단알림] {f['kind']} 알림을 {sent}명에게 보냈습니다.")
+
+
 async def notify_admins_report(item):
     """관리자에게 DM 으로 알린다.
 
@@ -1051,6 +1125,7 @@ def build_info_embed(user_id=None):
             "`/세탁기` `/건조기` · 9대 현황 한눈에\n"
             "`/코스` · 이 기기에 어떤 세탁·건조 코스가 있는지\n"
             "`/식단` · 이번 주 식단표와 오늘 메뉴\n"
+            "`/식단알림` · 메뉴 올라오면 DM 으로 받기 (켜고 끄기)\n"
             "`/비서` · 말로 걸기 (예: 3번 건조기 알림 걸어줘)\n"
             "`/버그` · 버그 제보 · 개선 제안\n"
             "`/알림테스트` · 알림이 잘 오는지 지금 확인\n"
@@ -3116,6 +3191,29 @@ async def cmd_report(interaction: discord.Interaction):
         view=ReportKindView(), ephemeral=True)
 
 
+@bot.tree.command(
+    name="식단알림",
+    description="메뉴가 올라오면 DM 으로 알려드릴지 켜고 끕니다.")
+async def cmd_menu_alarm(interaction: discord.Interaction):
+    subs = await asyncio.to_thread(load_menu_subs)
+    uid = str(interaction.user.id)
+    if uid in subs:
+        subs.discard(uid)
+        await asyncio.to_thread(save_menu_subs)
+        await interaction.response.send_message(
+            "\U0001f515 식단 알림을 껐어요. 다시 켜려면 `/식단알림` 을 한 번 더 눌러주세요.",
+            ephemeral=True)
+        return
+    subs.add(uid)
+    await asyncio.to_thread(save_menu_subs)
+    await interaction.response.send_message(
+        "\U0001f371 식단 알림을 켰어요!\n"
+        "-# 점심·저녁 메뉴가 올라오면 DM 으로 보내드려요 "
+        "(보통 점심 11시쯤, 저녁 17시쯤).\n"
+        "-# 그랩앤고 같은 다른 공지는 보내지 않아요. 끄려면 `/식단알림` 을 다시 누르세요.",
+        ephemeral=True)
+
+
 @bot.tree.command(name="식단", description="이번 주 식단표와 오늘 메뉴를 봅니다.")
 async def cmd_menu(interaction: discord.Interaction):
     data = await asyncio.to_thread(cafeteria.state)
@@ -3567,6 +3665,19 @@ def _presence_alarms():
     if not active_alarms:
         return None
     return f"알림 {len(active_alarms)}개 지켜보는 중..."
+
+
+@tasks.loop(minutes=5)
+async def watch_menu():
+    """새 급식 글이 올라왔는지 본다.
+
+    가져오는 일 자체는 웹 서버가 10분마다 한다. 여기서는 그 결과만 본다.
+    5분마다 보므로 늦어도 그 사이에는 나간다.
+    """
+    try:
+        await push_menu_alarms()
+    except Exception as e:
+        print(f"[식단알림] 확인 중 오류: {e}")
 
 
 @tasks.loop(seconds=30)
@@ -4021,6 +4132,10 @@ async def on_ready():
 
     if not rotate_presence.is_running():
         rotate_presence.start()
+
+    if not watch_menu.is_running():
+        watch_menu.start()
+        print("🍱 [식단] 5분 주기 메뉴 공지 확인 시작")
 
     if not check_laundry_alarms.is_running():
         check_laundry_alarms.start()

@@ -45,8 +45,46 @@ STORE_NAME = "cafeteria"
 # 글이 식사 한참 전에 올라오므로 10분이면 늦을 일이 없다.
 REFRESH_SEC = 600
 
-# "9월 7일(월) 중식 메뉴" 같은 제목에서 날짜와 끼니를 뽑는다
-_DAILY = re.compile(r"(\d{1,2})\s*월\s*(\d{1,2})\s*일.*?(조식|중식|석식|점심|저녁|아침)")
+# =========================================================
+# 급식 공지 가려내기
+# ---------------------------------------------------------
+# 이 채널에는 급식 공지와 Grab&Go(카페) 공지가 섞여 올라온다.
+# 잘못 가르면 알림 기능이 통째로 무의미해진다.
+#
+# 함정이 실제로 있다. "그랩앤고(카페) 여름 시즌 신메뉴 출시 안내" —
+# '메뉴' 가 들어 있지만 급식이 아니다. '메뉴' 만 보면 바로 걸린다.
+# =========================================================
+
+# 이 말이 제목에 있으면 급식이 아니다. 날짜가 붙어 있어도 아니다.
+_NOT_CAFETERIA = re.compile(
+    r"그랩앤고|그랩\s*앤\s*고|grab|카페|굿즈|페이코|payco|"
+    r"채널\s*안내|이용\s*안내|가입\s*안내|이벤트|쿠폰|할인", re.I)
+
+# "9월 7일(월) 중식 메뉴" 에서 날짜와 끼니를 뽑는다.
+# '중식당' 은 끼니가 아니라 가게 종류다. 뒤에 '당' 이 오면 빼야 한다.
+_DAILY = re.compile(
+    r"(\d{1,2})\s*월\s*(\d{1,2})\s*일.*?(조식|중식|석식|점심|저녁|아침)(?!당)")
+
+# 고정된 주간 식단표
+_WEEKLY = re.compile(r"식단표|메뉴표|주간\s*메뉴|주간\s*식단")
+
+
+def classify(title, pinned=False):
+    """이 글이 무엇인지. 'daily' · 'weekly' · 'other'.
+
+    애매하면 'other'. 알림은 daily·weekly 만 보낸다.
+    놓치는 것보다 엉뚱한 것을 보내는 쪽이 더 나쁘다.
+    """
+    t = (title or "").strip()
+    if not t:
+        return "other"
+    if _NOT_CAFETERIA.search(t):
+        return "other"
+    if _DAILY.search(t):
+        return "daily"
+    if pinned and _WEEKLY.search(t):
+        return "weekly"
+    return "other"
 
 _LOCK = threading.Lock()
 _CACHE = None             # 마지막으로 성공한 결과
@@ -89,11 +127,13 @@ def parse(raw):
         # 갱신 시각이 있으면 그것이 진짜다. 없으면 올린 시각.
         when = it.get("updated_at") or it.get("published_at") or it.get("created_at") or 0
 
-        m = _DAILY.search(title)
+        kind = classify(title, it.get("pinned"))
+        m = _DAILY.search(title) if kind == "daily" else None
         if m:
             month, day, meal = int(m.group(1)), int(m.group(2)), m.group(3)
             meal = {"점심": "중식", "저녁": "석식", "아침": "조식"}.get(meal, meal)
             daily.append({
+                "id": it.get("id"),
                 "title": title,
                 "month": month, "day": day, "meal": meal,
                 "text": _text_of(it),
@@ -103,8 +143,8 @@ def parse(raw):
             })
             continue
 
-        # 고정된 글이면서 식단표로 보이는 것
-        if it.get("pinned") and img and re.search(r"식단|메뉴표|주간", title):
+        # 고정된 주간 식단표
+        if kind == "weekly" and img:
             weekly = {
                 "title": title,
                 "image": img,
@@ -210,6 +250,62 @@ def local_weekly_image(dirpath):
         return _IMG_CACHE[1] if _IMG_CACHE and os.path.exists(_IMG_CACHE[1]) else None
     _IMG_CACHE = (url, path)
     return path
+
+
+SEEN_NAME = "cafeteria_seen"     # 이미 알린 글 번호
+_SEEN = None
+
+
+def _seen():
+    global _SEEN
+    if _SEEN is None:
+        v = state_store.state_load(SEEN_NAME, None)
+        _SEEN = list(v) if isinstance(v, list) else None
+    return _SEEN
+
+
+def new_posts(mark=True):
+    """지난번에 본 뒤 새로 올라온 급식 글. 없으면 빈 목록.
+
+    처음 켤 때는 아무것도 돌려주지 않는다. 그때 있는 것을 전부 '이미 본 것'
+    으로 표시만 한다. 안 그러면 서버를 다시 띄울 때마다 지난 메뉴가 쏟아진다.
+    """
+    data = state() or {}
+    items = list(data.get("daily") or [])
+    w = data.get("weekly") or {}
+
+    ids = [d.get("id") for d in items if d.get("id")]
+    if w.get("image"):
+        # 주간 식단표는 같은 글을 계속 다시 쓰신다. 글 번호는 그대로이고
+        # 사진만 바뀐다. 그래서 사진 주소를 표시로 삼는다.
+        ids.append("weekly:" + w["image"])
+
+    before = _seen()
+    if before is None:                      # 처음이다
+        if mark:
+            _remember(ids)
+        return []
+
+    fresh = [i for i in ids if i not in before]
+    if not fresh:
+        return []
+    if mark:
+        _remember(before + fresh)
+
+    out = []
+    for d in items:
+        if d.get("id") in fresh:
+            out.append({"kind": "daily", "item": d})
+    if w.get("image") and ("weekly:" + w["image"]) in fresh:
+        out.append({"kind": "weekly", "item": w})
+    return out
+
+
+def _remember(ids):
+    """이미 알린 글 번호를 남긴다. 무한정 쌓이지 않게 최근 것만."""
+    global _SEEN
+    _SEEN = list(ids)[-200:]
+    state_store.state_save(SEEN_NAME, _SEEN)
 
 
 def summary_for_ai():
