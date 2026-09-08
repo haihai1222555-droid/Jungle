@@ -227,6 +227,26 @@ def weekly():
 FOOD_WORDS = re.compile(
     "식단|메뉴|밥|점심|저녁|아침|중식|석식|조식|먹을|먹지|뭐먹|식당|카페테리아|급식")
 
+# 답변이 식단표를 가리키고 있는지.
+# 질문에 오타가 있어도("석시 줘") AI 는 알아듣고 제대로 답한다.
+# 질문을 읽는 일은 AI 가 우리보다 잘하므로, 답을 보고 판단하는 편이 낫다.
+# 무엇보다 "아래 식단표를 봐 주세요" 라고 해 놓고 사진이 없으면 안 된다.
+# 답변에는 오타가 없다. AI 가 제대로 쓴 우리말이라 질문보다 훨씬 잘 걸린다.
+# 세탁 질문에 헛걸리지 않게 끼니 이름과 식단 낱말만 본다.
+POINTS_AT_MENU = re.compile(
+    "식단표|메뉴표|아래.{0,4}식단|식단.{0,4}확인|"
+    "석식|중식|조식|점심 메뉴|저녁 메뉴|아침 메뉴|오늘 점심|오늘 저녁|오늘 아침")
+
+
+def should_show_menu(question, answer):
+    """식단표 사진을 붙여야 하는지.
+
+    답이 식단표를 가리키면 무조건 붙인다. 말한 것과 실제가 달라지면 안 된다.
+    """
+    if answer and POINTS_AT_MENU.search(answer):
+        return True
+    return bool(question and FOOD_WORDS.search(question))
+
 _IMG_CACHE = None          # (주소, 내려받은 파일 경로)
 
 

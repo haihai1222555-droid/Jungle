@@ -2564,7 +2564,8 @@ async def run_assistant(user_id, text, private=True):
     text_out, embed_out, attach, view_out = _norm(result)
     # 식사 이야기면 주간 식단표를 붙인다.
     # /식단 을 쳐야만 나오면 "오늘 뭐 먹지" 하고 물은 사람은 못 본다.
-    if not attach and cafeteria.FOOD_WORDS.search(text or ""):
+    # 질문만 보면 오타를 놓친다("석시 줘"). 답이 식단표를 가리키면 무조건 붙인다.
+    if not attach and cafeteria.should_show_menu(text, text_out):
         try:
             p = await asyncio.to_thread(cafeteria.local_weekly_image, BASE_DIR)
             if p:

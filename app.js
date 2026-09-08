@@ -2702,8 +2702,21 @@ ${KB_PLACEHOLDER}
 // =========================================================
 const MENU_WORDS = /식단|메뉴|밥|점심|저녁|아침|중식|석식|조식|먹을|먹지|뭐먹|식당|카페테리아/;
 
+// 답이 식단표를 가리키는지. 질문에 오타가 있어도("석시 줘") AI 는 알아듣고
+// 제대로 답한다. 질문을 읽는 일은 AI 가 우리보다 잘하므로 답을 보고 정한다.
+// 무엇보다 "아래 식단표를 봐 주세요" 라고 해 놓고 사진이 없으면 안 된다.
+const MENU_POINTED = /식단표|메뉴표|아래.{0,4}식단|식단.{0,4}확인|석식|중식|조식|점심 메뉴|저녁 메뉴|아침 메뉴|오늘 점심|오늘 저녁|오늘 아침/;
+
+function lastAnswerText() {
+  const msgs = [...document.querySelectorAll('.chat-message.ai-msg')]
+    .filter(m => !m.querySelector('.menu-img'));
+  return msgs.length ? msgs[msgs.length - 1].innerText : '';
+}
+
 async function maybeAppendMenuImage(question) {
-  if (!MENU_WORDS.test((question || '').replace(/\s/g, ''))) return;
+  const asked = MENU_WORDS.test((question || '').replace(/\s/g, ''));
+  const pointed = MENU_POINTED.test(lastAnswerText());
+  if (!asked && !pointed) return;
 
   let m = null;
   try {
