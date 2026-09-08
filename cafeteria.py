@@ -19,6 +19,7 @@
 "오늘 점심 뭐야" 에 사진 없이 바로 답할 수 있다.
 """
 import json
+import os
 import re
 import threading
 import time
@@ -175,6 +176,42 @@ def weekly():
     return (state() or {}).get("weekly")
 
 
+# 식사 이야기인지. 헛걸려도 사진 하나가 더 붙을 뿐이라 손해가 작다.
+FOOD_WORDS = re.compile(
+    "식단|메뉴|밥|점심|저녁|아침|중식|석식|조식|먹을|먹지|뭐먹|식당|카페테리아|급식")
+
+_IMG_CACHE = None          # (주소, 내려받은 파일 경로)
+
+
+def local_weekly_image(dirpath):
+    """주간 식단표 사진을 파일로 받아 둔다. 디스코드에 붙이려면 파일이 필요하다.
+
+    주소가 그대로면 다시 받지 않는다. 매번 받으면 남의 서버에 실례다.
+    받아 두는 곳은 웹으로 안 나가는 자리여야 한다(허용 목록에 없는 이름).
+    """
+    global _IMG_CACHE
+    w = weekly()
+    if not w or not w.get("image"):
+        return None
+    url = w["image"]
+    if _IMG_CACHE and _IMG_CACHE[0] == url and os.path.exists(_IMG_CACHE[1]):
+        return _IMG_CACHE[1]
+    path = os.path.join(dirpath, "cafeteria_weekly.cache")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = r.read()
+        tmp = path + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except Exception as e:
+        print("[식단] 사진을 받지 못했습니다: %s" % e)
+        return _IMG_CACHE[1] if _IMG_CACHE and os.path.exists(_IMG_CACHE[1]) else None
+    _IMG_CACHE = (url, path)
+    return path
+
+
 def summary_for_ai():
     """AI 에게 넘길 글. 없으면 빈 문자열.
 
@@ -187,10 +224,17 @@ def summary_for_ai():
     lines = []
     w = data.get("weekly")
     if w:
-        lines.append("- 주간 식단표 사진이 있습니다 (%s 갱신). "
-                     "물어보면 사진을 함께 보여줍니다." % fmt_when(w.get("updatedAt")))
-        lines.append("  ※ 제목의 'N주차' 는 식당 쪽 표기라 실제 주와 다를 수 있습니다. "
-                     "날짜는 사진 안에 적혀 있으니 사진을 보라고 안내하세요.")
+        lines.append(
+            "- 식사 이야기가 나오면 주간 식단표 사진이 답변과 함께 나갑니다 (%s 갱신). "
+            "그 표에 월~토 점심·저녁이 모두 있습니다." % fmt_when(w.get("updatedAt")))
+        lines.append(
+            "  → 아래에 글로 안 적힌 끼니를 물으면 \"아래 식단표를 봐 주세요\" 라고만 하세요. "
+            "사진이 어떻게 나가는지는 설명하지 마세요. 그냥 \"아래 식단표\" 면 됩니다.")
+        lines.append(
+            "  → 카카오 채널로 가라고 하지 마세요. 사진이 이미 화면에 나가 있습니다.")
+        lines.append(
+            "  ※ 'N주차' 라는 말은 쓰지 마세요. 식당 쪽 표기라 실제 주와 다를 수 있습니다. "
+            "날짜는 사진 안에 있습니다.")
 
     todays = today_menus()
     if todays:
@@ -199,8 +243,11 @@ def summary_for_ai():
         for d in sorted(todays, key=lambda x: {"조식": 0, "중식": 1, "석식": 2}.get(x["meal"], 9)):
             lines.append("  · %s: %s" % (d["meal"], d["text"] or "(메뉴 글 없음, 사진만 올라옴)"))
     else:
-        lines.append("- 오늘 메뉴 글은 아직 안 올라왔습니다. "
-                     "지어내지 말고 아직 공지 전이라고 안내하세요.")
+        lines.append("- 오늘 메뉴는 아직 글로 안 올라왔습니다. "
+                     "지어내지 말고, 아래 식단표 사진에서 확인해 달라고 안내하세요.")
+
+    lines.append("- 글로 안 올라온 끼니의 메뉴 이름을 절대 지어내지 마세요. "
+                 "모르면 식단표를 가리키면 됩니다.")
 
     if not lines:
         return ""

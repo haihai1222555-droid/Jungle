@@ -2461,6 +2461,19 @@ async def run_assistant(user_id, text, private=True):
     # 예전에는 여기서 세 칸만 손으로 꺼내 써서, 버튼이 담긴 네 번째 칸이
     # 통째로 버려졌다. 제보 버튼이 안 뜨던 원인이다.
     text_out, embed_out, attach, view_out = _norm(result)
+    # 식사 이야기면 주간 식단표를 붙인다.
+    # /식단 을 쳐야만 나오면 "오늘 뭐 먹지" 하고 물은 사람은 못 본다.
+    if not attach and cafeteria.FOOD_WORDS.search(text or ""):
+        try:
+            p = await asyncio.to_thread(cafeteria.local_weekly_image, BASE_DIR)
+            if p:
+                w = cafeteria.weekly() or {}
+                attach = {"path": p, "filename": "weekly_menu.jpg",
+                          "caption": "주간 식단표 · %s 갱신 (출처: 카카오톡 채널)"
+                                     % cafeteria.fmt_when(w.get("updatedAt"))}
+        except Exception as e:
+            print(f"[식단] 사진을 붙이지 못했습니다: {e}")
+
     # 배치도를 붙일 상황이 아니면, 질문에 맞는 안내 사진이 있는지 본다
     if not attach:
         guide = find_guide_image(text)
@@ -2489,7 +2502,11 @@ def find_guide_image(text):
 
 async def make_guide_file(info):
     try:
-        return discord.File(info["path"], filename=os.path.basename(info["path"]))
+        # 파일 이름을 따로 정해줄 수 있다. 식단표는 확장자 없는 이름으로
+        # 받아 두기 때문이다(웹으로 새 나가지 않게). 그대로 올리면
+        # 디스코드가 그림으로 안 보여준다.
+        name = info.get("filename") or os.path.basename(info["path"])
+        return discord.File(info["path"], filename=name)
     except Exception as e:
         print(f"[Guide Image Error] {e}")
         return None
