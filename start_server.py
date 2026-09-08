@@ -1336,10 +1336,19 @@ def refresh_source_age():
 
 
 def source_age_sec():
-    """원본 값이 몇 초 묵었는지. 모르면 None."""
+    """원본 값이 몇 초 묵었는지. 모르면 None.
+
+    원본이 주는 시각에 시간대 표시가 없어서 KST 로 읽고 있다. 지금은 맞다.
+    다만 원본이 서버를 옮기거나 설정을 바꾸면 아홉 시간이 어긋나고,
+    화면에 '540분 전 값' 같은 것이 뜬다. 말이 안 되는 값이면 모른다고 한다.
+    틀린 숫자를 보여주는 것보다 낫다.
+    """
     if not SOURCE_UPDATED_AT:
         return None
-    return max(0, int(time.time() - SOURCE_UPDATED_AT))
+    age = int(time.time() - SOURCE_UPDATED_AT)
+    if age < 0 or age > 3600:
+        return None
+    return age
 
 
 def record_device_events(status):

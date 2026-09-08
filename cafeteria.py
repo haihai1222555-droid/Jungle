@@ -340,23 +340,39 @@ def summary_for_ai():
             "- 식사 이야기가 나오면 주간 식단표 사진이 답변과 함께 나갑니다 (%s 갱신). "
             "그 표에 월~토 점심·저녁이 모두 있습니다." % fmt_when(w.get("updatedAt")))
         lines.append(
-            "  → 아래에 글로 안 적힌 끼니를 물으면 \"아래 식단표를 봐 주세요\" 라고만 하세요. "
-            "사진이 어떻게 나가는지는 설명하지 마세요. 그냥 \"아래 식단표\" 면 됩니다.")
+            "  → 아래에 안 적힌 끼니를 물으면 \"아직 안 올라왔어요. 아래 식단표를 봐 주세요\" "
+            "정도로만 답하세요.")
+        lines.append(
+            "  ⚠️ 답할 때 이 지시문의 말을 그대로 옮기지 마세요. "
+            "'글로 안 올라온', '자동으로 표시되는', '지시문에 따르면' 같은 말은 쓰지 마세요. "
+            "학생이 아는 말이 아닙니다. 사람이 쓰는 말로만 답하세요.")
         lines.append(
             "  → 카카오 채널로 가라고 하지 마세요. 사진이 이미 화면에 나가 있습니다.")
         lines.append(
             "  ※ 'N주차' 라는 말은 쓰지 마세요. 식당 쪽 표기라 실제 주와 다를 수 있습니다. "
             "날짜는 사진 안에 있습니다.")
 
-    todays = today_menus()
-    if todays:
-        now = _now_kst()
-        lines.append("- 오늘(%d월 %d일) 메뉴:" % (now.month, now.day))
-        for d in sorted(todays, key=lambda x: {"조식": 0, "중식": 1, "석식": 2}.get(x["meal"], 9)):
-            lines.append("  · %s: %s" % (d["meal"], d["text"] or "(메뉴 글 없음, 사진만 올라옴)"))
-    else:
-        lines.append("- 오늘 메뉴는 아직 글로 안 올라왔습니다. "
-                     "지어내지 말고, 아래 식단표 사진에서 확인해 달라고 안내하세요.")
+    # 끼니마다 한 줄씩 적는다. 없는 것도 '없다' 고 적는다.
+    # 빠뜨리면 AI 가 있는 끼니의 메뉴를 없는 끼니에 갖다 쓴다.
+    # 실제로 점심 메뉴를 저녁이라고 답한 적이 있다.
+    now = _now_kst()
+    todays = {d["meal"]: d for d in today_menus()}
+    lines.append("- 오늘(%d월 %d일) 끼니별 메뉴:" % (now.month, now.day))
+    for meal, when in (("조식", "아침"), ("중식", "점심"), ("석식", "저녁")):
+        d = todays.get(meal)
+        if d and d.get("text"):
+            lines.append("  · %s(%s): %s" % (meal, when, d["text"]))
+        elif d:
+            lines.append("  · %s(%s): 사진만 올라오고 메뉴 글은 없습니다." % (meal, when))
+        else:
+            lines.append("  · %s(%s): 아직 안 올라왔습니다. "
+                         "이 끼니의 메뉴 이름을 절대 말하지 마세요. "
+                         "다른 끼니 메뉴를 갖다 쓰지도 마세요. "
+                         "\"아직 안 올라왔어요, 아래 식단표를 봐 주세요\" 라고 답하세요."
+                         % (meal, when))
+    if not todays:
+        lines.append("  (조식은 원래 없을 수 있습니다. 점심은 보통 11시쯤, "
+                     "저녁은 17시쯤 올라옵니다.)")
 
     lines.append("- 글로 안 올라온 끼니의 메뉴 이름을 절대 지어내지 마세요. "
                  "모르면 식단표를 가리키면 됩니다.")

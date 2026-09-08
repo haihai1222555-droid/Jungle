@@ -2724,6 +2724,14 @@ async function maybeAppendMenuImage(question) {
   const linkUrl = safeUrl(weekly.link) || imgUrl;
   if (!imgUrl) return;          // 주소가 이상하면 아예 안 붙인다
 
+  // 앞서 붙인 사진은 걷어낸다. 같은 표를 여러 장 쌓아 둘 이유가 없고,
+  // 물어볼 때마다 늘어나면 대화가 사진으로 뒤덮인다.
+  // ("오늘 점심?" 다음 "오늘 저녁?" 을 물으면 똑같은 사진이 두 장 붙었다)
+  document.querySelectorAll('.menu-img').forEach(img => {
+    const old = img.closest('.chat-message');
+    if (old) old.remove();
+  });
+
   const el = document.createElement('div');
   el.className = 'chat-message ai-msg';
   // 주차 대신 '언제 갱신됐는지' 를 적는다. 제목의 N주차는 식당 쪽 표기라
