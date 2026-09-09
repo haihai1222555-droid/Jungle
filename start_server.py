@@ -462,13 +462,61 @@ def background_push_worker():
                     alarm.pop('notifiedNoData', None)
                     changed = True
 
+                # 🚨 기기가 멈췄다. 오류든 일시정지든 알린다.
+                #
+                # 오류일 때만 알리면 놓친다. 원본이 5분에 한 번만 상태를 주므로
+                # 오류가 났다가 일시정지로 넘어가면 오류 화면을 못 보고 지나간다.
+                # 실제로 배수 오류로 멈춘 건조기를 아무에게도 못 알린 적이 있다.
+                #
+                # 그래서 멈춘 것 자체를 알리고, 이유는 단정하지 않는다.
+                # 본인이 누른 것이면 넘기면 되고, 아니면 가서 봐야 한다.
+                is_error = run_state == 'ERROR' or bool(unit_data.get('error'))
+                is_stopped = device_log.is_stopped(run_state, unit_data.get('error'))
+                if is_stopped and not alarm.get('notifiedStop'):
+                    alarm['notifiedStop'] = True
+                    changed = True
+                    code = unit_data.get('error')
+                    if not isinstance(code, str):
+                        code = str(code) if code else None
+                    if is_error:
+                        detail = (device_log.ERROR_SHORT.get(code, '에러 코드 %s' % code)
+                                  if code else '기기가 오류 상태로 보고했습니다')
+                        body = ('%s 가 오류로 멈췄습니다 — %s. 세탁실에서 확인해 주세요.'
+                                % (device_name, detail))
+                    else:
+                        body = ('%s 가 멈춰 있습니다. 직접 누르신 것이 아니면 오류일 수 '
+                                '있습니다. 기기가 5분에 한 번만 상태를 알려줘서 그 사이에 '
+                                '났던 오류는 보이지 않습니다.' % device_name)
+                        hit = device_log.recent_error(
+                            f"{tower_id}호기", unit_type)
+                        if hit:
+                            mins = int((time.time() - (hit.get('at') or 0)) / 60)
+                            body += (' (%d분 전 같은 기기에서 %s 있었습니다)'
+                                     % (mins, device_log.ERROR_SHORT.get(
+                                         hit.get('error'), '오류')))
+                    print(f"[Alarm] 멈춤: {device_name} ({run_state})")
+                    send_push_notification(sub_info, {
+                        'title': ("🚨 [오류로 멈춤] " if is_error
+                                  else "⏸️ [멈춤] ") + device_name,
+                        'body': body,
+                        'tag': f"stop-{device_name}",
+                        'key': alarm.get('key'),
+                        'endpoint': sub_info.get('endpoint'),
+                    })
+                elif not is_stopped and alarm.get('notifiedStop'):
+                    # 다시 돌기 시작했다. 다음에 또 멈추면 다시 알린다.
+                    alarm.pop('notifiedStop', None)
+                    changed = True
+
                 if live_min > 0:
                     remain_min = float(live_min)
                 else:
                     # 기기가 시간을 안 알려주는 구간에서는 등록 시점 예상치로 대체
                     remain_min = (target_ms - now_ms) / (60 * 1000)
 
-                if not notified_5min and remain_min <= 5.0 and remain_min > 0:
+                # 멈춰 있는 동안은 시계가 얼어붙는다. 그걸 보고 "5분 뒤 완료" 라고 하면 거짓말이다.
+                if (not notified_5min and not is_stopped
+                        and remain_min <= 5.0 and remain_min > 0):
                     alarm['notified5Min'] = True
                     changed = True
                     print(f"[Alarm] 5분전 조건 충족: {device_name} (실시간 {live_min}분 / 판정 {remain_min:.1f}분)")
@@ -482,7 +530,7 @@ def background_push_worker():
                         'endpoint': sub_info.get('endpoint'),
                     })
 
-                elif not notified_0min and not still_going and (
+                elif not notified_0min and not still_going and not is_stopped and (
                     remain_min <= 0
                     or (has_live and run_state in ('END', 'COMPLETE', 'WRINKLE_CARE', 'POWER_OFF', 'INITIAL'))
                 ):

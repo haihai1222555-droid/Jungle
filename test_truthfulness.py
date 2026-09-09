@@ -132,9 +132,14 @@ def test_device_log():
                                "RUNNING")
     check("첫 관측은 기록 안 함", first, [])
 
-    # 멀쩡히 돌다 멈췄다 → 사람이 누른 것
+    # 멀쩡히 돌다 멈췄다 → 사람이 눌렀는지 오류인지 알 수 없다.
+    # 기기 상태가 5분에 한 번만 오므로 그 사이의 오류는 안 보인다.
+    # 예전에는 여기서 'user' 라고 단정했고, 실제로 배수 오류로 멈춘 것을
+    # 사람 탓으로 적은 적이 있다.
     made = device_log.observe("9호기", "washer", {}, "PAUSE")
-    check("사람이 누른 일시정지", [m.get("cause") for m in made], ["user"])
+    check("오류를 못 봤으면 단정하지 않는다", [m.get("cause") for m in made], ["unknown"])
+    check("사람 탓으로 적지 않는다",
+          any("사용자가" in (m.get("reason") or "") for m in made), False)
 
     # 오류에서 멈췄다 → 오류 때문
     device_log._PREV.clear()
@@ -147,6 +152,37 @@ def test_device_log():
     import time
     old = [{"ts": time.time() - 8 * 24 * 3600}, {"ts": time.time()}]
     check("일주일 지난 기록 정리", len(device_log._prune(old)), 1)
+
+    # 멈춘 것으로 볼 상태들.
+    # 오류만 보고 알리면, 오류가 났다 일시정지로 넘어간 것을 놓친다.
+    # 원본이 5분에 한 번만 상태를 주기 때문이다. 실제로 놓쳤다.
+    check("오류는 멈춤", device_log.is_stopped("ERROR"), True)
+    check("일시정지도 멈춤", device_log.is_stopped("PAUSE"), True)
+    check("에러 코드만 있어도 멈춤",
+          device_log.is_stopped("RUNNING", "DRAIN_ERROR"), True)
+    check("돌고 있으면 안 멈춤", device_log.is_stopped("DRYING"), False)
+    check("다 끝났으면 안 멈춤", device_log.is_stopped("END"), False)
+
+    # 최근 오류 찾기. 일시정지 원인을 짐작할 때 쓴다.
+    now = time.time()
+    device_log._IS_WRITER = True          # 시험 중에는 저장소를 다시 보지 않는다
+    # 오래된 것부터 뒤로. 실제 기록도 시간순이다.
+    device_log._ITEMS = [
+        {"ts": now - 5 * 3600, "tower": "6호기", "unit": "건조기",
+         "event": "error", "error": "DRAIN_ERROR"},
+        {"ts": now - 600, "tower": "4호기", "unit": "건조기",
+         "event": "error", "error": "DRAIN_ERROR"},
+        {"ts": now - 600, "tower": "5호기", "unit": "건조기",
+         "event": "error", "error": "EMPTY_WATER_ALERT_ERROR"},
+    ]
+    hit = device_log.recent_error("5호기", "dryer", now=now)
+    check("최근 오류 찾음", (hit or {}).get("error"), "EMPTY_WATER_ALERT_ERROR")
+    check("다른 기기 오류는 안 가져옴",
+          device_log.recent_error("5호기", "washer", now=now), None)
+    check("한참 전 오류는 안 가져옴",
+          device_log.recent_error("6호기", "dryer", now=now), None)
+    device_log._ITEMS = None
+    device_log._IS_WRITER = False
 
 
 # =========================================================

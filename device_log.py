@@ -56,16 +56,66 @@ EVENT_LABEL = {
 
 _LOCK = threading.Lock()
 _ITEMS = None                 # 처음 쓸 때 불러온다
+_LOADED_AT = 0                # 언제 불러온 것인지
+_IS_WRITER = False            # 이 프로세스가 기록을 쓰는 쪽인지 (웹 서버)
+RELOAD_SEC = 20               # 읽는 쪽은 이만큼 지나면 다시 불러온다
 _PREV = {}                    # (타워, 유닛) -> 직전에 본 모습
 _PAUSE_SINCE = {}             # (타워, 유닛) -> 멈춘 시각. 다시 돌 때 얼마나였는지 적으려고
 
 
+# 예전에 적어 둔 문장. 기기가 알려준 것이 아니라 우리가 지어낸 판정이었다.
+_LEGACY_PAUSE = "사용자가 일시정지를 함"
+
+
+def _fix_legacy(items):
+    """예전에 근거 없이 '사용자가 일시정지를 함' 이라고 적은 것을 고친다.
+
+    기기는 왜 멈췄는지 알려주지 않는다. 오류를 못 봤다는 것뿐이었는데
+    사람이 눌렀다고 단정했다. 실제로 배수 오류로 멈춘 건조기를
+    사람 탓으로 적었고, 관리자는 /이력 에서 그 문장을 읽었다.
+
+    기기가 준 값(상태·에러 코드)은 건드리지 않는다.
+    우리가 지어낸 문장만 바꾼다.
+    """
+    for x in items:
+        if not isinstance(x, dict) or x.get("event") != "pause":
+            continue
+        if _LEGACY_PAUSE in (x.get("reason") or ""):
+            x["reason"] = reason_of("pause", x.get("error"), False)
+            x["cause"] = "unknown"
+    return items
+
+
 def _load():
-    global _ITEMS
+    global _ITEMS, _LOADED_AT
     if _ITEMS is None:
         raw = state_store.state_load(STORE_NAME, [])
-        _ITEMS = raw if isinstance(raw, list) else []
+        _ITEMS = _fix_legacy(raw if isinstance(raw, list) else [])
+        _LOADED_AT = time.time()
     return _ITEMS
+
+
+def _fresh():
+    """읽기 전에 저장소를 다시 본다.
+
+    기록을 쓰는 것은 웹 서버, 읽는 것은 봇이다. 서로 다른 프로세스라
+    한 번 불러온 채로 두면 봇의 /이력 이 옛날 것에 멈춰 있다.
+    쓰는 쪽에서는 하지 않는다. 방금 자기가 넣은 것을 덮어쓸 일이다.
+
+    잠금을 잡지 않고 부른다. 부르는 쪽이 곧바로 잡기 때문이다.
+    """
+    global _ITEMS, _LOADED_AT
+    if _IS_WRITER:
+        return
+    if _ITEMS is not None and time.time() - _LOADED_AT < RELOAD_SEC:
+        return
+    try:
+        raw = state_store.state_load(STORE_NAME, [])
+    except Exception:
+        return          # 못 불러오면 있던 것을 쓴다. 비우지는 않는다.
+    with _LOCK:
+        _ITEMS = _fix_legacy(raw if isinstance(raw, list) else [])
+        _LOADED_AT = time.time()
 
 
 def _prune(items, now=None):
@@ -107,9 +157,12 @@ def reason_of(event, error_code, by_error=None, held=None):
             detail = (ERROR_SHORT.get(error_code, "에러 코드 %s" % error_code)
                       if error_code else "기기가 오류 상태로 보고함")
             return "오류로 멈춤 — " + detail
-        if by_error is False:
-            return "사용자가 일시정지를 함"
-        return "멈추기 직전 상태를 알 수 없어 원인을 가릴 수 없음"
+        # 오류를 못 봤다고 해서 사람이 누른 것은 아니다.
+        # 기기 상태는 5분에 한 번만 오므로 그 사이에 났다 사라진 오류는 안 보인다.
+        # 예전에는 여기서 "사용자가 일시정지를 함" 이라고 단정했고,
+        # 실제로 배수 오류로 멈춘 것을 사람 탓으로 적은 적이 있다.
+        return ("원인을 가릴 수 없음 — 기기가 5분에 한 번만 상태를 알려줘서 "
+                "그 사이에 났던 오류는 보이지 않을 수 있음")
     if event == "resume":
         t = held_text(held)
         return ("%s 멈춰 있다가 다시 돌기 시작함" % t) if t else "다시 돌기 시작함"
@@ -140,6 +193,47 @@ def _already_open(tower_label, unit_type, event):
         if e == closer:
             return False        # 이미 풀린 뒤다
     return False
+
+
+# 같은 기기에 최근 오류가 있었는지 볼 때 쓰는 시간 창.
+# 원본이 5분에 한 번만 갱신하므로, 그 사이에 났다 사라진 오류를 놓친다.
+# 넉넉히 잡아야 "아까 오류 났던 그 기기" 를 이어서 볼 수 있다.
+RECENT_ERROR_SEC = 45 * 60
+
+
+def recent_error(tower_label, unit_type, within=None, now=None):
+    """최근에 같은 기기에서 본 오류. 없으면 None.
+
+    일시정지 원인을 가릴 때 쓴다. 직전 관측에서 오류를 못 봤더라도,
+    조금 전에 같은 기기가 오류를 냈다면 그 사실을 함께 적어야 한다.
+    """
+    import time as _t
+    now = now or _t.time()
+    within = within or RECENT_ERROR_SEC
+    _fresh()
+    unit_name = "건조기" if unit_type == "dryer" else "세탁기"
+    with _LOCK:
+        items = list(_load())
+    for x in reversed(items):
+        if now - (x.get("ts") or 0) > within:
+            break
+        if x.get("tower") != tower_label or x.get("unit") != unit_name:
+            continue
+        if x.get("event") in ("error", "error_cleared"):
+            return {"at": x.get("ts"), "error": x.get("error")}
+    return None
+
+
+def is_stopped(state, error=None):
+    """돌다가 멈춘 상태인지. 오류든 일시정지든 같이 본다.
+
+    왜 같이 보나. 원본이 5분에 한 번만 상태를 주므로, 오류가 났다가
+    일시정지로 넘어가면 오류 화면을 아예 못 보고 지나간다. 오류만 보고
+    알리면 그런 것은 놓친다. 실제로 배수 오류로 멈춘 건조기를 놓쳤다.
+
+    알림을 걸어 둔 사람 입장에서는 둘 다 '내 빨래가 멈췄다' 이다.
+    """
+    return state in ("ERROR", "PAUSE") or bool(error)
 
 
 def _snapshot(unit, state):
@@ -188,9 +282,9 @@ def observe(tower_label, unit_type, unit, state, now=None):
         if note:
             item["reason"] = note + " " + item["reason"]
         if event == "pause":
-            # 오류 때문인지 사람이 누른 것인지. 나중에 세어 보기 좋게 따로 둔다.
-            item["cause"] = ("error" if by_error else
-                             "user" if by_error is False else "unknown")
+            # 오류를 직접 봤을 때만 'error' 다. 못 봤으면 'unknown' 이지 'user' 가 아니다.
+            # 5분에 한 번만 보는 값으로 사람이 눌렀다고 단정할 수는 없다.
+            item["cause"] = "error" if by_error else "unknown"
         if held:
             item["heldSec"] = round(held)
         made.append(item)
@@ -234,7 +328,16 @@ def observe(tower_label, unit_type, unit, state, now=None):
         code = cur["error"] or prev["error"]
         by_error = bool(cur["is_error"] or prev["is_error"] or code)
         _PAUSE_SINCE[key] = now
-        add("pause", code if by_error else None, by_error=by_error)
+        note = None
+        if not by_error:
+            # 오류를 직접 못 봤어도, 조금 전에 같은 기기가 오류를 냈다면
+            # 그 사실을 함께 적는다. 사람 탓으로 돌리지 않기 위해서다.
+            hit = recent_error(tower_label, unit_type, now=now)
+            if hit:
+                mins = int((now - (hit["at"] or now)) / 60)
+                note = ("(%d분 전 같은 기기에서 %s 있었음 — 그 때문일 수 있음)"
+                        % (mins, ERROR_SHORT.get(hit.get("error"), "오류")))
+        add("pause", code if by_error else None, by_error=by_error, note=note)
     elif prev["is_pause"] and not cur["is_pause"]:
         since = _PAUSE_SINCE.pop(key, None)
         add("resume", None, held=(now - since) if since else None)
@@ -250,8 +353,10 @@ def observe(tower_label, unit_type, unit, state, now=None):
 
 def append(new_items):
     """새 기록을 넣고 오래된 것을 걷어낸 뒤 저장한다."""
+    global _IS_WRITER
     if not new_items:
         return 0
+    _IS_WRITER = True         # 이 프로세스가 쓰는 쪽이다. 다시 불러오지 않는다.
     with _LOCK:
         items = _load()
         items.extend(new_items)
@@ -264,6 +369,7 @@ def append(new_items):
 
 def recent(limit=30, tower=None, unit=None, event=None):
     """최근 것부터. 관리자가 볼 때 쓴다."""
+    _fresh()
     with _LOCK:
         items = _prune(_load())
     out = []
@@ -282,6 +388,7 @@ def recent(limit=30, tower=None, unit=None, event=None):
 
 def summary():
     """일주일치를 한눈에. 어떤 기기가 자주 말썽인지 보려는 것."""
+    _fresh()
     with _LOCK:
         items = _prune(_load())
     by_device = {}

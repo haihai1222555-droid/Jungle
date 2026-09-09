@@ -1029,8 +1029,39 @@ setInterval(() => {
       return;
     }
 
-    // ⚠️ 1) 내가 등록한 특정 기기 가동 중 에러/중단 발생 시 즉시 긴급 알림
+    // ⚠️ 1) 내가 등록한 기기가 멈추면 알린다. 오류든 일시정지든.
+    //
+    // 오류일 때만 알리면 놓친다. 기기 상태는 5분에 한 번만 오므로
+    // 오류가 났다가 일시정지로 넘어가면 오류 화면을 아예 못 보고 지나간다.
+    // 실제로 배수 오류로 멈춘 건조기를 아무에게도 못 알린 적이 있다.
     const isError = runState === 'ERROR' || !!unitData.error || (data.error && (item.unitType === 'dryer' ? data.dryer?.error : data.washer?.error));
+    const isStopped = isError || runState === 'PAUSE';
+
+    // 오류는 아닌데 멈춰 있다. 왜 멈췄는지는 알 수 없다.
+    // 본인이 누른 것이면 넘기면 되고, 아니면 가서 봐야 한다.
+    if (!isError && isStopped && !item.notifiedPause) {
+      item.notifiedPause = true;
+      changed = true;
+
+      playChimeSound();
+      if (navigator.vibrate) navigator.vibrate([300, 120, 300]);
+
+      showToast('⏸️', `<b>[${item.deviceName}]</b> 기기가 멈춰 있습니다.<br><small style="color:#fcd34d">직접 누르신 것이면 넘기셔도 됩니다. 아니라면 오류일 수 있어요.<br>기기가 5분에 한 번만 상태를 알려줘서 그 사이에 났던 오류는 보이지 않습니다.</small>`, 'warning');
+
+      if (!item.pushRegistered && 'Notification' in window && Notification.permission === 'granted') {
+        new Notification(`⏸️ [멈춤] ${item.deviceName}`, {
+          body: `${item.deviceName} 가 멈춰 있습니다. 직접 누르신 것이 아니면 오류일 수 있으니 세탁실을 확인해 주세요.`,
+          icon: '/jungle-logo-192.png'
+        });
+      }
+    }
+
+    // 다시 돌기 시작했으면 다음에 또 멈출 때 알릴 수 있게 푼다
+    if (!isStopped && item.notifiedPause) {
+      item.notifiedPause = false;
+      changed = true;
+    }
+
     if (isError && !item.notifiedError) {
       item.notifiedError = true;
       changed = true;
@@ -1056,7 +1087,7 @@ setInterval(() => {
     }
 
     // 2) 내가 선택한 특정 기기 5분 전 도달 시 알림
-    if (!isError && remainMin <= 5 && remainMin > 0 && !item.notified5Min) {
+    if (!isStopped && remainMin <= 5 && remainMin > 0 && !item.notified5Min) {
       item.notified5Min = true;
       changed = true;
 
@@ -1077,11 +1108,11 @@ setInterval(() => {
     // 남은 시간 0분이 곧 완료는 아니다. 무게 감지(DETECTING) 중에는
     // 시간이 아직 안 잡혀서 0 분으로 온다. 그때 완료라고 하면 거짓말이다.
     const stillGoing = ['RUNNING', 'WASHING', 'RINSING', 'SPINNING',
-                        'DRYING', 'COOLING', 'DETECTING'].includes(runState);
+                        'DRYING', 'COOLING', 'DETECTING', 'RESERVED'].includes(runState);
     const isFinished = !stillGoing && (
       remainMin === 0 || runState === 'END' || runState === 'COMPLETE'
       || runState === 'WRINKLE_CARE' || now >= item.targetMs);
-    if (!isError && isFinished && !item.notified0Min) {
+    if (!isStopped && isFinished && !item.notified0Min) {
       item.notified0Min = true;
       changed = true;
 

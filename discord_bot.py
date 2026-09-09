@@ -184,7 +184,7 @@ RUNNING_STATES = ('RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLIN
 
 # 사용자가 새 빨래를 시작했다고 볼 수 있는 상태.
 # DETECTING(무게 감지 중)은 방금 돌리기 시작한 것이므로 여기 포함한다.
-STARTED_STATES = RUNNING_STATES + ('DETECTING',)
+STARTED_STATES = RUNNING_STATES + ('DETECTING', 'RESERVED')
 
 # 정말로 비어 있는 상태. 이 둘이 아니면 누군가 쓰고 있는 것으로 본다.
 # 정말 비어 있는 상태만 넣는다.
@@ -1151,7 +1151,8 @@ def build_info_embed(user_id=None):
             "• 완료 **5분 전** DM\n"
             "• **완료** 시 DM — `가져갔어요` 를 누르면 수거 요청을 보내지 않습니다\n"
             f"• 완료 후 **{STALE_PICKUP_SEC // 60}분** 지나도 안 가져가면 수거 요청 DM\n"
-            "• 가동 중 **에러** 가 나면 즉시 DM\n"
+            "• 가동 중 **멈추면** 즉시 DM — 오류든 일시정지든 알려드립니다\n"
+            "-# 　기기가 5분에 한 번만 상태를 알려줘서 왜 멈췄는지는 가릴 수 없습니다\n"
             f"• 기기 값이 **{NODATA_GRACE_SEC // 60}분** 넘게 안 오면 확인이 어렵다고 알려드립니다\n"
             "• 다음 사람이 새로 돌리면 자동으로 해제됩니다"
         ),
@@ -3387,17 +3388,19 @@ async def cmd_history(interaction: discord.Interaction,
 
     be = summary.get("byEvent") or {}
     bc = summary.get("byCause") or {}
-    # 일시정지를 왜 했는지 나눠 센다. 사람이 누른 것과 오류로 멈춘 것은
-    # 대응이 전혀 다르다. 앞엣것은 그냥 두면 되고 뒤엣것은 수리를 불러야 한다.
+    # 일시정지를 왜 했는지 나눠 센다. 오류로 멈춘 것은 수리를 불러야 한다.
+    #
+    # 'user'(사람이 누름) 는 더 이상 만들지 않는다. 오류를 못 봤다는 것이
+    # 사람이 눌렀다는 뜻은 아닌데 그렇게 단정했었다. 남아 있는 옛 기록은
+    # 원인 불명으로 센다.
     cause_txt = ""
     if be.get("pause"):
         parts = []
-        if bc.get("user"):
-            parts.append("사용자가 누름 %d" % bc["user"])
         if bc.get("error"):
             parts.append("오류로 멈춤 %d" % bc["error"])
-        if bc.get("unknown"):
-            parts.append("원인 불명 %d" % bc["unknown"])
+        unknown = bc.get("unknown", 0) + bc.get("user", 0)
+        if unknown:
+            parts.append("원인 불명 %d" % unknown)
         if parts:
             cause_txt = "\n-# 일시정지 내역 — " + " · ".join(parts)
     emb.add_field(
@@ -3809,22 +3812,53 @@ async def check_laundry_alarms():
             changed = True
 
 
-        # 🚨 1) 가동 중 에러/중단 발생 시 즉시 알림
-        if is_error and not item.get("notifiedError"):
-            item["notifiedError"] = True
+        # 🚨 1) 기기가 멈추면 알린다. 오류든 일시정지든.
+        #
+        # 예전에는 오류일 때만 울렸다. 그런데 원본은 LG 를 5분에 한 번만
+        # 확인하므로, 오류가 났다가 일시정지로 넘어가면 오류 화면을 아예
+        # 못 보고 지나간다. 실제로 배수 오류로 멈춘 건조기를 놓쳤다.
+        # 그래서 멈춘 것 자체를 알리고 이유는 단정하지 않는다.
+        is_stopped = device_log.is_stopped(run_state, unit_data.get("error"))
+        if is_stopped and not item.get("notifiedStop"):
+            item["notifiedStop"] = True
+            item["notifiedError"] = True      # 예전 이름. 두 번 울리지 않게 같이 둔다
             changed = True
+            code = unit_data.get("error")
+            if code is not None and not isinstance(code, str):
+                code = str(code)
+            if is_error:
+                detail = (device_log.ERROR_SHORT.get(code, f"에러 코드 {code}")
+                          if code else "기기가 오류 상태로 보고했습니다")
+                text = (f"🚨 **[긴급 점검: {item['deviceName']}]** 오류로 멈췄습니다.\n"
+                        f"• {detail}\n"
+                        f"• 세탁실에서 기기 상태(도어 닫힘·배수관·필터)를 확인해 주세요!")
+            else:
+                text = (f"⏸️ **[멈춤: {item['deviceName']}]** 기기가 멈춰 있습니다.\n"
+                        f"• 직접 누르신 것이면 넘기셔도 됩니다.\n"
+                        f"• 아니라면 오류일 수 있습니다. 기기가 5분에 한 번만 상태를 "
+                        f"알려줘서 그 사이에 났던 오류는 보이지 않습니다.")
+                hit = await asyncio.to_thread(
+                    device_log.recent_error, f"{tower['id']}호기", item["unitType"])
+                if hit:
+                    mins = int((now_ts - (hit.get("at") or 0)) / 60)
+                    short = device_log.ERROR_SHORT.get(hit.get("error"), "오류")
+                    text += f"\n• {mins}분 전 같은 기기에서 {short} 있었습니다."
             user = await resolve_user(item["userId"])
             if user:
                 try:
-                    await user.send(
-                        f"🚨 **[긴급 점검: {item['deviceName']}]** 세탁/건조 중단 오류가 발생했습니다!\n"
-                        f"• 기기 동작이 멈췄으니 세탁실에서 기기 상태(도어 닫힘/배수관)를 확인해 주세요!"
-                    )
+                    await user.send(text)
                 except Exception as e:
                     print(f"[DM Send Error] {e}")
+        elif not is_stopped and item.get("notifiedStop"):
+            # 다시 돌기 시작했다. 다음에 또 멈추면 다시 알린다.
+            item.pop("notifiedStop", None)
+            item.pop("notifiedError", None)
+            changed = True
 
         # 🔔 2) 5분 이하 남았을 때 5분 전 알림
-        if remain_min <= 5 and remain_min > 0 and not item.get("notified5Min"):
+        # 멈춰 있는 동안은 시계가 얼어붙는다. 그걸 보고 "5분 뒤 완료" 라고
+        # 하면 거짓말이다. 다시 돌기 시작한 뒤에 세어도 늦지 않다.
+        if not is_stopped and remain_min <= 5 and remain_min > 0 and not item.get("notified5Min"):
             item["notified5Min"] = True
             changed = True
             user = await resolve_user(item["userId"])
@@ -3844,8 +3878,9 @@ async def check_laundry_alarms():
         # 남은 시간 0분이 곧 완료는 아니다. 무게 감지(DETECTING) 중에는
         # 시간이 아직 안 잡혀서 0 분으로 온다. 그때 완료라고 하면 거짓말이다.
         # 기기가 아직 돌고 있지 않을 때만 0분을 완료로 읽는다.
-        finished = (run_state in ('COMPLETE', 'END', 'POWER_OFF', 'WRINKLE_CARE')
-                    or (remain_min == 0 and run_state not in STARTED_STATES))
+        finished = (not is_stopped
+                    and (run_state in ('COMPLETE', 'END', 'POWER_OFF', 'WRINKLE_CARE')
+                         or (remain_min == 0 and run_state not in STARTED_STATES)))
         if finished and not item.get("notified0Min"):
             item["notified0Min"] = True
             item["completedAt"] = now_ts
