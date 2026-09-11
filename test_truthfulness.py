@@ -186,7 +186,41 @@ def test_device_log():
 
 
 # =========================================================
-# 5. 코스 이름을 기기에서 읽어온 척하지 않는다
+# 5. 원본이 통째로 죽어도 대화 전체를 막지 않는다
+# =========================================================
+def _device_block(system_text):
+    """지시문에서 [지금 기기 상태] 구간만 뽑는다.
+
+    같은 대괄호 문구가 안내 문장 속에도 나오므로(예: '...[지금 기기 상태]에
+    적힌 에러코드...') 진짜 구간 머리(줄바꿈 포함)로 잘라야 섞이지 않는다.
+    """
+    return system_text.rsplit("[지금 기기 상태]\n", 1)[1].split("\n\n[내가 등록한 알림]")[0]
+
+
+def test_source_down_does_not_block_chat():
+    """실시간 데이터를 하나도 못 받아도 식단·코스·생활 안내 대화는 막지 않는다.
+
+    예전엔 discord_bot._run_assistant_inner 가 fetch_live_status() 가 빈 값이면
+    그 자리에서 바로 끊어, 원본(터널)이 죽으면 기기와 상관없는 질문까지
+    전부 "실시간 데이터를 가져오지 못했습니다" 로만 답했다.
+    """
+    # 원본이 통째로 죽음: 아홉 대 전부 값이 없다
+    block = _device_block(bot.build_assistant_prompt("식단 알려줘", {}, [])[0])
+    check("전체 끊김: 한 줄 요약이 있나", "전혀 받아오지 못하고" in block, True)
+    check("전체 끊김: 지어내지 말라는 말이 있나", "지어내지 마라" in block, True)
+    # 아홉 대를 하나하나 늘어놓지 않는다 (반복 X, 토큰 낭비 X)
+    check("전체 끊김: 번호별 줄을 안 늘어놓나", "1번" in block, False)
+
+    # 일부만 죽음: 기존처럼 기기별로 가려서 적는다 (회귀 방지)
+    partial = {"워시타워_1": {"washer": {"runState": {"currentState": "RUNNING"}}}}
+    block2 = _device_block(bot.build_assistant_prompt("x", partial, [])[0])
+    check("부분 끊김: 한 줄 요약으로 뭉치지 않나", "전혀 받아오지 못하고" in block2, False)
+    check("부분 끊김: 살아있는 기기는 실제 상태", "1번 세탁기(남성 전용): 작동 중" in block2, True)
+    check("부분 끊김: 죽은 기기는 정보 없음", "2번(남성 전용): 정보 없음" in block2, True)
+
+
+# =========================================================
+# 6. 코스 이름을 기기에서 읽어온 척하지 않는다
 # =========================================================
 def test_course_not_from_device():
     """원본 API 는 코스를 주지 않는다. 준다고 착각하는 코드가 생기면 안 된다."""
@@ -203,7 +237,8 @@ def test_course_not_from_device():
 
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
-             test_unknown_states, test_device_log, test_course_not_from_device]
+             test_unknown_states, test_device_log,
+             test_source_down_does_not_block_chat, test_course_not_from_device]
     for t in tests:
         try:
             t()

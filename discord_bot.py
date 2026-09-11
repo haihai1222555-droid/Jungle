@@ -2198,33 +2198,43 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
     Groq 은 요청 크기 제한이 빡빡해서 전체(약 1만 7천 자)를 넣으면 413 이 난다.
     """
     lines = []
-    for t in TOWERS:
-        # 값이 안 온 기기는 상태를 지어내지 않는다.
-        # 빈 값을 넘기면 AI 가 '전원 꺼짐 = 사용 가능' 으로 읽어 잘못 안내한다.
-        if not tower_has_data(status_data, t["name"]):
-            lines.append(f"{t['id']}번({t['zoneName']}): 정보 없음 "
-                         "— 이 기기는 값이 오지 않습니다. 사용 가능한지 알 수 없으니 "
-                         "절대 추천하지 말고, 물어보면 반드시 이렇게 답할 것: "
-                         "\"현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요.\"")
-            continue
-        d = (status_data.get(t["name"]) or {})
-        cycle = ((d.get("washer") or {}).get("cycle") or {}).get("cycleCount", 0)
-        for ut, label in (("washer", "세탁기"), ("dryer", "건조기")):
-            u = d.get(ut) or {}
-            st = unit_state(u)
-            tm = u.get("timer") or {}
-            mnt = (tm.get("remainHour", 0) or 0) * 60 + (tm.get("remainMinute", 0) or 0)
-            err = u.get("error")
+    # 원본이 통째로 끊기면 아홉 대 전부가 "정보 없음" 줄이 되어 되풀이된다.
+    # 그럴 땐 한 줄로 분명히 알려주는 편이 AI 도 헷갈리지 않는다.
+    if not any(tower_has_data(status_data, t["name"]) for t in TOWERS):
+        lines.append(
+            "지금 기기 상태를 전혀 받아오지 못하고 있습니다(원본 연결 끊김). "
+            "세탁기·건조기 관련 질문에는 반드시 이렇게만 답할 것: "
+            "\"지금 기기 상태를 받아오지 못하고 있어 알 수 없습니다. 잠시 후 다시 확인해 주세요.\" "
+            "사용 가능 여부·코스·남은 시간을 절대 지어내지 마라."
+        )
+    else:
+        for t in TOWERS:
+            # 값이 안 온 기기는 상태를 지어내지 않는다.
+            # 빈 값을 넘기면 AI 가 '전원 꺼짐 = 사용 가능' 으로 읽어 잘못 안내한다.
+            if not tower_has_data(status_data, t["name"]):
+                lines.append(f"{t['id']}번({t['zoneName']}): 정보 없음 "
+                             "— 이 기기는 값이 오지 않습니다. 사용 가능한지 알 수 없으니 "
+                             "절대 추천하지 말고, 물어보면 반드시 이렇게 답할 것: "
+                             "\"현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요.\"")
+                continue
+            d = (status_data.get(t["name"]) or {})
+            cycle = ((d.get("washer") or {}).get("cycle") or {}).get("cycleCount", 0)
+            for ut, label in (("washer", "세탁기"), ("dryer", "건조기")):
+                u = d.get(ut) or {}
+                st = unit_state(u)
+                tm = u.get("timer") or {}
+                mnt = (tm.get("remainHour", 0) or 0) * 60 + (tm.get("remainMinute", 0) or 0)
+                err = u.get("error")
 
-            part = f"{t['id']}번 {label}({t['zoneName']}): {STATE_LABELS.get(st, st)}"
-            if mnt:
-                part += f", {mnt}분 남음"
-            if err or st == "ERROR":
-                code = err or "UNKNOWN"
-                part += f" | 에러코드 {code} — {ERROR_GUIDE.get(code, '점검 필요')}"
-            if ut == "washer" and cycle:
-                part += f" | 누적 {cycle}회" + ("[통살균 필요]" if cycle >= 30 else "")
-            lines.append(part)
+                part = f"{t['id']}번 {label}({t['zoneName']}): {STATE_LABELS.get(st, st)}"
+                if mnt:
+                    part += f", {mnt}분 남음"
+                if err or st == "ERROR":
+                    code = err or "UNKNOWN"
+                    part += f" | 에러코드 {code} — {ERROR_GUIDE.get(code, '점검 필요')}"
+                if ut == "washer" and cycle:
+                    part += f" | 누적 {cycle}회" + ("[통살균 필요]" if cycle >= 30 else "")
+                lines.append(part)
 
     kb_text = jungle_kb.build_context(text, limit=kb_limit) if jungle_kb else ""
 
@@ -2847,8 +2857,12 @@ async def _ask_ai(text, status_data, mine, hist, is_admin):
 async def _run_assistant_inner(user_id, text):
     # urllib 은 이벤트 루프를 멈추므로 별도 스레드에서 부른다
     status_data = await asyncio.to_thread(fetch_live_status)
-    if not status_data:
-        return "⚠️ 실시간 데이터를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.", None
+    # 예전에는 여기서 바로 끊었다. 그러면 기기 얘기가 아닌 모든 대화
+    # (식단·코스·생활 안내 등)까지 원본이 죽었다는 이유로 통째로 막혔다.
+    # 이제는 빈 채로 흘려보낸다. 기기 상태가 필요한 부분(build_assistant_prompt,
+    # find_unit, tower_has_data 등)은 이미 "값 없음"을 정직하게 다루도록
+    # 돼 있어 지어낸 답이 나가지 않는다. 아래로는 status_data 가 늘 dict.
+    status_data = status_data or {}
 
     mine = [a for a in active_alarms if a.get("userId") == user_id]
 
