@@ -1791,6 +1791,26 @@ function findSoonestFreeWasher(towers) {
     .sort((a, b) => a.minutes - b.minutes)[0] || null;
 }
 
+// ⚠️ 이 아래 세 함수(renderSmartSummary, renderCongestionStatus,
+// renderStaleTracker)는 "값이 없다" 를 단정으로 잘못 읽는 사고가 이미 두 번
+// 났던 자리다. 처음엔 빈 값을 '사용 가능' 으로, 이번엔 '전부 사용 중' 으로
+// 읽었다(2026-09-11). 세 번째로 손댈 사람에게 남긴다.
+//
+// 다음에 이 셋 중 하나라도 고칠 일이 생기면, 판정 로직(상태 데이터 →
+// 무엇을 표시할지)을 DOM 을 안 만지는 순수 함수로 뽑아내고
+// `node test_web.js` 로 그때 시험을 붙인다. 의존성 0 — 이미 쓰는 node 로
+// 그냥 돌리면 된다.
+//
+// 지금 바로 jsdom 같은 걸 들이지 않은 이유: 이 저장소는 의존성이 0개고
+// package.json 도 없고 서버엔 node 자체가 없다(배포는 git pull 뿐). jsdom 을
+// 넣으면 node_modules·락파일·버전 관리가 따라오는데 그걸 지탱할 CI 가 없다.
+// 버그 하나 잡자고 짊어질 짐이 아니고, 애초에 필요하지도 않다 — 위 판정을
+// 순수 함수로 빼면 DOM 없이 그냥 시험할 수 있다.
+//
+// "이 문구는 검사 뒤에만 나온다" 는 식으로 화면 텍스트를 grep 해서 거는
+// 시험은 만들지 말 것. 멀쩡한 리팩터에도 깨지고, 통과해도 실제로 안전하다는
+// 뜻이 아니라서 시험이 거짓말을 하게 된다.
+//
 // 4. 남녀 맞춤 듀얼 스마트 추천 알고리즘
 function renderSmartSummary() {
   let menFreeWash = 0, commonFreeWash = 0, womenFreeWash = 0;
