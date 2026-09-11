@@ -153,14 +153,16 @@ def parse(raw):
             })
             continue
 
-        # 고정된 주간 식단표
+        # 고정된 주간 식단표. 두 개 이상 걸리면 API 가 준 순서가 아니라
+        # 갱신이 더 최근인 것을 쓴다.
         if kind == "weekly" and img:
-            weekly = {
-                "title": title,
-                "image": img,
-                "updatedAt": when,
-                "link": (it.get("permalink") or "").replace("http://", "https://"),
-            }
+            if weekly is None or when >= weekly["updatedAt"]:
+                weekly = {
+                    "title": title,
+                    "image": img,
+                    "updatedAt": when,
+                    "link": (it.get("permalink") or "").replace("http://", "https://"),
+                }
 
     daily.sort(key=lambda d: (d["month"], d["day"]), reverse=True)
     return {"weekly": weekly, "daily": daily, "fetchedAt": time.time()}

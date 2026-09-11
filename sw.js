@@ -1,4 +1,6 @@
-// Jungle Laundry 2.0 - Service Worker (Web Push & Offline Engine)
+// Jungle Laundry 2.0 - Service Worker (Web Push)
+// fetch/cache 핸들러가 없어 오프라인 캐싱은 하지 않는다. 탭이 닫혀도
+// 알림이 오게 하는 것(Web Push)만 이 파일의 역할이다.
 self.addEventListener('install', event => {
   self.skipWaiting();
 });
