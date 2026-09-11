@@ -1069,7 +1069,7 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
         except urllib.error.HTTPError as e:
             detail = ''
             try:
-                detail = e.read().decode('utf-8', 'replace')[:300]
+                detail = security.read_capped(e).decode('utf-8', 'replace')[:300]
             except Exception:
                 pass
             print(f"[웹AI] {e.code} {detail}")

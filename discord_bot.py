@@ -79,7 +79,7 @@ def measured_busy_slots():
         url = STATUS_API_URL.replace("/api/status", "/api/congestion")
         req = urllib.request.Request(url, headers={"User-Agent": "JungleDiscordBot/2.0"})
         with urllib.request.urlopen(req, timeout=5) as res:
-            data = json.loads(res.read().decode("utf-8"))
+            data = json.loads(security.read_capped(res).decode("utf-8"))
         _MEASURED_AT = time.time()
         _MEASURED_BUSY = data if data.get("ready") and data.get("slots") else None
     except Exception as e:
@@ -475,7 +475,7 @@ def fetch_live_status():
             req = urllib.request.Request(STATUS_API_URL, headers={'User-Agent': 'JungleDiscordBot/2.0'})
             with urllib.request.urlopen(req, timeout=6) as res:
                 if res.status == 200:
-                    data = json.loads(res.read().decode('utf-8'))
+                    data = json.loads(security.read_capped(res).decode('utf-8'))
                     if data:
                         _LAST_STATUS = data
                         _LAST_STATUS_AT = time.time()
@@ -1532,7 +1532,7 @@ def search_web(question):
                     f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
                     data=body, headers={"Content-Type": "application/json"})
                 with urllib.request.urlopen(req, timeout=40) as res:
-                    data = json.loads(res.read().decode("utf-8"))
+                    data = json.loads(security.read_capped(res).decode("utf-8"))
                 cand = data["candidates"][0]
                 answer = "".join(p.get("text", "") for p in cand["content"]["parts"]).strip()
                 chunks = (cand.get("groundingMetadata") or {}).get("groundingChunks") or []
@@ -2420,7 +2420,7 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                 # 사용자가 그만큼 통째로 기다린다.
                 # 남은 예산보다 길게 잡지 않는다.
                 with urllib.request.urlopen(req, timeout=min(GEMINI_TIMEOUT, left)) as res:
-                    data = json.loads(res.read().decode("utf-8"))
+                    data = json.loads(security.read_capped(res).decode("utf-8"))
                 raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
                 # 일부 모델이 ```json ... ``` 로 감싸 보낸다. 그대로 파싱하면 실패한다.
                 if raw.startswith("```"):
@@ -2441,7 +2441,7 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                 # 429 = 이 키의 한도 초과, 다음 키로. 그 밖의 코드는 모델 문제로 본다.
                 if e.code == 429:
                     try:
-                        delay = _retry_delay_from(e.read().decode("utf-8", "replace"))
+                        delay = _retry_delay_from(security.read_capped(e).decode("utf-8", "replace"))
                     except Exception:
                         delay = None
                     rest = _quota_block(model, key, delay)
@@ -2529,7 +2529,7 @@ def ask_groq(text, status_data, mine, history=None, admin=False):
                 },
             )
             with urllib.request.urlopen(req, timeout=15) as res:
-                data = json.loads(res.read().decode("utf-8"))
+                data = json.loads(security.read_capped(res).decode("utf-8"))
             raw = (data["choices"][0]["message"]["content"] or "").strip()
             if raw.startswith("```"):
                 raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)

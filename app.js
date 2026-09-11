@@ -211,8 +211,22 @@ const ERROR_DIAGNOSTICS = {
   }
 };
 
+// 상태는 ERROR 인데 원본이 구체 코드를 안 줬을 때 쓰는 값.
+// 실제 코드가 아니므로 화면에 영문 그대로 보이면 안 된다.
+const ERROR_CODE_UNKNOWN = 'UNKNOWN_ERROR';
+
 function getErrorDiagnostic(errCode) {
   if (!errCode) return null;
+  if (errCode === ERROR_CODE_UNKNOWN) {
+    return {
+      title: '기기 점검 필요 (코드 확인 안 됨)',
+      short: '점검 필요',
+      icon: '⚠️',
+      productPart: 'LG 워시타워 본체',
+      cause: '오류 코드를 직접 확인하지 못했습니다.',
+      solution: ['세탁실에서 기기 화면의 코드를 확인하거나 운영진에게 문의해 주세요.']
+    };
+  }
   return ERROR_DIAGNOSTICS[errCode] || {
     title: `기기 점검 필요 (${errCode})`,
     short: '점검 필요',
@@ -964,7 +978,7 @@ function updateAlarmDockUI() {
     if (noData) {
       timeText = `<span style="color:#94a3b8;font-weight:700;">🛠️ 정보 없음 · 점검 중일 수 있음</span>`;
     } else if (isError) {
-      const diag = getErrorDiagnostic(unitData.error || data.error || 'UNKNOWN_ERROR');
+      const diag = getErrorDiagnostic(unitData.error || data.error || ERROR_CODE_UNKNOWN);
       timeText = `<span style="color:#ef4444;font-weight:800;">🚨 가동 중단! (${diag.short})</span>`;
     } else if (remainMin > 0) {
       timeText = `약 ${remainMin}분 남음 (5분 전 알림 ON)`;
@@ -1066,7 +1080,7 @@ setInterval(() => {
       item.notifiedError = true;
       changed = true;
 
-      const diag = getErrorDiagnostic(unitData.error || data.error || 'UNKNOWN_ERROR');
+      const diag = getErrorDiagnostic(unitData.error || data.error || ERROR_CODE_UNKNOWN);
       playAlarmErrorSound();
       if (navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 600]);
 
@@ -1398,8 +1412,8 @@ function createTowerCardElement(tower, isFloorplan = false) {
   const dTimer = dryer.timer || {};
   
   // 개별 모듈 에러 판별 (건조기 에러는 건조기에, 세탁기 에러는 세탁기에 배치)
-  const dError = dryer.error || (dState === 'ERROR' ? (data.error || 'UNKNOWN_ERROR') : null);
-  const wError = washer.error || (wState === 'ERROR' ? (data.error || 'UNKNOWN_ERROR') : null);
+  const dError = dryer.error || (dState === 'ERROR' ? (data.error || ERROR_CODE_UNKNOWN) : null);
+  const wError = washer.error || (wState === 'ERROR' ? (data.error || ERROR_CODE_UNKNOWN) : null);
   const isDryerErr = !!dError || dState === 'ERROR';
   const isWasherErr = !!wError || wState === 'ERROR';
   const towerError = (!isDryerErr && !isWasherErr && data.error) ? data.error : null;
@@ -1928,8 +1942,8 @@ function renderStaleTracker() {
     const data = globalStatusData[t.name] || {};
     const dState = unitState(data.dryer || {});
     const wState = unitState(data.washer || {});
-    const dErr = data.dryer?.error || (dState === 'ERROR' ? (data.error || 'UNKNOWN_ERROR') : null);
-    const wErr = data.washer?.error || (wState === 'ERROR' ? (data.error || 'UNKNOWN_ERROR') : null);
+    const dErr = data.dryer?.error || (dState === 'ERROR' ? (data.error || ERROR_CODE_UNKNOWN) : null);
+    const wErr = data.washer?.error || (wState === 'ERROR' ? (data.error || ERROR_CODE_UNKNOWN) : null);
     [['dryer', '건조기', dErr], ['washer', '세탁기', wErr]].forEach(([, unitLabel, err]) => {
       if (!err) return;
       const diag = getErrorDiagnostic(err);

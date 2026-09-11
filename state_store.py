@@ -19,6 +19,8 @@ import threading
 import time
 import urllib.request
 
+import security
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------------------------------------------------
@@ -54,7 +56,7 @@ def _remote_call(command):
                  "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=10) as res:
-        return json.loads(res.read().decode("utf-8")).get("result")
+        return json.loads(security.read_capped(res).decode("utf-8")).get("result")
 
 
 def _remote_get(name):
