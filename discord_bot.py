@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw, ImageFont
 import washtower
 import device_log
 import cafeteria
+import security
 
 try:
     import jungle_kb
@@ -1364,11 +1365,45 @@ GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
 # ── 관리자 모드 ────────────────────────────────────────────
 # 운영자가 시험할 때 주제 제한 없이 물어볼 수 있게 한다.
 # ID 와 암구호가 둘 다 맞아야 열린다. 하나라도 비어 있으면 기능이 꺼진다.
+# 봇이 말을 받아 주는 서버. 비워 두면 어디서든 받는다.
+#
+# 왜 두나. 봇에게 물어보면 정글 안내(출결·외박·시설 …)가 답으로 나간다.
+# 누가 이 봇을 자기 서버에 초대하면 그 서버 사람들이 그대로 읽는다.
+# 여기에 우리 서버 번호를 적어 두면 다른 곳에서는 아무 말도 하지 않는다.
+# 번호는 봇이 켜질 때 로그에 찍어 준다.
+ALLOWED_GUILD_IDS = {x.strip() for x in (os.environ.get("ALLOWED_GUILD_IDS") or "").split(",") if x.strip()}
+
+# 한 사람이 얼마나 자주 물어볼 수 있는지.
+# AI 한 번이 곧 한도 소모라, 한 사람이 몰아치면 모두가 못 쓰게 된다.
+# 사람이 대화하는 속도로는 닿지 않는 값으로 잡는다.
+ASK_BURST = security.Limiter(12, 60, "질문")
+ASK_DAY = security.Limiter(200, 24 * 3600, "질문(하루)")
+
 ADMIN_USER_IDS = {x.strip() for x in (os.environ.get("ADMIN_USER_IDS") or "").split(",") if x.strip()}
 ADMIN_PASSPHRASE = (os.environ.get("ADMIN_PASSPHRASE") or "").strip()
 ADMIN_SESSION_SEC = 30 * 60      # 열어둔 뒤 이 시간이 지나면 저절로 닫힌다
 ADMIN_SESSIONS = {}              # user_id -> 열린 시각
 LAST_ENGINE = "아직 없음"          # 마지막으로 답한 엔진 (관리자 진단용)
+
+
+def guild_allowed(guild):
+    """이 서버에서 말을 받아도 되는지. DM(guild 없음)은 늘 받는다."""
+    if guild is None:
+        return True
+    if not ALLOWED_GUILD_IDS:
+        return True          # 안 정해 뒀으면 예전처럼 다 받는다
+    return str(guild.id) in ALLOWED_GUILD_IDS
+
+
+def ask_allowed(user_id):
+    """이 사람이 지금 또 물어봐도 되는지.
+
+    관리자는 세지 않는다. 시험하다 자기 손에 막히면 곤란하다.
+    """
+    if is_admin_user(user_id):
+        return True
+    key = str(user_id)
+    return ASK_BURST.allow(key) and ASK_DAY.allow(key)
 
 
 def is_admin_user(user_id):
@@ -2513,6 +2548,12 @@ async def run_assistant(user_id, text, private=True):
     if toggled:
         clear_history(user_id)
         return toggled, None, False
+
+    # 한 사람이 몰아쳐 묻는 것을 막는다. AI 한도는 모두가 나눠 쓰는 것이라
+    # 한 사람이 태우면 나머지가 못 쓴다.
+    if not ask_allowed(user_id):
+        return ("잠깐 쉬었다 가요. 조금 뒤에 다시 물어봐 주세요 🫧",
+                None, False)
 
     # 관리자가 시험 중이면 주제 제한과 탈옥 방어를 건너뛴다.
     # 다른 사람에게는 그대로 적용된다.
@@ -4059,6 +4100,11 @@ async def on_message(message: discord.Message):
     if not (is_dm or mentioned or in_assistant_channel):
         return
 
+    # 우리 서버가 아니면 아무 말도 하지 않는다.
+    # 답에는 정글 안내가 섞여 나가므로, 낯선 곳에서는 입을 열지 않는다.
+    if not guild_allowed(message.guild):
+        return
+
     text = strip_mention(message.content or "", bot.user) if mentioned else (message.content or "").strip()
 
     if not text:
@@ -4152,7 +4198,17 @@ async def on_ready():
     # 어느 서버에 들어가 있는지 분명히 남긴다.
     # 0개면 초대가 안 된 것이다 (DM 은 이전 대화방이 남아 있어 계속 동작할 수 있다).
     if bot.guilds:
-        print(f"🏠 [Guilds] {len(bot.guilds)}개 서버: " + ", ".join(g.name for g in bot.guilds))
+        print(f"🏠 [Guilds] {len(bot.guilds)}개 서버: "
+              + ", ".join(f"{g.name}({g.id})" for g in bot.guilds))
+        if ALLOWED_GUILD_IDS:
+            others = [g for g in bot.guilds if str(g.id) not in ALLOWED_GUILD_IDS]
+            if others:
+                print("🔒 [Guilds] 말을 받지 않는 서버: "
+                      + ", ".join(f"{g.name}({g.id})" for g in others))
+        else:
+            print("🔓 [Guilds] ALLOWED_GUILD_IDS 가 비어 있어 모든 서버에서 답합니다.")
+            print("   .env 에 ALLOWED_GUILD_IDS=" +
+                  ",".join(str(g.id) for g in bot.guilds) + " 를 적으면 여기서만 답합니다.")
     else:
         print("=" * 60)
         print("⚠️ [Guilds] 봇이 들어가 있는 서버가 없습니다!")

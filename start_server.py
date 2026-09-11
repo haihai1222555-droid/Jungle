@@ -11,6 +11,7 @@ import threading
 import state_store
 import washtower
 import device_log
+import security
 import cafeteria
 import time
 from datetime import datetime, timedelta, timezone
@@ -97,6 +98,14 @@ CACHED_STATUS_BODY = b'{}'
 # 원본 서버로 나가는 요청을 모아 두는 곳.
 # 예전에는 /api/stats 가 요청마다 원본으로 나갔다. 200명이면 200번이다.
 # 같은 것을 여러 명이 물으면 한 번만 다녀와서 나눠 준다.
+# 한 사람이 몰아쳐 두드려 서버를 재우는 것을 막는다.
+# 넉넉하게 잡는다. 화면 한 번 열면 파일 열댓 개를 받고, 그 뒤로는
+# 10초에 한 번 상태를 물어본다. 1분에 300번이면 사람이 쓰는 방식으로는
+# 절대 닿지 않고, 몰아치는 것만 걸린다.
+REQ_LIMITER = security.Limiter(300, 60, "요청")
+POST_BODY_MAX = 64 * 1024          # 알림 등록 같은 것은 몇 KB 면 충분하다
+AI_STREAM_MAX = 4 * 1024 * 1024    # 한 번의 답이 이보다 길 수는 없다
+
 PROXY_CACHE_TTL = {'/api/stats': 60}
 _PROXY_CACHE = {}                    # 경로 -> (만료시각, 상태, 헤더, 본문)
 _PROXY_FETCH_LOCKS = {}              # 경로 -> Lock (같은 것을 두 번 안 가져오게)
@@ -666,10 +675,34 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             return 'no-cache'
         return None
 
+    def _allowed_origin(self):
+        """이 요청에 응답을 읽도록 허락해도 되는 곳인지.
+
+        예전에는 모든 응답에 '*' 를 붙였다. 아무 사이트나 자기 페이지에서
+        우리 AI 중계를 불러 우리 키를 태울 수 있었고, 우리 API 도 마음대로
+        읽어 갈 수 있었다.
+
+        우리 페이지는 같은 주소에서 열리므로 이 헤더가 아예 없어도 된다.
+        그래서 좁혀도 화면은 그대로 돈다.
+        """
+        hdrs = getattr(self, 'headers', None)
+        origin = hdrs.get('Origin') if hdrs else None
+        if not origin:
+            return None
+        if security.origin_ok(origin, None, hdrs.get('Host')) is True:
+            return origin
+        return None
+
     def end_headers(self):
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        who = self._allowed_origin()
+        if who:
+            self.send_header('Access-Control-Allow-Origin', who)
+            self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        # 같은 주소라도 Origin 에 따라 응답이 달라지므로 중간 저장소에 알린다
+        self.send_header('Vary', 'Origin')
+        for k, v in security.HEADERS:
+            self.send_header(k, v)
         if not self._has_cache_header:
             cc = self._cache_header_for(getattr(self, 'path', ''))
             if cc:
@@ -705,6 +738,8 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
         super().do_HEAD()
 
     def do_GET(self):
+        if not self._rate_ok():
+            return
         req_path = self.path.split('?')[0]
 
         # /api/ 로 시작하지 않는 것은 파일 요청이다.
@@ -807,6 +842,14 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         if req_path.startswith('/api/'):
+            # 원본으로 넘기는 것은 정해진 주소뿐이다.
+            # 예전에는 /api/ 로 시작하면 무엇이든 넘겼다. 우리 서버가 남의
+            # 심부름꾼이 되는 길이었고, 원본(무료 터널)이 그 트래픽 때문에
+            # 막히면 우리 화면도 같이 죽는다.
+            if not security.proxy_path_ok(self.path):
+                print(f"[차단] 넘기지 않는 주소: {req_path}")
+                self._json_out(404, {"error": "not found"})
+                return
             target_url = TARGET_BASE + self.path
             ttl = PROXY_CACHE_TTL.get(req_path)
             if ttl:
@@ -839,11 +882,15 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                         req = urllib.request.Request(
                             target_url, headers={'User-Agent': 'Mozilla/5.0'})
                         with urllib.request.urlopen(req, timeout=6) as response:
-                            content = response.read()
+                            # 상대가 고장 나 끝없이 보내면 우리 기억이 먼저 찬다
+                            content = security.read_capped(response)
+                            # 원본이 붙인 CORS 헤더는 걷어낸다. 우리 것과 겹치면
+                            # 브라우저가 둘 다 무시해 화면이 빈다.
                             hdrs = [(k, v) for k, v in response.headers.items()
                                     if k.lower() not in ('transfer-encoding',
                                                          'content-length',
-                                                         'content-encoding')]
+                                                         'content-encoding')
+                                    and not k.lower().startswith('access-control-')]
                             _PROXY_CACHE[self.path] = (time.time() + ttl,
                                                        response.status, hdrs, content)
                             with _PROXY_LOCK:
@@ -878,10 +925,11 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 req = urllib.request.Request(target_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=6) as response:
-                    content = response.read()
+                    content = security.read_capped(response)
                     self.send_response(response.status)
                     for k, v in response.headers.items():
-                        if k.lower() not in ['transfer-encoding', 'content-length', 'content-encoding']:
+                        if (k.lower() not in ['transfer-encoding', 'content-length', 'content-encoding']
+                                and not k.lower().startswith('access-control-')):
                             self.send_header(k, v)
                     self.end_headers()
                     self.wfile.write(content)
@@ -900,10 +948,13 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(body)
                     return
+                # 실패한 까닭을 그대로 내보내면 우리 안쪽 주소와 구조가 딸려 나간다.
+                # 자세한 것은 로그에만 남긴다.
+                print(f"[Proxy] {req_path} 실패: {e}")
                 self.send_response(502)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+                self.wfile.write(b'{"error":"upstream"}')
                 return
 
         return super().do_GET()
@@ -915,10 +966,40 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
         한 사람이 제보한 뒤 30초 동안 모두가 막힌다.
         Caddy 가 붙여 주는 X-Forwarded-For 의 맨 앞이 진짜 사용자다.
         """
-        fwd = (self.headers.get('X-Forwarded-For') or '').split(',')[0].strip()
-        if fwd:
-            return fwd
-        return self.client_address[0] if self.client_address else '?'
+        # 맨 앞은 보낸 사람이 제 손으로 적을 수 있다. Caddy 가 실제로 본
+        # 주소는 맨 뒤에 붙는다. 자세한 것은 security.real_ip 에 적어 뒀다.
+        peer = self.client_address[0] if self.client_address else '?'
+        return security.real_ip(peer, self.headers.get('X-Forwarded-For'))
+
+    def _rate_ok(self):
+        """몰아쳐 두드리는 것을 막는다. 걸리면 여기서 응답까지 끝낸다.
+
+        같은 기계에서 부르는 것(우리 봇)은 세지 않는다. 그것까지 세면
+        봇이 먼저 멈춘다.
+        """
+        peer = self.client_address[0] if self.client_address else ''
+        if security.is_local(peer) and not self.headers.get('X-Forwarded-For'):
+            return True
+        if REQ_LIMITER.allow(self._client_key()):
+            return True
+        self.send_response(429)
+        self.send_header('Retry-After', '30')
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.end_headers()
+        self.wfile.write(b'{"error":"too many requests"}')
+        return False
+
+    def _origin_not_ours(self):
+        """남의 사이트에서 온 요청인지.
+
+        브라우저는 POST 에 Origin 을 반드시 붙인다. 그래서 다른 사이트가
+        우리 AI 중계나 제보를 제 것처럼 쓰는 것은 여기서 걸린다.
+        헤더가 아예 없는 것(브라우저가 아닌 것)은 막지 않는다. 우리 봇이
+        그렇게 부르기 때문이다. 그쪽은 횟수 제한으로 다룬다.
+        """
+        return security.origin_ok(self.headers.get('Origin'),
+                                  self.headers.get('Referer'),
+                                  self.headers.get('Host')) is False
 
     def _read_body(self, limit):
         """요청 본문을 바이트로 읽는다. 너무 크거나 형식이 틀리면 None.
@@ -997,10 +1078,17 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                          up.headers.get('Content-Type') or 'text/event-stream')
         self.send_header('Cache-Control', 'no-cache')
         self.end_headers()
+        # 상대가 끝없이 보내면 계속 흘려보내게 된다. 한 번의 답으로
+        # 있을 수 없는 크기에서 끊는다.
+        sent = 0
         try:
             while True:
                 chunk = up.read(1024)
                 if not chunk:
+                    break
+                sent += len(chunk)
+                if sent > AI_STREAM_MAX:
+                    print(f"[웹AI] 응답이 너무 깁니다 ({sent}바이트). 끊습니다.")
                     break
                 self.wfile.write(chunk)
         except Exception:
@@ -1022,6 +1110,12 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
         return data, None
 
     def do_POST(self):
+        if not self._rate_ok():
+            return
+        if self._origin_not_ours():
+            print(f"[차단] 남의 사이트에서 온 요청: {self.headers.get('Origin')}")
+            self._json_out(403, {"error": "허용되지 않은 요청입니다."})
+            return
         _p = self.path.split('?')[0]
 
         # ── 제미나이 중계 ──
@@ -1108,8 +1202,16 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         req_path = self.path.split('?')[0]
-        content_length = int(self.headers.get('Content-Length', 0))
-        post_data = self.rfile.read(content_length)
+        # 상한을 안 두면 보낸 만큼 다 읽는다. 큰 것 몇 개면 서버가 눕는다.
+        # 본문이 비어 있는 것은 원래 되던 것이라 그대로 둔다(해제 요청 등).
+        try:
+            declared = int(self.headers.get('Content-Length') or 0)
+        except ValueError:
+            declared = -1
+        if declared < 0 or declared > POST_BODY_MAX:
+            self._json_out(413, {"error": "요청이 너무 큽니다."})
+            return
+        post_data = self._read_body(POST_BODY_MAX) or b''
 
         if req_path == '/api/subscribe-push':
             try:
@@ -1541,6 +1643,33 @@ def last_user_text(body):
     return ""
 
 
+def check_secret_file_perms():
+    """열쇠가 든 파일을 나 말고도 읽을 수 있는지 본다.
+
+    웹으로 나가는 것만 막아서는 부족하다. 서버 안에서 아무나 읽을 수 있으면
+    거기서도 새어 나간다. 고치지는 않는다. 남의 파일 권한을 말없이 바꾸는
+    것이 더 위험하다. 어떻게 고치는지만 알려 준다.
+
+    윈도우에는 이 권한 개념이 없어 건너뛴다. 서버는 리눅스다.
+    """
+    if os.name != "posix":
+        return
+    for name in (".env", "vapid_private.pem"):
+        path = os.path.join(BASE_DIR, name)
+        if not os.path.exists(path):
+            continue
+        try:
+            mode = os.stat(path).st_mode & 0o777
+        except OSError:
+            continue
+        if mode & 0o077:
+            print("=" * 60)
+            print(f"[권한] {name} 을 다른 사용자도 읽을 수 있습니다 "
+                  f"(지금 {oct(mode)[2:]}).")
+            print(f"[권한] 고치기: chmod 600 {path}")
+            print("=" * 60)
+
+
 def run_exposure_check():
     """공개 대상이 아닌 파일이 웹으로 나가는지 스스로 확인한다."""
     global EXPOSURE_STATUS
@@ -1582,6 +1711,9 @@ def run_exposure_check():
         else:
             EXPOSURE_STATUS = "정상"
             print(f"[노출 검사] {len(targets)}개 확인 — 모두 막혀 있습니다.")
+
+        check_secret_file_perms()
+
     except Exception as e:
         EXPOSURE_STATUS = "검사 실패"
         print(f"[노출 검사] 검사하지 못했습니다: {e}")

@@ -22,6 +22,8 @@ import json
 import os
 import re
 import threading
+
+import security
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -98,7 +100,8 @@ def _now_kst():
 def _fetch_raw():
     req = urllib.request.Request(API, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=10) as r:
-        return json.loads(r.read().decode("utf-8"))
+        # 저쪽이 고장 나 끝없이 보내면 우리 기억이 먼저 찬다
+        return json.loads(security.read_capped(r).decode("utf-8"))
 
 
 def _pick_image(item):
@@ -264,10 +267,19 @@ def local_weekly_image(dirpath):
     if _IMG_CACHE and _IMG_CACHE[0] == url and os.path.exists(_IMG_CACHE[1]):
         return _IMG_CACHE[1]
     path = os.path.join(dirpath, "cafeteria_weekly.cache")
+    # 주소는 저쪽 글에 적힌 것을 그대로 쓴다. 그러니 받아 오기 전에 본다.
+    # 확인하지 않으면 그 자리에 우리 안쪽 주소(127.0.0.1 같은)가 적혔을 때
+    # 밖에서 못 보는 것을 우리가 대신 꺼내 주는 꼴이 된다.
+    if not security.outbound_url_ok(url):
+        print("[식단] 받아 올 수 없는 주소라 건너뜁니다: %s" % url[:80])
+        return _IMG_CACHE[1] if _IMG_CACHE and os.path.exists(_IMG_CACHE[1]) else None
     try:
         req = urllib.request.Request(url, headers={"User-Agent": UA})
         with urllib.request.urlopen(req, timeout=10) as r:
-            data = r.read()
+            ctype = (r.headers.get("Content-Type") or "").lower()
+            if not ctype.startswith("image/"):
+                raise ValueError("사진이 아닙니다 (%s)" % ctype[:40])
+            data = security.read_capped(r, security.IMAGE_MAX)
         tmp = path + ".tmp"
         with open(tmp, "wb") as f:
             f.write(data)
