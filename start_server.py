@@ -365,7 +365,7 @@ def background_push_worker():
             try:
                 req = urllib.request.Request(f"{TARGET_BASE}/api/status", headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=3) as res:
-                    CACHED_STATUS = json.loads(res.read().decode('utf-8'))
+                    CACHED_STATUS = json.loads(security.read_capped(res).decode('utf-8'))
                     CACHED_STATUS_BODY = json.dumps(
                         CACHED_STATUS, ensure_ascii=False).encode('utf-8')
                     CACHED_STATUS_AT = time.time()
@@ -721,10 +721,14 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
         super().handle_one_request()
 
     def do_OPTIONS(self):
+        if not self._rate_ok():
+            return
         self.send_response(200)
         self.end_headers()
 
     def do_HEAD(self):
+        if not self._rate_ok():
+            return
         req_path = self.path.split('?')[0]
         # HEAD 로도 새면 안 된다. 크기만 알려줘도 있다는 것이 드러난다.
         if not req_path.startswith('/api/') and not is_public_path(req_path):
@@ -891,9 +895,12 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                                                          'content-length',
                                                          'content-encoding')
                                     and not k.lower().startswith('access-control-')]
-                            _PROXY_CACHE[self.path] = (time.time() + ttl,
-                                                       response.status, hdrs, content)
+                            # 쓰기와 청소를 한 잠금 안에서 해야 한다. 따로 두면
+                            # 이 스레드가 청소하는 동안 다른 경로가 잠금 없이
+                            # 사전에 값을 넣어 '반복 중 크기 변경' 오류가 날 수 있다.
                             with _PROXY_LOCK:
+                                _PROXY_CACHE[self.path] = (time.time() + ttl,
+                                                           response.status, hdrs, content)
                                 _proxy_evict()
                             self.send_response(response.status)
                             for k, v in hdrs:
@@ -1470,7 +1477,7 @@ def refresh_source_age():
     req = urllib.request.Request(f"{TARGET_BASE}/api/health",
                                  headers={'User-Agent': 'Mozilla/5.0'})
     with urllib.request.urlopen(req, timeout=5) as res:
-        d = json.loads(res.read().decode('utf-8'))
+        d = json.loads(security.read_capped(res).decode('utf-8'))
     raw = d.get("last_update")
     if raw:
         # "2026-09-08 13:48:30.369750" — 원본 서버의 지역 시각(KST)이다

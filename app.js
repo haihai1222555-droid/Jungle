@@ -964,7 +964,7 @@ function updateAlarmDockUI() {
     if (noData) {
       timeText = `<span style="color:#94a3b8;font-weight:700;">🛠️ 정보 없음 · 점검 중일 수 있음</span>`;
     } else if (isError) {
-      const diag = getErrorDiagnostic(unitData.error || data.error || 'DRAIN_ERROR');
+      const diag = getErrorDiagnostic(unitData.error || data.error || 'UNKNOWN_ERROR');
       timeText = `<span style="color:#ef4444;font-weight:800;">🚨 가동 중단! (${diag.short})</span>`;
     } else if (remainMin > 0) {
       timeText = `약 ${remainMin}분 남음 (5분 전 알림 ON)`;
@@ -1066,7 +1066,7 @@ setInterval(() => {
       item.notifiedError = true;
       changed = true;
 
-      const diag = getErrorDiagnostic(unitData.error || data.error || 'DRAIN_ERROR');
+      const diag = getErrorDiagnostic(unitData.error || data.error || 'UNKNOWN_ERROR');
       playAlarmErrorSound();
       if (navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 600]);
 
@@ -1398,8 +1398,8 @@ function createTowerCardElement(tower, isFloorplan = false) {
   const dTimer = dryer.timer || {};
   
   // 개별 모듈 에러 판별 (건조기 에러는 건조기에, 세탁기 에러는 세탁기에 배치)
-  const dError = dryer.error || (dState === 'ERROR' ? (data.error || 'EMPTY_WATER_ALERT_ERROR') : null);
-  const wError = washer.error || (wState === 'ERROR' ? (data.error || 'DRAIN_ERROR') : null);
+  const dError = dryer.error || (dState === 'ERROR' ? (data.error || 'UNKNOWN_ERROR') : null);
+  const wError = washer.error || (wState === 'ERROR' ? (data.error || 'UNKNOWN_ERROR') : null);
   const isDryerErr = !!dError || dState === 'ERROR';
   const isWasherErr = !!wError || wState === 'ERROR';
   const towerError = (!isDryerErr && !isWasherErr && data.error) ? data.error : null;
@@ -1921,9 +1921,16 @@ function renderStaleTracker() {
   });
 
   // 2) 에러 기기 감지 (세탁기/건조기를 각각 정확한 이름으로 표기)
+  // 개별 error 필드가 비어 있어도 상태가 ERROR 면 타워 레벨 data.error 를
+  // 본다. 카드(createTowerCardElement)와 같은 기준이어야 카드엔 에러
+  // 배너가 뜨는데 이 목록엔 안 잡히는 일이 없다.
   TOWERS.forEach(t => {
     const data = globalStatusData[t.name] || {};
-    [['dryer', '건조기', data.dryer?.error], ['washer', '세탁기', data.washer?.error]].forEach(([, unitLabel, err]) => {
+    const dState = unitState(data.dryer || {});
+    const wState = unitState(data.washer || {});
+    const dErr = data.dryer?.error || (dState === 'ERROR' ? (data.error || 'UNKNOWN_ERROR') : null);
+    const wErr = data.washer?.error || (wState === 'ERROR' ? (data.error || 'UNKNOWN_ERROR') : null);
+    [['dryer', '건조기', dErr], ['washer', '세탁기', wErr]].forEach(([, unitLabel, err]) => {
       if (!err) return;
       const diag = getErrorDiagnostic(err);
       items.push(`

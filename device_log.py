@@ -207,8 +207,7 @@ def recent_error(tower_label, unit_type, within=None, now=None):
     일시정지 원인을 가릴 때 쓴다. 직전 관측에서 오류를 못 봤더라도,
     조금 전에 같은 기기가 오류를 냈다면 그 사실을 함께 적어야 한다.
     """
-    import time as _t
-    now = now or _t.time()
+    now = now or time.time()
     within = within or RECENT_ERROR_SEC
     _fresh()
     unit_name = "건조기" if unit_type == "dryer" else "세탁기"
@@ -299,10 +298,12 @@ def observe(tower_label, unit_type, unit, state, now=None):
         # 코드를 고쳐 서버를 몇 번 다시 띄우면, 계속 멈춰 있는 기기 하나가
         # 재시작 횟수만큼 '일시정지' 로 쌓인다. 실제로 한 번 그랬다.
         note = "(서버가 뜰 때 이미 이 상태였음 — 시작 시각은 알 수 없음)"
+        # 오류와 일시정지가 동시에 관측될 수 있다(예: 에러 코드가 붙은 채 PAUSE).
+        # elif 로 묶으면 그런 기기는 pause 기록이 통째로 빠진다.
         if cur["is_error"]:
             if not _already_open(tower_label, unit_type, "error"):
                 add("error", cur["error"], note)
-        elif cur["is_pause"]:
+        if cur["is_pause"]:
             if not _already_open(tower_label, unit_type, "pause"):
                 # 멈추기 직전을 못 봤으므로 사람이 눌렀는지 오류였는지 가릴 수 없다.
                 # 다만 지금 에러 코드가 붙어 있으면 그건 오류 때문이다.

@@ -511,7 +511,22 @@ intents = discord.Intents.default()
 if str(os.environ.get("ENABLE_MESSAGE_CONTENT", "")).lower() in ("1", "true", "yes", "on"):
     intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+class GuildGateTree(app_commands.CommandTree):
+    """서버 허용 목록을 슬래시 명령에도 적용한다.
+
+    on_message 의 일반 대화에는 guild_allowed() 를 걸어 뒀는데, /비서 같은
+    슬래시 명령은 이 검사를 거치지 않아 허용 안 된 서버에서도 AI 응답이
+    그대로 나갈 수 있었다. 명령마다 따로 검사를 넣는 대신 여기서 한 번에 막는다.
+    """
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not guild_allowed(interaction.guild):
+            await interaction.response.send_message(
+                "이 서버에서는 사용할 수 없습니다.", ephemeral=True)
+            return False
+        return True
+
+
+bot = commands.Bot(command_prefix="!", intents=intents, tree_cls=GuildGateTree)
 
 # =========================================================
 # 현실 세탁실 초고화질 카드 뷰 이미지 렌더러 (Web UI 100% 동일)
@@ -3195,7 +3210,7 @@ async def _do_step(user_id, plan, status_data, mine):
         if unknown:
             tail += (" (" + "·".join(unknown)
                      + "번은 값이 오지 않아 "
-                       "셈에서 뻐어요)")
+                       "셈에서 빠져요)")
         return head + tail, None, True
 
     # 문제를 호소했는데 갈 곳을 안 알려줬으면 한 줄 붙인다
