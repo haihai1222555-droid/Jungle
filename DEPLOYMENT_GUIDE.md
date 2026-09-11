@@ -92,6 +92,7 @@ nano .env
 | `SUPPORT_CONTACT` | | 문의처. 비우면 번호 없이 안내 |
 | `ADMIN_USER_IDS` | | 제보를 DM 으로 받을 사람 |
 | `STALE_PICKUP_SEC` | | 수거 요청까지 유예 (기본 900초) |
+| `BIXBY_SECRET` / `BIXBY_USER_ID` | | 음성 비서 연동(선택). 둘 다 채워야 `/api/voice/ask` 가 열린다 |
 
 VAPID 키가 없으면 첫 실행 때 `vapid_private.pem` 이 자동 생성된다.
 그 내용을 통째로 `VAPID_PRIVATE_KEY_PEM` 에 넣어두면 서버를 옮겨도 구독이 살아 있다.
