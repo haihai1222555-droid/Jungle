@@ -6,6 +6,7 @@ __pycache__/
 
 # Environment & Temp
 .env
+.env.*
 .DS_Store
 Thumbs.db
 
@@ -31,6 +32,8 @@ bot_preview.png
 # 봇 런타임 데이터
 bot_settings.json
 discord_alarms.json
+# 사용자 제보 원문 (개인정보 섞일 수 있음, 서버에만 둔다)
+reports.json
 # 기기 오류/일시정지 이력 (일주일치, 서버에만 둔다)
 device_events.json
 

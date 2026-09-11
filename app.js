@@ -1331,9 +1331,11 @@ function renderCongestionStatus() {
 
   // 실시간 여유 대수 계산
   let freeCount = 0;
+  let hasLiveData = false;
   TOWERS.forEach(t => {
     // 값이 안 온 기기는 비어 있다고 셀 수 없다
     if (!towerHasData(t.name)) return;
+    hasLiveData = true;
     const data = globalStatusData[t.name] || {};
     const wState = unitState(data.washer);
     const dState = unitState(data.dryer);
@@ -1344,8 +1346,19 @@ function renderCongestionStatus() {
 
   dotEl.className = 'signal-dot';
 
-  // 통계 기반 지표와 실시간 기기 여유 수 융합 판정 (5단계: 매우 여유(파랑), 여유(초록), 보통(노랑), 혼잡(주황), 매우 혼잡(빨강))
-  if (freeCount >= 10) {
+  // 기기 데이터가 하나도 안 오면 여유 대수가 0으로 잡혀 '매우 혼잡' 으로
+  // 잘못 읽힌다. 혼잡한 게 아니라 값 자체를 모르는 것이다.
+  if (!hasLiveData) {
+    dotEl.style.background = '#94a3b8';
+    dotEl.style.boxShadow = 'none';
+    badgeEl.className = 'congestion-badge';
+    badgeEl.style.background = 'rgba(148, 163, 184, 0.15)';
+    badgeEl.style.color = '#94a3b8';
+    badgeEl.style.border = '1px solid rgba(148, 163, 184, 0.4)';
+    badgeEl.textContent = '🛠️ 확인 불가';
+    titleEl.textContent = `세탁실 상태 확인 불가 (기기 데이터 없음) 🛠️`;
+    subEl.textContent = `실시간 데이터를 받아오지 못했습니다. 잠시 후 다시 확인해 주세요.`;
+  } else if (freeCount >= 10) {
     dotEl.classList.add('dot-blue', 'active');
     badgeEl.className = 'congestion-badge badge-blue';
     badgeEl.textContent = '🔵 매우 여유';
@@ -1808,6 +1821,8 @@ function renderSmartSummary() {
       menFreeDryers.push({ tower: t, cycles });
     }
   });
+  // 값이 하나도 안 왔으면 '전부 사용 중' 이 아니라 '알 수 없음' 이다.
+  const menHasData = menTowers.some(t => towerHasData(t.name));
 
   // 2) 여성 구역 (8~9호기) 분석
   const womenTowers = TOWERS.filter(t => t.zone === 'women');
@@ -1832,6 +1847,7 @@ function renderSmartSummary() {
       womenFreeDryers.push({ tower: t, cycles });
     }
   });
+  const womenHasData = womenTowers.some(t => towerHasData(t.name));
 
   // 3) 공용 구역 (6~7호기) 집계
   const commonTowers = TOWERS.filter(t => t.zone === 'common');
@@ -1846,10 +1862,13 @@ function renderSmartSummary() {
   });
 
   // 수치 업데이트
+  // 기기 데이터가 하나도 안 오면 errorCount 는 셀 수가 없어 0으로 남는다.
+  // 그대로 '0대' 라고 적으면 '점검할 것 없음' 으로 읽혀 실제와 반대가 된다.
+  const anyDataAtAll = TOWERS.some(t => towerHasData(t.name));
   document.getElementById('statMenFree').textContent = `${menFreeWash}대`;
   document.getElementById('statCommonFree').textContent = `${commonFreeWash}대`;
   document.getElementById('statWomenFree').textContent = `${womenFreeWash}대`;
-  document.getElementById('statErrorCount').textContent = `${errorCount}대`;
+  document.getElementById('statErrorCount').textContent = anyDataAtAll ? `${errorCount}대` : '확인 불가';
 
   // 👦 남성 구역 최적 기기 산출 (누적 가동 횟수가 적어 가장 쾌적한 기기 우선 추천)
   const menRecTitle = document.getElementById('menRecTitle');
@@ -1869,6 +1888,13 @@ function renderSmartSummary() {
     menRecPill.style.color = 'var(--jungle-green)';
     menRecTitle.textContent = `세탁기 ${bestMenWash.tower.label}${menDryPart}`;
     menRecDesc.textContent = `현재 ${bestMenWash.tower.label} 세탁기가 대기 중이며, 누적 ${bestMenWash.cycles}회로 가장 쾌적합니다.`;
+  } else if (!menHasData) {
+    // 빈 기기가 0대인 게 아니라 값 자체가 안 왔다. '전부 사용 중' 은 거짓말이 된다.
+    menRecPill.textContent = '확인 불가';
+    menRecPill.style.background = 'rgba(148, 163, 184, 0.15)';
+    menRecPill.style.color = '#94a3b8';
+    menRecTitle.textContent = `남성 구역 값을 받아오지 못함`;
+    menRecDesc.textContent = `기기 데이터가 오지 않아 상태를 알 수 없습니다. 세탁실에서 직접 확인해 주세요.`;
   } else {
     menRecPill.textContent = '가동 중';
     menRecPill.style.background = 'rgba(245, 158, 11, 0.15)';
@@ -1900,6 +1926,12 @@ function renderSmartSummary() {
     womenRecPill.style.color = '#f472b6';
     womenRecTitle.textContent = `세탁기 ${bestWomenWash.tower.label}${womenDryPart}`;
     womenRecDesc.textContent = `여성 구역 ${bestWomenWash.tower.label} 세탁기(누적 ${bestWomenWash.cycles}회)가 가장 쾌적하게 대기 중입니다.`;
+  } else if (!womenHasData) {
+    womenRecPill.textContent = '확인 불가';
+    womenRecPill.style.background = 'rgba(148, 163, 184, 0.15)';
+    womenRecPill.style.color = '#94a3b8';
+    womenRecTitle.textContent = `여성 구역 값을 받아오지 못함`;
+    womenRecDesc.textContent = `기기 데이터가 오지 않아 상태를 알 수 없습니다. 세탁실에서 직접 확인해 주세요.`;
   } else {
     womenRecPill.textContent = '가동 중';
     const soonestWomen = findSoonestFreeWasher(womenTowers);
@@ -1959,7 +1991,11 @@ function renderStaleTracker() {
     });
   });
 
-  if (items.length === 0) {
+  // 기기 데이터가 하나도 안 오면 '문제 없음' 이 아니라 '알 수 없음' 이다.
+  const noDataAtAll = TOWERS.every(t => !towerHasData(t.name));
+  if (noDataAtAll) {
+    staleList.innerHTML = `<div class="stale-empty">🛠️ 기기 데이터가 오지 않아 점검 필요 여부를 알 수 없습니다.</div>`;
+  } else if (items.length === 0) {
     staleList.innerHTML = `<div class="stale-empty">현재 점검 필요 기기 및 장기 방치물이 없습니다 👍</div>`;
   } else {
     staleList.innerHTML = items.join('');
