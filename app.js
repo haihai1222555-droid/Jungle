@@ -310,6 +310,25 @@ function isUnitCycleActive(state, remainMinutes) {
           'UNKNOWN_RUNNING'].includes(state) && remainMinutes > 0;
 }
 
+// 알림 등록된 기기 하나의 현재 상태를 찾아온다 (도크 렌더링과 5초 감시 타이머가 함께 쓴다)
+function resolveAlarmItemUnit(item) {
+  const tower = TOWERS.find(t => t.id === item.towerId);
+  const data = tower ? (globalStatusData[tower.name] || {}) : {};
+  const unitData = item.unitType === 'dryer' ? (data.dryer || {}) : (data.washer || {});
+  const unitTimer = unitData.timer || {};
+  const runState = unitState(unitData);
+  return { tower, data, unitData, unitTimer, runState };
+}
+
+// 남은 시간이 아직 0으로 오는 초반 구간엔 등록 시점의 목표 시각으로 추정한다
+function estimateRemainMinutes(unitTimer, runState, item, now) {
+  let remainMin = (unitTimer.remainHour || 0) * 60 + (unitTimer.remainMinute || 0);
+  if (remainMin === 0 && isUnitRunning(runState)) {
+    remainMin = Math.max(0, Math.ceil((item.targetMs - now) / (60 * 1000)));
+  }
+  return remainMin;
+}
+
 // 🔔 알림 버튼 동적 렌더러 (구김 방지 및 5분 이하 스마트 라벨 대응)
 function renderUnitAlarmButton(towerId, unitType, deviceName, remainMinutes, runState, isFloorplan = false, isModal = false) {
   const isAlarm = myLaundryAlarms.some(a => a.key === `${towerId}_${unitType}`);
@@ -958,18 +977,9 @@ function updateAlarmDockUI() {
 
   const now = Date.now();
   itemsList.innerHTML = myLaundryAlarms.map(item => {
-    const tower = TOWERS.find(t => t.id === item.towerId);
-    const data = tower ? (globalStatusData[tower.name] || {}) : {};
-    const unitData = item.unitType === 'dryer' ? (data.dryer || {}) : (data.washer || {});
-    const unitTimer = unitData.timer || {};
-    const runState = unitState(unitData);
-    const isError = runState === 'ERROR' || !!unitData.error || (data.error && (item.unitType === 'dryer' ? data.dryer?.error : data.washer?.error));
-    
-    let remainMin = (unitTimer.remainHour || 0) * 60 + (unitTimer.remainMinute || 0);
-    if (remainMin === 0 && isUnitRunning(runState)) {
-      const remainMs = item.targetMs - now;
-      remainMin = Math.max(0, Math.ceil(remainMs / (60 * 1000)));
-    }
+    const { tower, data, unitData, unitTimer, runState } = resolveAlarmItemUnit(item);
+    const isError = runState === 'ERROR' || !!unitData.error;
+    const remainMin = estimateRemainMinutes(unitTimer, runState, item, now);
 
     // 값이 안 오면 완료로 볼 수 없다. 초록색 '완료' 는 헛걸음시킨다.
     const noData = !tower || !towerHasData(tower.name);
@@ -1009,11 +1019,7 @@ setInterval(() => {
   const staleKeys = [];
 
   myLaundryAlarms.forEach(item => {
-    const tower = TOWERS.find(t => t.id === item.towerId);
-    const data = tower ? (globalStatusData[tower.name] || {}) : {};
-    const unitData = item.unitType === 'dryer' ? (data.dryer || {}) : (data.washer || {});
-    const unitTimer = unitData.timer || {};
-    const runState = unitState(unitData);
+    const { tower, data, unitData, unitTimer, runState } = resolveAlarmItemUnit(item);
 
     // ❓ 기기 값이 아예 안 올 때는 완료로 볼 수 없다.
     //    빈 값은 0분 · POWER_OFF 로 읽혀 곧바로 '완료!' 가 떠 버린다.
@@ -1048,7 +1054,7 @@ setInterval(() => {
     // 오류일 때만 알리면 놓친다. 기기 상태는 5분에 한 번만 오므로
     // 오류가 났다가 일시정지로 넘어가면 오류 화면을 아예 못 보고 지나간다.
     // 실제로 배수 오류로 멈춘 건조기를 아무에게도 못 알린 적이 있다.
-    const isError = runState === 'ERROR' || !!unitData.error || (data.error && (item.unitType === 'dryer' ? data.dryer?.error : data.washer?.error));
+    const isError = runState === 'ERROR' || !!unitData.error;
     const isStopped = isError || runState === 'PAUSE';
 
     // 오류는 아닌데 멈춰 있다. 왜 멈췄는지는 알 수 없다.
@@ -1094,11 +1100,7 @@ setInterval(() => {
       }
     }
 
-    let remainMin = (unitTimer.remainHour || 0) * 60 + (unitTimer.remainMinute || 0);
-    if (remainMin === 0 && isUnitRunning(runState)) {
-      const remainMs = item.targetMs - now;
-      remainMin = Math.max(0, Math.ceil(remainMs / (60 * 1000)));
-    }
+    const remainMin = estimateRemainMinutes(unitTimer, runState, item, now);
 
     // 2) 내가 선택한 특정 기기 5분 전 도달 시 알림
     if (!isStopped && remainMin <= 5 && remainMin > 0 && !item.notified5Min) {

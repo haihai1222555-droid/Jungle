@@ -674,8 +674,8 @@ def render_floorplan_image(status_data):
         d, w = (data.get("dryer") or {}), (data.get("washer") or {})
         d_state = unit_state(d)
         w_state = unit_state(w)
-        d_min = ((d.get("timer") or {}).get("remainHour", 0) * 60) + (d.get("timer") or {}).get("remainMinute", 0)
-        w_min = ((w.get("timer") or {}).get("remainHour", 0) * 60) + (w.get("timer") or {}).get("remainMinute", 0)
+        d_min = _mins(d.get("timer"))
+        w_min = _mins(w.get("timer"))
         d_err = bool(d.get("error")) or d_state == "ERROR"
         w_err = bool(w.get("error")) or w_state == "ERROR"
         d_init = d_state == "INITIAL"
@@ -836,9 +836,9 @@ def get_running_options(status_data):
 
         w_state = unit_state(w)
         d_state = unit_state(d)
-        w_min = ((w.get("timer") or {}).get("remainHour", 0) * 60) + (w.get("timer") or {}).get("remainMinute", 0)
-        d_min = ((d.get("timer") or {}).get("remainHour", 0) * 60) + (d.get("timer") or {}).get("remainMinute", 0)
-        
+        w_min = _mins(w.get("timer"))
+        d_min = _mins(d.get("timer"))
+
         w_err = w.get("error") or (w_state == "ERROR")
         d_err = d.get("error") or (d_state == "ERROR")
 
@@ -1076,7 +1076,7 @@ def build_unit_list_embed(unit_type):
             unit = (status_data.get(t["name"]) or {}).get(unit_type) or {}
             state = unit_state(unit)
             timer = unit.get("timer") or {}
-            minutes = (timer.get("remainHour", 0) or 0) * 60 + (timer.get("remainMinute", 0) or 0)
+            minutes = _mins(timer)
             is_err = state == "ERROR" or bool(unit.get("error"))
 
             # 값 자체가 안 온 기기. 빈 값을 '전원 꺼짐' 으로 읽으면
@@ -1872,7 +1872,7 @@ def find_unit(status_data, tower_id, unit_type):
         return None
     unit = (status_data.get(tower["name"]) or {}).get(unit_type) or {}
     timer = unit.get("timer") or {}
-    minutes = (timer.get("remainHour", 0) or 0) * 60 + (timer.get("remainMinute", 0) or 0)
+    minutes = _mins(timer)
     state = unit_state(unit)
     return {
         "tower": tower,
@@ -2223,7 +2223,7 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
                 u = d.get(ut) or {}
                 st = unit_state(u)
                 tm = u.get("timer") or {}
-                mnt = (tm.get("remainHour", 0) or 0) * 60 + (tm.get("remainMinute", 0) or 0)
+                mnt = _mins(tm)
                 err = u.get("error")
 
                 part = f"{t['id']}번 {label}({t['zoneName']}): {STATE_LABELS.get(st, st)}"
@@ -3050,7 +3050,7 @@ def describe_why_ambiguous(tower_id, status_data):
         u = data.get(ut) or {}
         state = unit_state(u)
         t = u.get("timer") or {}
-        mins = t.get("remainHour", 0) * 60 + t.get("remainMinute", 0)
+        mins = _mins(t)
         if state not in (None, "POWER_OFF", "INITIAL") and mins > 0:
             running.append(label)
     if not running:
@@ -3084,7 +3084,7 @@ def infer_unit_type(user_id, tower_id, action, status_data):
             u = data.get(ut) or {}
             state = unit_state(u)
             t = u.get("timer") or {}
-            mins = t.get("remainHour", 0) * 60 + t.get("remainMinute", 0)
+            mins = _mins(t)
             if state not in (None, "POWER_OFF", "INITIAL") and mins > 0:
                 running.append(ut)
         return running[0] if len(running) == 1 else None
@@ -3738,7 +3738,7 @@ def _presence_soonest(status_data):
             if state in (None, "POWER_OFF", "INITIAL", "WRINKLE_CARE"):
                 continue
             t = u.get("timer") or {}
-            mins = t.get("remainHour", 0) * 60 + t.get("remainMinute", 0)
+            mins = _mins(t)
             if mins > 0 and (best is None or mins < best[0]):
                 best = (mins, f"{tower['id']}번 {label}")
     if not best:
@@ -3849,7 +3849,7 @@ async def check_laundry_alarms():
         timer = (unit_data.get("timer") or {})
         run_state = unit_state(unit_data)
         
-        remain_min = (timer.get("remainHour", 0) * 60) + timer.get("remainMinute", 0)
+        remain_min = _mins(timer)
         is_error = run_state == "ERROR" or bool(unit_data.get("error"))
 
         # 기기 값이 실제로 왔는지. 점검에 들어간 기기는 원본이 null 로 준다.

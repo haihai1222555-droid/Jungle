@@ -26,6 +26,12 @@ import device_log
 import discord_bot as bot
 import start_server as srv
 
+# 윈도우 콘솔은 기본이 cp949 라 '—' 같은 글자에서 터진다.
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 FAILS = []
 
 

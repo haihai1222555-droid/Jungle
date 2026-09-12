@@ -14,6 +14,12 @@ import sys
 
 import cafeteria as cf
 
+# 윈도우 콘솔은 기본이 cp949 라 '—' 같은 글자에서 터진다.
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 # (제목, 고정 여부, 이래야 한다)
 CASES = [
     # ── 실제로 채널에 있는 글 아홉 개 ──────────────────────────

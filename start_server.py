@@ -651,6 +651,18 @@ def is_public_path(req_path):
     return False
 
 
+def _forwardable_headers(items):
+    """원본 응답 머리말 중 그대로 넘겨도 되는 것만 추린다.
+
+    Transfer-Encoding·Content-Length·Content-Encoding 은 우리가 다시
+    붙이는 값과 안 맞을 수 있고, 원본이 붙인 CORS 머리말은 우리 것과
+    겹치면 브라우저가 둘 다 무시해 화면이 빈다.
+    """
+    return [(k, v) for k, v in items
+            if k.lower() not in ('transfer-encoding', 'content-length', 'content-encoding')
+            and not k.lower().startswith('access-control-')]
+
+
 class RobustHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=BASE_DIR, **kwargs)
@@ -888,13 +900,7 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                         with urllib.request.urlopen(req, timeout=6) as response:
                             # 상대가 고장 나 끝없이 보내면 우리 기억이 먼저 찬다
                             content = security.read_capped(response)
-                            # 원본이 붙인 CORS 헤더는 걷어낸다. 우리 것과 겹치면
-                            # 브라우저가 둘 다 무시해 화면이 빈다.
-                            hdrs = [(k, v) for k, v in response.headers.items()
-                                    if k.lower() not in ('transfer-encoding',
-                                                         'content-length',
-                                                         'content-encoding')
-                                    and not k.lower().startswith('access-control-')]
+                            hdrs = _forwardable_headers(response.headers.items())
                             # 쓰기와 청소를 한 잠금 안에서 해야 한다. 따로 두면
                             # 이 스레드가 청소하는 동안 다른 경로가 잠금 없이
                             # 사전에 값을 넣어 '반복 중 크기 변경' 오류가 날 수 있다.
@@ -934,10 +940,8 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 with urllib.request.urlopen(req, timeout=6) as response:
                     content = security.read_capped(response)
                     self.send_response(response.status)
-                    for k, v in response.headers.items():
-                        if (k.lower() not in ['transfer-encoding', 'content-length', 'content-encoding']
-                                and not k.lower().startswith('access-control-')):
-                            self.send_header(k, v)
+                    for k, v in _forwardable_headers(response.headers.items()):
+                        self.send_header(k, v)
                     self.end_headers()
                     self.wfile.write(content)
                     return
@@ -1208,7 +1212,7 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             self._json_out(200, {"ok": True, "id": item['id']})
             return
 
-        req_path = self.path.split('?')[0]
+        req_path = _p
         # 상한을 안 두면 보낸 만큼 다 읽는다. 큰 것 몇 개면 서버가 눕는다.
         # 본문이 비어 있는 것은 원래 되던 것이라 그대로 둔다(해제 요청 등).
         try:

@@ -50,9 +50,6 @@ LINK_BLOCK = """[안내 페이지 링크]
 - 예시: 이용 안내 https://example.com"""
 
 
-_KW_CACHE = {}
-
-
 def _kw_match(text, keywords):
     """질문에 이 항목의 낱말이 들어 있는지."""
     t = (text or "").replace(" ", "").lower()
