@@ -455,26 +455,6 @@ def submit_report(kind, text, source, who=None):
         print(f"[제보] 알림 예약 실패: {e}")
     return item
 
-
-def ask_via_voice(user_id, text, timeout=25):
-    """빅스비 같은 음성 비서가 부르는 자리. (다른 스레드 — 웹 서버 — 에서 부른다)
-
-    run_assistant 를 그대로 쓴다. 주제 제한·탈옥 방어·몰아치기 제한·기기
-    상태 반영까지 디스코드에서 쓰던 것과 똑같이 다 걸린다. 새로 짜지 않는다.
-    음성이라 embed·배치도·버튼은 못 보여주므로 답 문장만 돌려준다.
-    실패하거나 시간 안에 안 끝나면 None.
-    """
-    loop = bot.loop
-    if not loop or isinstance(loop, type(discord.utils.MISSING)):
-        return None
-    try:
-        fut = asyncio.run_coroutine_threadsafe(run_assistant(user_id, text), loop)
-        text_out, _embed, _attach, _view = _norm(fut.result(timeout=timeout))
-        return text_out or None
-    except Exception as e:
-        print(f"[음성] 처리 실패: {e}")
-        return None
-
 # 마지막으로 성공한 조회 결과. 한 번씩 나는 실패 때문에
 # "실시간 데이터를 가져오지 못했습니다" 가 뜨는 것을 막는다.
 _LAST_STATUS = {}

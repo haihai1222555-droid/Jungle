@@ -105,9 +105,6 @@ CACHED_STATUS_BODY = b'{}'
 REQ_LIMITER = security.Limiter(300, 60, "요청")
 POST_BODY_MAX = 64 * 1024          # 알림 등록 같은 것은 몇 KB 면 충분하다
 AI_STREAM_MAX = 4 * 1024 * 1024    # 한 번의 답이 이보다 길 수는 없다
-# 열쇠가 맞더라도 몰아치면 AI 한도를 나 혼자 다 쓴다. 본인 혼자 쓰는
-# 자리라 사람이 말로 묻는 속도로는 절대 안 닿는 값으로 넉넉히 잡는다.
-VOICE_LIMITER = security.Limiter(20, 60, "음성")
 
 PROXY_CACHE_TTL = {'/api/stats': 60}
 _PROXY_CACHE = {}                    # 경로 -> (만료시각, 상태, 헤더, 본문)
@@ -1209,37 +1206,6 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 return
             print(f"[제보] 웹에서 접수 #{item['id']} ({item['kind']})")
             self._json_out(200, {"ok": True, "id": item['id']})
-            return
-
-        # ── 음성 비서(빅스비 등) 중계 ──
-        # 본인만 쓰는 자리다. .env 에 적어둔 열쇠와 정확히 같아야 열린다.
-        # 실패 사유를 자세히 알려주지 않는다 — 열쇠가 맞는지 틀렸는지도
-        # 밖에서 가늠할 수 없게 한다.
-        if _p == '/api/voice/ask':
-            secret = (os.environ.get('BIXBY_SECRET') or '').strip()
-            if not secret or self.headers.get('X-Bixby-Secret') != secret:
-                self._json_out(403, {"error": "허용되지 않은 요청입니다."})
-                return
-            if not VOICE_LIMITER.allow(self._client_key()):
-                self._json_out(429, {"error": "너무 자주 물어봤어요. 잠시 후 다시 시도해 주세요."})
-                return
-            data = self._read_json()
-            text = str((data or {}).get('text') or '').strip()[:500]
-            if not text:
-                self._json_out(400, {"error": "text 가 비어 있습니다."})
-                return
-            if DISCORD_MODULE is None:
-                self._json_out(503, {"error": "봇이 켜져 있지 않습니다."})
-                return
-            uid = (os.environ.get('BIXBY_USER_ID') or '').strip()
-            if not uid.isdigit():
-                self._json_out(503, {"error": "BIXBY_USER_ID 가 설정되지 않았습니다."})
-                return
-            reply = DISCORD_MODULE.ask_via_voice(int(uid), text)
-            if not reply:
-                self._json_out(504, {"error": "지금은 답을 만들지 못했습니다."})
-                return
-            self._json_out(200, {"reply": reply})
             return
 
         req_path = self.path.split('?')[0]
