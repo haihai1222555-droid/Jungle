@@ -3260,7 +3260,9 @@ if (btnHelp && helpModal) {
   if (hBottom) hBottom.onclick = closeHelpModal;
 }
 
-// 📢 공지 팝업 — /announcement.json 이 active 이고 아직 안 본 id 면 한 번 띄운다
+// 📢 공지 팝업 — /announcement.json 이 active 면 매번(새로고침·재접속 때마다) 띄운다.
+// 한 번 닫아도 기억하지 않는다 — 원본 서버 장애처럼 계속 알아야 하는 공지라
+// 로컬에 "봤음"을 남기지 않기로 했다.
 const announceModal = document.getElementById('announceModal');
 function closeAnnounceModal() { if (announceModal) announceModal.classList.remove('open'); }
 async function checkAnnouncement() {
@@ -3272,25 +3274,20 @@ async function checkAnnouncement() {
     data = await res.json();
   } catch (e) { return; }
   if (!data || !data.active || !data.id) return;
-  if (localStorage.getItem('jungle_announce_seen') === data.id) return;
 
   const titleEl = document.getElementById('announceTitle');
   const bodyEl = document.getElementById('announceBody');
   if (titleEl) titleEl.textContent = data.title || '';
   if (bodyEl) { bodyEl.textContent = data.body || ''; bodyEl.style.whiteSpace = 'pre-wrap'; }
 
-  const dismiss = () => {
-    try { localStorage.setItem('jungle_announce_seen', data.id); } catch (e) {}
-    closeAnnounceModal();
-  };
-  announceModal.onclick = (e) => { if (e.target.id === 'announceModal') dismiss(); };
+  announceModal.onclick = (e) => { if (e.target.id === 'announceModal') closeAnnounceModal(); };
   const aClose = document.getElementById('announceModalClose');
   const aBottom = document.getElementById('btnAnnounceCloseBottom');
-  if (aClose) aClose.onclick = dismiss;
-  if (aBottom) aBottom.onclick = dismiss;
+  if (aClose) aClose.onclick = closeAnnounceModal;
+  if (aBottom) aBottom.onclick = closeAnnounceModal;
   document.addEventListener('keydown', function escHandler(e) {
     if (e.key === 'Escape' && announceModal.classList.contains('open')) {
-      dismiss();
+      closeAnnounceModal();
       document.removeEventListener('keydown', escHandler);
     }
   });
