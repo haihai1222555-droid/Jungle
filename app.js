@@ -3260,6 +3260,44 @@ if (btnHelp && helpModal) {
   if (hBottom) hBottom.onclick = closeHelpModal;
 }
 
+// 📢 공지 팝업 — /announcement.json 이 active 이고 아직 안 본 id 면 한 번 띄운다
+const announceModal = document.getElementById('announceModal');
+function closeAnnounceModal() { if (announceModal) announceModal.classList.remove('open'); }
+async function checkAnnouncement() {
+  if (!announceModal) return;
+  let data;
+  try {
+    const res = await fetch('/announcement.json', { cache: 'no-store' });
+    if (!res.ok) return;
+    data = await res.json();
+  } catch (e) { return; }
+  if (!data || !data.active || !data.id) return;
+  if (localStorage.getItem('jungle_announce_seen') === data.id) return;
+
+  const titleEl = document.getElementById('announceTitle');
+  const bodyEl = document.getElementById('announceBody');
+  if (titleEl) titleEl.textContent = data.title || '';
+  if (bodyEl) { bodyEl.textContent = data.body || ''; bodyEl.style.whiteSpace = 'pre-wrap'; }
+
+  const dismiss = () => {
+    try { localStorage.setItem('jungle_announce_seen', data.id); } catch (e) {}
+    closeAnnounceModal();
+  };
+  announceModal.onclick = (e) => { if (e.target.id === 'announceModal') dismiss(); };
+  const aClose = document.getElementById('announceModalClose');
+  const aBottom = document.getElementById('btnAnnounceCloseBottom');
+  if (aClose) aClose.onclick = dismiss;
+  if (aBottom) aBottom.onclick = dismiss;
+  document.addEventListener('keydown', function escHandler(e) {
+    if (e.key === 'Escape' && announceModal.classList.contains('open')) {
+      dismiss();
+      document.removeEventListener('keydown', escHandler);
+    }
+  });
+
+  announceModal.classList.add('open');
+}
+
 const btnAlarmCenter = document.getElementById('btnAlarmCenter');
 if (btnAlarmCenter) {
   btnAlarmCenter.onclick = () => {
@@ -3288,6 +3326,7 @@ if (refreshBtn) {
 // 초기화: Service Worker 등록, 테마 적용, 즉시 스냅샷으로 렌더링 후 비동기 데이터 갱신 시도
 initServiceWorker();
 initTheme();
+checkAnnouncement();
 renderAllViews();
 loadDashboardData();
 setInterval(loadDashboardData, REFRESH_INTERVAL_SEC * 1000);

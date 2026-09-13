@@ -555,6 +555,25 @@
     </div>
   </div>
 
+  <!-- 공지 팝업. 내용은 /announcement.json 에서 받아 채운다 -->
+  <div class="modal-overlay" id="announceModal">
+    <div class="modal-card">
+      <div class="modal-header-bar">
+        <div class="modal-header-info">
+          <div class="modal-badge">공지</div>
+          <h2 class="modal-title" id="announceTitle"></h2>
+        </div>
+        <button class="modal-close" id="announceModalClose" title="닫기">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-section-card modal-care-card" id="announceBody"></div>
+      </div>
+      <div class="modal-footer-bar">
+        <button type="button" class="btn-modal-close-bottom" id="btnAnnounceCloseBottom">확인</button>
+      </div>
+    </div>
+  </div>
+
   <footer class="app-footer">
     <div class="footer-brand-row">
       <img src="jungle-logo.png" class="footer-jungle-logo" alt="크래프톤 정글 로고" />

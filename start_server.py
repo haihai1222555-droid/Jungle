@@ -626,6 +626,7 @@ PUBLIC_FILES = {
     "/app.js", "/style.css", "/doc.css", "/doc.js",
     "/sw.js",                 # 서비스 워커 (웹 푸시)
     "/manifest.json",         # 앱처럼 설치할 때 쓰는 것
+    "/announcement.json",     # 웹사이트 공지 팝업 내용
     # /jungle_kb.js 는 더 이상 내주지 않는다.
     # 브라우저가 프롬프트를 만들 때 필요했지만, 이제 서버가 끼워 넣는다.
     # 그 안에는 출결·외출·공가 같은 기관 내부 안내가 들어 있다.
