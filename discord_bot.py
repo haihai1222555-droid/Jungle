@@ -2026,6 +2026,19 @@ _CODE_MARKERS = (
 _PERSONA_LEAK = ("주인님", "마스터님")
 
 
+def unescape_newlines(reply):
+    """모델이 JSON 안에서 줄바꿈을 한 번 더 감싸 보내는 것을 되돌린다.
+
+    답을 JSON 으로 받는데, 모델이 이따금 줄바꿈을 \\n 이 아니라 \\\\n 으로
+    적어 보낸다. json.loads 를 거치면 진짜 줄바꿈이 아니라 역슬래시와 n
+    두 글자가 남아, 디스코드에 "다음과 같습니다:\\n1번 세탁기" 처럼
+    글자 그대로 찍힌다. 실제로 그렇게 나갔다.
+    """
+    if not reply:
+        return reply
+    return reply.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+
+
 def sanitize_reply(reply):
     """지시문을 흘리거나 코드를 뱉으면 통째로 막는다 (3층)."""
     if not reply:
@@ -2444,6 +2457,7 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                 if isinstance(plan, dict):
                     # 둘을 동시에 돌리므로 전역 변수만으로는 어느 쪽 답인지 알 수 없다
                     plan["_engine"] = engine
+                    plan["reply"] = unescape_newlines(plan.get("reply"))
                     if not admin:
                         plan["reply"] = sanitize_reply(plan.get("reply"))
                 return plan
@@ -2550,6 +2564,7 @@ def ask_groq(text, status_data, mine, history=None, admin=False):
             LAST_ENGINE = engine
             if isinstance(plan, dict):
                 plan["_engine"] = engine
+                plan["reply"] = unescape_newlines(plan.get("reply"))
                 if not admin:
                     plan["reply"] = sanitize_reply(plan.get("reply"))
                 print(f"[Groq] {model} 로 답했습니다")
