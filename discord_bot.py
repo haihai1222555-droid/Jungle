@@ -676,8 +676,8 @@ def render_floorplan_image(status_data):
         w_state = unit_state(w)
         d_min = _mins(d.get("timer"))
         w_min = _mins(w.get("timer"))
-        d_err = bool(d.get("error")) or d_state == "ERROR"
-        w_err = bool(w.get("error")) or w_state == "ERROR"
+        d_err = is_error_stopped(d)
+        w_err = is_error_stopped(w)
         d_init = d_state == "INITIAL"
         w_init = w_state == "INITIAL"
 
@@ -839,8 +839,8 @@ def get_running_options(status_data):
         w_min = _mins(w.get("timer"))
         d_min = _mins(d.get("timer"))
 
-        w_err = w.get("error") or (w_state == "ERROR")
-        d_err = d.get("error") or (d_state == "ERROR")
+        w_err = is_error_stopped(w)
+        d_err = is_error_stopped(d)
 
         # 상단 건조기 검증 (에러/대기 제외, 진짜 가동 중인 기기만)
         if not d_err and is_unit_running(d_state, d_min):
@@ -1077,7 +1077,7 @@ def build_unit_list_embed(unit_type):
             state = unit_state(unit)
             timer = unit.get("timer") or {}
             minutes = _mins(timer)
-            is_err = state == "ERROR" or bool(unit.get("error"))
+            is_err = is_error_stopped(unit)
 
             # 값 자체가 안 온 기기. 빈 값을 '전원 꺼짐' 으로 읽으면
             # '사용 가능' 이 되어 헛걸음시킨다. 모른다고 적는다.
@@ -1860,9 +1860,24 @@ def unit_state(unit):
     if not isinstance(unit, dict):
         return "UNKNOWN"
     state = (unit.get("runState") or {}).get("currentState")
+    # 원본(LG ThinQ)이 돌아가는 중에도 ERROR 를 주는 일이 있다. 물통 비움
+    # 안내(EMPTY_WATER_ALERT_ERROR) 같은 것이 여기 걸린다. 시간이 줄고
+    # 있으면 멈춘 게 아니라 도는 중이다. 원본 대시보드도 같은 보정을 한다.
+    if state == "ERROR" and _mins(unit.get("timer")) > 0:
+        return "RUNNING"
     if state:
         return state
     return "UNKNOWN_RUNNING" if _mins(unit.get("timer")) > 0 else "UNKNOWN"
+
+
+def is_error_stopped(unit):
+    """오류 때문에 '멈춰 있는' 기기인지. 시간이 줄고 있으면 멈춘 게 아니다."""
+    if not isinstance(unit, dict):
+        return False
+    if _mins(unit.get("timer")) > 0:
+        return False
+    raw = (unit.get("runState") or {}).get("currentState")
+    return raw == "ERROR" or bool(unit.get("error"))
 
 
 def find_unit(status_data, tower_id, unit_type):
@@ -1878,7 +1893,7 @@ def find_unit(status_data, tower_id, unit_type):
         "tower": tower,
         "state": state,
         "minutes": minutes,
-        "error": bool(unit.get("error")) or state == "ERROR",
+        "error": is_error_stopped(unit),
         # 값 자체가 안 온 경우. '꺼져 있음' 과 구분해야 한다.
         "unknown": not tower_has_data(status_data, tower["name"]),
         "name": f"{tower['label']} {'건조기' if unit_type == 'dryer' else '세탁기'}",
@@ -3865,7 +3880,7 @@ async def check_laundry_alarms():
         run_state = unit_state(unit_data)
         
         remain_min = _mins(timer)
-        is_error = run_state == "ERROR" or bool(unit_data.get("error"))
+        is_error = is_error_stopped(unit_data)
 
         # 기기 값이 실제로 왔는지. 점검에 들어간 기기는 원본이 null 로 준다.
         # 빈 값을 그대로 읽으면 0분 · POWER_OFF 가 되어 '완료' 로 오판한다.

@@ -84,8 +84,27 @@ const STATE_TRANSLATION = {
 // 기기가 상태를 안 줄 때가 있다. 남은 시간만 오고 runState 가 통째로 빠진다.
 // 그때 'POWER_OFF' 로 메우면 돌아가는 기기가 '사용 가능' 이 된다.
 // 실제로 7호기 건조기가 1시간 23분 남은 채 그렇게 떠 있었다.
+// 원본(LG ThinQ)은 돌아가는 중에도 runState 를 ERROR 로 주는 일이 있다.
+// 물통 비움 안내(EMPTY_WATER_ALERT_ERROR) 같은 것이 여기 걸린다 — 기기는
+// 멀쩡히 돌고 남은 시간도 줄어드는데 우리 화면에선 '점검 필요' 가 되고
+// 알림 버튼이 아예 사라졌다. 남은 시간이 있으면 돌고 있는 것으로 본다.
+// 원본 대시보드도 같은 보정을 한다.
+function unitRemainMinutes(u) {
+  const t = (u && u.timer) || {};
+  return (t.remainHour || 0) * 60 + (t.remainMinute || 0);
+}
+
+// 오류 때문에 '멈춰 있는' 기기인지. 시간이 줄고 있으면 멈춘 게 아니다.
+function isUnitErrorStopped(u) {
+  if (!u) return false;
+  if (unitRemainMinutes(u) > 0) return false;
+  const raw = u.runState && u.runState.currentState;
+  return raw === 'ERROR' || !!u.error;
+}
+
 function unitState(u) {
   const s = u && u.runState && u.runState.currentState;
+  if (s === 'ERROR' && unitRemainMinutes(u) > 0) return 'RUNNING';
   if (s) return s;
   if (!u) return 'UNKNOWN';
   const t = u.timer || {};
@@ -997,7 +1016,7 @@ function updateAlarmDockUI() {
   const now = Date.now();
   itemsList.innerHTML = myLaundryAlarms.map(item => {
     const { tower, data, unitData, unitTimer, runState } = resolveAlarmItemUnit(item);
-    const isError = runState === 'ERROR' || !!unitData.error;
+    const isError = isUnitErrorStopped(unitData);
     const remainMin = estimateRemainMinutes(unitTimer, runState, item, now);
 
     // 값이 안 오면 완료로 볼 수 없다. 초록색 '완료' 는 헛걸음시킨다.
@@ -1073,7 +1092,7 @@ setInterval(() => {
     // 오류일 때만 알리면 놓친다. 기기 상태는 5분에 한 번만 오므로
     // 오류가 났다가 일시정지로 넘어가면 오류 화면을 아예 못 보고 지나간다.
     // 실제로 배수 오류로 멈춘 건조기를 아무에게도 못 알린 적이 있다.
-    const isError = runState === 'ERROR' || !!unitData.error;
+    const isError = isUnitErrorStopped(unitData);
     const isStopped = isError || runState === 'PAUSE';
 
     // 오류는 아닌데 멈춰 있다. 왜 멈췄는지는 알 수 없다.
@@ -1448,8 +1467,8 @@ function createTowerCardElement(tower, isFloorplan = false) {
   // 개별 모듈 에러 판별 (건조기 에러는 건조기에, 세탁기 에러는 세탁기에 배치)
   const dError = dryer.error || (dState === 'ERROR' ? (data.error || ERROR_CODE_UNKNOWN) : null);
   const wError = washer.error || (wState === 'ERROR' ? (data.error || ERROR_CODE_UNKNOWN) : null);
-  const isDryerErr = !!dError || dState === 'ERROR';
-  const isWasherErr = !!wError || wState === 'ERROR';
+  const isDryerErr = isUnitErrorStopped(dryer);
+  const isWasherErr = isUnitErrorStopped(washer);
   const towerError = (!isDryerErr && !isWasherErr && data.error) ? data.error : null;
   const hasError = isDryerErr || isWasherErr || !!towerError;
   const cycleCount = washer.cycle?.cycleCount || dryer.cycle?.cycleCount || 0;
@@ -1643,7 +1662,7 @@ function compactUnitInfo(data, unitType) {
   const state = unitState(u);
   const timer = u.timer || {};
   const mins = (timer.remainHour || 0) * 60 + (timer.remainMinute || 0);
-  const err = !!u.error || state === 'ERROR';
+  const err = isUnitErrorStopped(u);
 
   const base = { state, mins };
   if (err) return { ...base, cls: 'cu-error', label: '점검 필요', time: '—', delta: '' };
@@ -1849,10 +1868,10 @@ function renderSmartSummary() {
     const data = globalStatusData[t.name] || {};
     const wState = unitState(data.washer);
     const dState = unitState(data.dryer);
-    const dError = data.dryer?.error || data.washer?.error || null;
+    const dError = isUnitErrorStopped(data.dryer) || isUnitErrorStopped(data.washer);
     const cycles = data.washer?.cycle?.cycleCount || 0;
 
-    if (dError || wState === 'ERROR' || dState === 'ERROR') errorCount++;
+    if (dError) errorCount++;
 
     if (isUnitFree(wState)) {
       menFreeWash++;
@@ -1875,10 +1894,10 @@ function renderSmartSummary() {
     const data = globalStatusData[t.name] || {};
     const wState = unitState(data.washer);
     const dState = unitState(data.dryer);
-    const dError = data.dryer?.error || data.washer?.error || null;
+    const dError = isUnitErrorStopped(data.dryer) || isUnitErrorStopped(data.washer);
     const cycles = data.washer?.cycle?.cycleCount || 0;
 
-    if (dError || wState === 'ERROR' || dState === 'ERROR') errorCount++;
+    if (dError) errorCount++;
 
     if (isUnitFree(wState)) {
       womenFreeWash++;
@@ -1897,8 +1916,8 @@ function renderSmartSummary() {
     const data = globalStatusData[t.name] || {};
     const wState = unitState(data.washer);
     const dState = unitState(data.dryer);
-    const dError = data.dryer?.error || data.washer?.error || null;
-    if (dError || wState === 'ERROR' || dState === 'ERROR') errorCount++;
+    const dError = isUnitErrorStopped(data.dryer) || isUnitErrorStopped(data.washer);
+    if (dError) errorCount++;
     if (isUnitFree(wState)) commonFreeWash++;
   });
 
