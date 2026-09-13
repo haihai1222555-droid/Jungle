@@ -822,6 +822,24 @@ async function removePushAlarmFromServer(key) {
 }
 
 // 개별 기기 알림 등록 / 해제 토글 (오직 사용자가 선택한 특정 기기만 등록)
+// 상세 모달이 지금 이 기기를 보여주는 중이면 알림 버튼 자리만 새로 그린다.
+// (openTowerModal 의 버튼 렌더링과 같은 계산을 그대로 반복한다)
+function refreshModalAlarmActionsIfOpen(towerId) {
+  if (!currentModalTower || currentModalTower.id !== towerId) return;
+  const wrap = document.getElementById('modalAlarmActions');
+  if (!wrap) return;
+  const data = globalStatusData[currentModalTower.name] || {};
+  const washer = data.washer || {};
+  const dryer = data.dryer || {};
+  const wTimer = washer.timer || {};
+  const dTimer = dryer.timer || {};
+  const wBtn = renderUnitAlarmButton(currentModalTower.id, 'washer', `${currentModalTower.label} 세탁기`,
+    (wTimer.remainHour || 0) * 60 + (wTimer.remainMinute || 0), unitState(washer), false, true);
+  const dBtn = renderUnitAlarmButton(currentModalTower.id, 'dryer', `${currentModalTower.label} 건조기`,
+    (dTimer.remainHour || 0) * 60 + (dTimer.remainMinute || 0), unitState(dryer), false, true);
+  wrap.innerHTML = wBtn + dBtn;
+}
+
 function toggleLaundryAlarm(towerId, unitType, deviceName, remainMinutes) {
   const key = `${towerId}_${unitType}`;
   const existingIdx = myLaundryAlarms.findIndex(a => a.key === key);
@@ -879,6 +897,7 @@ function toggleLaundryAlarm(towerId, unitType, deviceName, remainMinutes) {
 
   renderTowers();
   updateAlarmDockUI();
+  refreshModalAlarmActionsIfOpen(towerId);
 }
 
 // 등록했던 그 사이클이 이미 끝났는지 판정한다.
@@ -2024,7 +2043,13 @@ function renderStaleTracker() {
   }
 }
 
+// 지금 상세 모달에 띄워져 있는 기기. 모달 안 알림 버튼을 눌렀을 때
+// 모달 자체를 다시 그리지 않으면 눌러도 바뀐 게 안 보여서, 눌렀는지 몰라
+// 한 번 더 누르면 도로 꺼진다. 그래서 그 버튼 자리만 새로 그려 즉시 보여준다.
+let currentModalTower = null;
+
 function openTowerModal(tower, data, wFluc, dFluc) {
+  currentModalTower = tower;
   // 값이 안 오는 기기는 자세히 보여줄 것이 없다.
   // 빈 값을 그리면 '대기 중 · 0분' 이 되어 비어 있는 것처럼 읽힌다.
   if (!towerHasData(tower.name)) {
@@ -2109,7 +2134,7 @@ function openTowerModal(tower, data, wFluc, dFluc) {
       const wBtn = renderUnitAlarmButton(tower.id, 'washer', `${tower.label} 세탁기`, (wTimer.remainHour||0)*60 + (wTimer.remainMinute||0), unitState(washer), false, true);
       const dBtn = renderUnitAlarmButton(tower.id, 'dryer', `${tower.label} 건조기`, (dTimer.remainHour||0)*60 + (dTimer.remainMinute||0), unitState(dryer), false, true);
       if (!wBtn && !dBtn) return '';
-      return `<div class="modal-alarm-actions">${wBtn}${dBtn}</div>`;
+      return `<div class="modal-alarm-actions" id="modalAlarmActions">${wBtn}${dBtn}</div>`;
     })()}
 
     <!-- 🔮 LG AI 센서 동적 시간 변동 예측 리포트 -->
@@ -3189,6 +3214,7 @@ const btnModalCloseBottom = document.getElementById('btnModalCloseBottom');
 function closeModal() {
   const dm = document.getElementById('detailModal');
   if (dm) dm.classList.remove('open');
+  currentModalTower = null;
 }
 
 if (modalCloseBtn) modalCloseBtn.onclick = closeModal;
