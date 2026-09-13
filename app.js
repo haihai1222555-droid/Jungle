@@ -356,9 +356,9 @@ function renderUnitAlarmButton(towerId, unitType, deviceName, remainMinutes, run
   // 이미 알림이 켜져 있는 상태라면 취소 가능하도록 항상 노출
   if (isAlarm) {
     if (isModal) {
-      return `<button class="btn-unit-alarm modal-alarm-btn alarm-active" onclick="toggleLaundryAlarm(${towerId}, '${unitType}', '${deviceName}', ${remainMinutes});">🔔 ${unitType === 'washer' ? '세탁기' : '건조기'} 알림 등록됨 (ON)</button>`;
+      return `<button class="btn-unit-alarm modal-alarm-btn alarm-active" data-alarm-toggle data-tower="${towerId}" data-unit="${unitType}" data-name="${deviceName}" data-mins="${remainMinutes}">🔔 ${unitType === 'washer' ? '세탁기' : '건조기'} 알림 등록됨 (ON)</button>`;
     }
-    return `<button class="btn-unit-alarm alarm-active" onclick="event.stopPropagation(); toggleLaundryAlarm(${towerId}, '${unitType}', '${deviceName}', ${remainMinutes})" title="내 알림 해제">🔔 내 알림 ON</button>`;
+    return `<button class="btn-unit-alarm alarm-active" data-alarm-toggle data-tower="${towerId}" data-unit="${unitType}" data-name="${deviceName}" data-mins="${remainMinutes}" title="내 알림 해제">🔔 내 알림 ON</button>`;
   }
 
   // 가동 중이 아니거나 구김 방지 상태이거나 남은 시간이 0분이면 버튼 노출 안 함
@@ -369,18 +369,18 @@ function renderUnitAlarmButton(towerId, unitType, deviceName, remainMinutes, run
   // 1) 5분 초과 남아있을 때: [🔔 5분전]
   if (remainMinutes > 5) {
     if (isModal) {
-      return `<button class="btn-unit-alarm modal-alarm-btn" onclick="toggleLaundryAlarm(${towerId}, '${unitType}', '${deviceName}', ${remainMinutes});">🔔 ${unitType === 'washer' ? '세탁기' : '건조기'} 5분전 알림 등록</button>`;
+      return `<button class="btn-unit-alarm modal-alarm-btn" data-alarm-toggle data-tower="${towerId}" data-unit="${unitType}" data-name="${deviceName}" data-mins="${remainMinutes}">🔔 ${unitType === 'washer' ? '세탁기' : '건조기'} 5분전 알림 등록</button>`;
     }
     const label = isFloorplan ? '🔔 5분전' : '🔔 5분전 알림';
-    return `<button class="btn-unit-alarm" onclick="event.stopPropagation(); toggleLaundryAlarm(${towerId}, '${unitType}', '${deviceName}', ${remainMinutes})" title="완료 5분 전 및 완료 시 스마트 알림">${label}</button>`;
+    return `<button class="btn-unit-alarm" data-alarm-toggle data-tower="${towerId}" data-unit="${unitType}" data-name="${deviceName}" data-mins="${remainMinutes}" title="완료 5분 전 및 완료 시 스마트 알림">${label}</button>`;
   }
 
   // 2) 5분 이하 남아있을 때: [🔔 완료 알림]
   if (isModal) {
-    return `<button class="btn-unit-alarm modal-alarm-btn" onclick="toggleLaundryAlarm(${towerId}, '${unitType}', '${deviceName}', ${remainMinutes});">🔔 ${unitType === 'washer' ? '세탁기' : '건조기'} 완료 알림 등록</button>`;
+    return `<button class="btn-unit-alarm modal-alarm-btn" data-alarm-toggle data-tower="${towerId}" data-unit="${unitType}" data-name="${deviceName}" data-mins="${remainMinutes}">🔔 ${unitType === 'washer' ? '세탁기' : '건조기'} 완료 알림 등록</button>`;
   }
   const label = isFloorplan ? '🔔 완료알림' : '🔔 완료 알림';
-  return `<button class="btn-unit-alarm" onclick="event.stopPropagation(); toggleLaundryAlarm(${towerId}, '${unitType}', '${deviceName}', ${remainMinutes})" title="세탁/건조 완료 즉시 스마트 알림">${label}</button>`;
+  return `<button class="btn-unit-alarm" data-alarm-toggle data-tower="${towerId}" data-unit="${unitType}" data-name="${deviceName}" data-mins="${remainMinutes}" title="세탁/건조 완료 즉시 스마트 알림">${label}</button>`;
 }
 
 // 마지막으로 성공한 실데이터 보관용 (내장 스냅샷보다 항상 최신)
@@ -1042,7 +1042,7 @@ function updateAlarmDockUI() {
           <span class="alarm-device-pill ${noData ? 'pill-idle' : (isError ? 'pill-error' : (isWashing ? 'pill-wash' : 'pill-dry'))}">${item.deviceName}</span>
           <span class="alarm-row-time">${timeText}</span>
         </div>
-        <button class="btn-alarm-row-del" onclick="removeLaundryAlarm('${item.key}')" title="이 기기 알림 끄기">✕</button>
+        <button class="btn-alarm-row-del" data-alarm-remove="${item.key}" title="이 기기 알림 끄기">✕</button>
       </div>
     `;
   }).join('');
@@ -1720,7 +1720,7 @@ function createCompactCardElement(tower) {
     const name = `${tower.label} ${unitType === 'dryer' ? '건조기' : '세탁기'}`;
     return `<button class="cu-bell-btn${on ? ' on' : ''}"
               title="${on ? '알림 끄기' : '완료 5분 전 알림'}"
-              onclick="event.stopPropagation(); toggleLaundryAlarm(${tower.id}, '${unitType}', '${name}', ${info.mins})">🔔</button>`;
+              data-alarm-toggle data-tower="${tower.id}" data-unit="${unitType}" data-name="${name}" data-mins="${info.mins}">🔔</button>`;
   };
 
   const el = document.createElement('div');
@@ -3165,6 +3165,34 @@ document.querySelectorAll('.view-tab-btn').forEach(btn => {
     renderTowers();
   };
 });
+
+// 🔔 알림 버튼 (이벤트 위임)
+//
+// 예전에는 버튼에 onclick="..." 을 직접 박아 넣었다. 그런데 우리는 CSP 에
+// script-src 'self' 를 걸어 두었고, 브라우저는 HTML 속성에 적힌 핸들러를
+// 인라인 스크립트로 보고 실행 자체를 거부한다. 그래서 종을 아무리 눌러도
+// 정말 아무 일도 일어나지 않았다 (화면에는 오류도 안 뜬다).
+//
+// 카드 위의 종은 카드 클릭(상세 창 열기)까지 번지면 안 되므로, 내려가는
+// 단계(capture)에서 잡아 여기서 끊는다. 예전 event.stopPropagation() 자리다.
+document.addEventListener('click', (e) => {
+  const toggle = e.target.closest('[data-alarm-toggle]');
+  if (toggle) {
+    e.stopPropagation();
+    toggleLaundryAlarm(
+      Number(toggle.dataset.tower),
+      toggle.dataset.unit,
+      toggle.dataset.name,
+      Number(toggle.dataset.mins)
+    );
+    return;
+  }
+  const del = e.target.closest('[data-alarm-remove]');
+  if (del) {
+    e.stopPropagation();
+    removeLaundryAlarm(del.dataset.alarmRemove);
+  }
+}, true);
 
 // 빠른 질문 칩 클릭 (이벤트 위임 방식으로 언제나 100% 동작)
 document.addEventListener('click', (e) => {
