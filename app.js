@@ -1080,6 +1080,19 @@ setInterval(() => {
       return;
     }
 
+    // 기기가 실제로 알려주는 남은 시간으로 예상 완료 시각을 뒤로 밀어 둔다.
+    // 등록할 때 정한 시각만 믿으면, 오래 멈췄다 다시 도는 내 빨래를 '지난 빨래' 로 보고
+    // 조용히 지웠다 (서버 푸시 구독까지). 멈춘 동안에도 남은 시간은 그대로 온다.
+    // 앱을 껐다 켰을 때의 정리는 위에서 먼저 하므로 그 보호는 그대로다.
+    const liveMin = (unitTimer.remainHour || 0) * 60 + (unitTimer.remainMinute || 0);
+    if (liveMin > 0) {
+      const nextTarget = now + liveMin * 60 * 1000;
+      if (nextTarget > item.targetMs + 60 * 1000) {
+        item.targetMs = nextTarget;
+        changed = true;
+      }
+    }
+
     // ⚠️ 1) 내가 등록한 기기가 멈추면 알린다. 오류든 일시정지든.
     //
     // 오류일 때만 알리면 놓친다. 기기 상태는 5분에 한 번만 오므로
@@ -1123,7 +1136,8 @@ setInterval(() => {
 
       showToast('🚨', `<b>[긴급: ${item.deviceName}]</b> 가동 중단 오류가 발생했습니다!<br><small style="color:#fca5a5">• 원인: ${diag.title} (${diag.short})<br>동작이 멈췄으니 세탁실에서 기기 상태를 확인해 주세요!</small>`, 'danger');
 
-      if ('Notification' in window && Notification.permission === 'granted') {
+      // 푸시가 걸려 있으면 서버가 보낸다. 멈춤·5분 전·완료처럼 여기서는 띄우지 않는다.
+      if (!item.pushRegistered && 'Notification' in window && Notification.permission === 'granted') {
         new Notification(`🚨 [긴급 점검] ${item.deviceName} 가동 중단!`, {
           body: `회원님이 사용 중인 ${item.deviceName}에 오류(${diag.title})가 발생하여 동작이 멈췄습니다. 세탁실을 확인해 주세요!`,
           icon: '/jungle-logo-192.png'
@@ -1166,7 +1180,9 @@ setInterval(() => {
       playChimeSound();
       if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 500]);
 
-      showToast('🏁', `<b>[${item.deviceName}]</b> 세탁/건조가 완료되었습니다!<br><small style="color:#a7f3d0">💡 세탁실에서 빨래를 수거해 주세요. 오래 두시면 한 번 더 알려드립니다 👍</small>`, 'success');
+      // '한 번 더 알려드린다' 는 서버 푸시가 걸려 있을 때만 참이다(수거 요청은 서버만 보낸다).
+      const pickupNote = item.pushRegistered ? ' 오래 두시면 한 번 더 알려드립니다 👍' : '';
+      showToast('🏁', `<b>[${item.deviceName}]</b> 세탁/건조가 완료되었습니다!<br><small style="color:#a7f3d0">💡 세탁실에서 빨래를 수거해 주세요.${pickupNote}</small>`, 'success');
 
       if (!item.pushRegistered && 'Notification' in window && Notification.permission === 'granted') {
         new Notification(`🏁 [선택 기기 완료] ${item.deviceName} 완료!`, {
@@ -1178,12 +1194,10 @@ setInterval(() => {
       // 🧹 완료 알림 발생 즉시 웹사이트 내 알림 설정 자동 해제.
       //    단, 서버 푸시가 걸려 있으면 서버 구독은 남긴다.
       //    서버가 '완료 후에도 안 가져갔는지' 를 15분간 더 지켜보고 한 번 더 알려주기 때문이다.
+      //    완료 토스트 바로 뒤에 '알림이 해제되었습니다' 를 또 띄우면 헷갈려서 조용히 지운다.
       setTimeout(() => {
-        if (item.pushRegistered) {
-          removeLaundryAlarmLocalOnly(item.key);
-        } else {
-          removeLaundryAlarm(item.key);
-        }
+        removeLaundryAlarmLocalOnly(item.key);
+        if (!item.pushRegistered) removePushAlarmFromServer(item.key);
       }, 1000);
     }
   });
