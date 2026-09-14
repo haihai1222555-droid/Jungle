@@ -4643,3 +4643,10 @@ body.light-theme .compact-card.is-active-dry  { border-color: #f59e0b; }
 }
 .menu-cap { font-size: 12.5px; font-weight: 700; margin-bottom: 4px; }
 .menu-src { font-size: 11px; opacity: 0.62; }
+
+/* 폰 헤더: [공지] 버튼이 들어가면 시계가 새로고침 버튼에 겹친다.
+   폰에서는 글자를 빼고 📢 아이콘만 둔다. */
+@media (max-width: 768px) {
+  #btnAnnounce .help-label { display: none !important; }
+  #btnAnnounce { padding: 6px 8px !important; }
+}

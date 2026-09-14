@@ -1385,6 +1385,14 @@ function renderCongestionStatus() {
   });
 
   dotEl.className = 'signal-dot';
+  // '확인 불가' 갈래가 회색을 인라인 스타일로 박는다. 지우지 않으면 데이터가
+  // 돌아와도 인라인이 클래스 색을 이겨서, 여유인데 신호등이 회색으로 남는다.
+  // 페이지를 열면 첫 그림이 데이터 없이 그려지므로 매번 그랬다.
+  dotEl.style.background = '';
+  dotEl.style.boxShadow = '';
+  badgeEl.style.background = '';
+  badgeEl.style.color = '';
+  badgeEl.style.border = '';
 
   // 기기 데이터가 하나도 안 오면 여유 대수가 0으로 잡혀 '매우 혼잡' 으로
   // 잘못 읽힌다. 혼잡한 게 아니라 값 자체를 모르는 것이다.
@@ -3333,11 +3341,27 @@ if (btnHelp && helpModal) {
   if (hBottom) hBottom.onclick = closeHelpModal;
 }
 
-// 📢 공지 팝업 — /announcement.json 이 active 면 매번(새로고침·재접속 때마다) 띄운다.
-// 한 번 닫아도 기억하지 않는다 — 원본 서버 장애처럼 계속 알아야 하는 공지라
-// 로컬에 "봤음"을 남기지 않기로 했다.
+// 📢 공지 — /announcement.json 한 곳에서 내용을 받는다.
+//  · 제목·본문이 있으면 헤더에 [공지] 버튼을 보여 언제든 다시 열 수 있게 한다.
+//  · active 가 켜져 있으면 들어올 때마다(새로고침·재접속) 저절로도 띄운다.
+//    닫아도 기억하지 않는다 — 장애처럼 계속 알아야 하는 공지를 위해서다.
 const announceModal = document.getElementById('announceModal');
+const btnAnnounce = document.getElementById('btnAnnounce');
 function closeAnnounceModal() { if (announceModal) announceModal.classList.remove('open'); }
+function openAnnounceModal() { if (announceModal) announceModal.classList.add('open'); }
+
+if (announceModal) {
+  announceModal.onclick = (e) => { if (e.target.id === 'announceModal') closeAnnounceModal(); };
+  const aClose = document.getElementById('announceModalClose');
+  const aBottom = document.getElementById('btnAnnounceCloseBottom');
+  if (aClose) aClose.onclick = closeAnnounceModal;
+  if (aBottom) aBottom.onclick = closeAnnounceModal;
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && announceModal.classList.contains('open')) closeAnnounceModal();
+  });
+}
+if (btnAnnounce) btnAnnounce.onclick = openAnnounceModal;
+
 async function checkAnnouncement() {
   if (!announceModal) return;
   let data;
@@ -3346,26 +3370,15 @@ async function checkAnnouncement() {
     if (!res.ok) return;
     data = await res.json();
   } catch (e) { return; }
-  if (!data || !data.active || !data.id) return;
+  if (!data || !data.title || !data.body) return;
 
   const titleEl = document.getElementById('announceTitle');
   const bodyEl = document.getElementById('announceBody');
-  if (titleEl) titleEl.textContent = data.title || '';
-  if (bodyEl) { bodyEl.textContent = data.body || ''; bodyEl.style.whiteSpace = 'pre-wrap'; }
+  if (titleEl) titleEl.textContent = data.title;
+  if (bodyEl) { bodyEl.textContent = data.body; bodyEl.style.whiteSpace = 'pre-wrap'; }
 
-  announceModal.onclick = (e) => { if (e.target.id === 'announceModal') closeAnnounceModal(); };
-  const aClose = document.getElementById('announceModalClose');
-  const aBottom = document.getElementById('btnAnnounceCloseBottom');
-  if (aClose) aClose.onclick = closeAnnounceModal;
-  if (aBottom) aBottom.onclick = closeAnnounceModal;
-  document.addEventListener('keydown', function escHandler(e) {
-    if (e.key === 'Escape' && announceModal.classList.contains('open')) {
-      closeAnnounceModal();
-      document.removeEventListener('keydown', escHandler);
-    }
-  });
-
-  announceModal.classList.add('open');
+  if (btnAnnounce) btnAnnounce.style.display = '';
+  if (data.active) openAnnounceModal();
 }
 
 const btnAlarmCenter = document.getElementById('btnAlarmCenter');
