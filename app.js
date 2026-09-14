@@ -1038,10 +1038,14 @@ function updateAlarmDockUI() {
     } else if (isError) {
       const diag = getErrorDiagnostic(unitData.error || data.error || ERROR_CODE_UNKNOWN);
       timeText = `<span style="color:#ef4444;font-weight:800;">🚨 가동 중단! (${diag.short})</span>`;
+    } else if (runState === 'PAUSE') {
+      // 멈춘 기기는 끝난 게 아니다. 예전엔 남은 시간이 0 이면 '완료! 즉시 수거' 로,
+      // 남아 있으면 도는 것처럼 '약 N분 남음' 으로만 보였다.
+      timeText = `<span style="color:#f59e0b;font-weight:800;">⏸️ 일시정지${remainMin > 0 ? ` · 약 ${remainMin}분 남음` : ''}</span>`;
     } else if (remainMin > 0) {
       timeText = `약 ${remainMin}분 남음 (5분 전 알림 ON)`;
     } else {
-      timeText = `<span style="color:#00e87a;font-weight:800;">세탁 완료! 즉시 수거</span>`;
+      timeText = `<span style="color:#00e87a;font-weight:800;">${item.unitType === 'dryer' ? '건조' : '세탁'} 완료! 즉시 수거</span>`;
     }
 
     const isWashing = item.unitType === 'washer';
@@ -1583,7 +1587,7 @@ function createTowerCardElement(tower, isFloorplan = false) {
           <div class="unit-action-line">
             <div class="unit-state-pill-group">
               <span class="unit-state-text ${dRunning ? 'state-active-dry' : ''} ${isDryerErr ? 'state-error' : ''}">
-                ${noData ? '정보 없음' : dStateInfo.label}
+                ${noData ? '정보 없음' : (isDryerErr ? (STATE_TRANSLATION.ERROR?.label || '기기 점검/에러') : dStateInfo.label)}
               </span>
               ${dCourse ? `<span class="unit-course-badge course-dry">🌀 ${dCourse.replace(/\s*\(.*?\)/g, '')}</span>` : ''}
             </div>
@@ -1630,7 +1634,7 @@ function createTowerCardElement(tower, isFloorplan = false) {
           <div class="unit-action-line">
             <div class="unit-state-pill-group">
               <span class="unit-state-text ${wRunning ? 'state-active-wash' : ''} ${isWasherErr ? 'state-error' : ''}">
-                ${noData ? '정보 없음' : wStateInfo.label}
+                ${noData ? '정보 없음' : (isWasherErr ? (STATE_TRANSLATION.ERROR?.label || '기기 점검/에러') : wStateInfo.label)}
               </span>
               ${wCourse ? `<span class="unit-course-badge course-wash">🫧 ${wCourse.replace(/\s*\(.*?\)/g, '')}</span>` : ''}
             </div>
@@ -2155,7 +2159,7 @@ function openTowerModal(tower, data, wFluc, dFluc) {
     </div>
     <div class="modal-info-row">
       <span class="modal-info-label">세탁기 상태</span>
-      <span class="modal-info-value modal-val-cyan">${STATE_TRANSLATION[unitState(washer)]?.label || '대기 중'}</span>
+      <span class="modal-info-value modal-val-cyan">${isUnitErrorStopped(washer) ? (STATE_TRANSLATION.ERROR?.label || '기기 점검/에러') : (STATE_TRANSLATION[unitState(washer)]?.label || '대기 중')}</span>
     </div>
     <div class="modal-info-row">
       <span class="modal-info-label">세탁기 가동 코스</span>
@@ -2167,7 +2171,7 @@ function openTowerModal(tower, data, wFluc, dFluc) {
     </div>
     <div class="modal-info-row">
       <span class="modal-info-label">건조기 상태</span>
-      <span class="modal-info-value modal-val-amber">${STATE_TRANSLATION[unitState(dryer)]?.label || '대기 중'}</span>
+      <span class="modal-info-value modal-val-amber">${isUnitErrorStopped(dryer) ? (STATE_TRANSLATION.ERROR?.label || '기기 점검/에러') : (STATE_TRANSLATION[unitState(dryer)]?.label || '대기 중')}</span>
     </div>
     <div class="modal-info-row">
       <span class="modal-info-label">건조기 가동 코스</span>
