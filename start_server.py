@@ -731,7 +731,12 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_one_request(self):
         self._has_cache_header = False     # 요청마다 새로 판단한다
-        super().handle_one_request()
+        try:
+            super().handle_one_request()
+        except ConnectionError:
+            # 답을 쓰는 사이에 상대가 떠났다(탭 닫기·새로고침). 우리 잘못이 아닌데
+            # 두 겹짜리 Traceback 이 server.log 에 남아 진짜 오류를 찾기 어려웠다.
+            self.close_connection = True
 
     def do_OPTIONS(self):
         if not self._rate_ok():

@@ -1993,6 +1993,9 @@ function renderSmartSummary() {
     womenRecDesc.textContent = `기기 데이터가 오지 않아 상태를 알 수 없습니다. 세탁실에서 직접 확인해 주세요.`;
   } else {
     womenRecPill.textContent = '가동 중';
+    // 남성 쪽과 달리 여기만 색을 안 칠해서, 직전 상태(분홍·회색)가 그대로 남았다
+    womenRecPill.style.background = 'rgba(245, 158, 11, 0.15)';
+    womenRecPill.style.color = '#f59e0b';
     const soonestWomen = findSoonestFreeWasher(womenTowers);
     womenRecTitle.textContent = soonestWomen
       ? `세탁기 ${soonestWomen.tower.label} (약 ${soonestWomen.minutes}분 뒤 완료)`
