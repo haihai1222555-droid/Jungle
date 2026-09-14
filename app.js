@@ -424,9 +424,15 @@ function saveLastGoodSnapshot(status, stats) {
   } catch (e) {}
 }
 
+// 이보다 오래된 저장본은 쓰지 않는다. 원본은 5분마다 움직이는데, 장애가 몇 시간 이어지면
+// 몇 시간 전 값을 신호등·추천이 '실시간 N대 이용 가능' 으로 말했다. 모르면 모른다고 한다.
+const LAST_GOOD_MAX_AGE_MS = 15 * 60 * 1000;
+
 function loadLastGoodSnapshot() {
   try {
     const parsed = JSON.parse(localStorage.getItem(LAST_GOOD_KEY) || 'null');
+    const age = Date.now() - Number(parsed && parsed.savedAt);
+    if (!(age >= 0 && age <= LAST_GOOD_MAX_AGE_MS)) return null;
     return isValidStatusPayload(parsed && parsed.status) ? parsed : null;
   } catch (e) {
     return null;
@@ -463,11 +469,16 @@ async function loadDashboardData() {
       // 실패해도 화면을 막지 않는다
       loadCongestionProfile()
     ]);
-    if (!statusRes.ok || !statsRes.ok) throw new Error('API unavailable');
+    if (!statusRes.ok) throw new Error('API unavailable');
 
-    // 둘 다 파싱에 성공한 뒤 한꺼번에 반영한다 (한쪽만 갱신된 상태가 남지 않도록)
-    const [nextStatus, nextStats] = await Promise.all([statusRes.json(), statsRes.json()]);
+    const nextStatus = await statusRes.json();
     if (!isValidStatusPayload(nextStatus)) throw new Error('Unexpected status payload');
+    // 7일 통계는 곁가지다. 그것만 실패했다고 방금 받은 기기 상태를 버리고 '연결 끊김' 을
+    // 띄우면, 지금 비어 있는 기기를 두고 옛 저장본을 보여 준다. 통계는 지난 것을 그대로 쓴다.
+    let nextStats = globalStatsData;
+    if (statsRes.ok) {
+      try { nextStats = await statsRes.json(); } catch (e) {}
+    }
 
     globalStatusData = nextStatus;
     globalStatsData = nextStats;
@@ -647,8 +658,14 @@ try {
   if (saved) {
     const parsed = JSON.parse(saved);
     const list = Array.isArray(parsed) ? parsed : [parsed];
+    // 알림 모양을 갖춘 것만 남긴다. 예전엔 {"a":1} 같은 것도 그대로 들어가 도크에
+    // 'undefined' 가 떴고, null 이 하나 섞이면 멀쩡한 알림까지 통째로 버렸다.
     // 이미 완료 알림이 울린 지난 알림은 초기 로드 시 자동 정리
-    myLaundryAlarms = list.filter(item => !item.notified0Min);
+    myLaundryAlarms = list.filter(item => item && typeof item === 'object'
+      && typeof item.key === 'string'
+      && Number.isFinite(item.towerId)
+      && (item.unitType === 'washer' || item.unitType === 'dryer')
+      && !item.notified0Min);
   }
 } catch (e) {
   myLaundryAlarms = [];
