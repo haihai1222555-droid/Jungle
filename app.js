@@ -3343,11 +3343,20 @@ if (btnHelp && helpModal) {
 
 // 📢 공지 — /announcement.json 한 곳에서 내용을 받는다.
 //  · 제목·본문이 있으면 헤더에 [공지] 버튼을 보여 언제든 다시 열 수 있게 한다.
-//  · active 가 켜져 있으면 들어올 때마다(새로고침·재접속) 저절로도 띄운다.
-//    닫아도 기억하지 않는다 — 장애처럼 계속 알아야 하는 공지를 위해서다.
+//  · active 인 공지는 그 공지가 올라온 뒤 처음 들어왔을 때 한 번 저절로 띄운다.
+//    닫으면 그 공지(id)를 봤다고 이 브라우저에 적어 두고 다시 띄우지 않는다.
+//    새 공지(id 가 바뀜)가 올라오면 다시 한 번 뜬다.
+const ANNOUNCE_SEEN_KEY = 'jungle_announce_seen';
 const announceModal = document.getElementById('announceModal');
 const btnAnnounce = document.getElementById('btnAnnounce');
-function closeAnnounceModal() { if (announceModal) announceModal.classList.remove('open'); }
+let currentAnnounceId = null;
+function closeAnnounceModal() {
+  if (!announceModal) return;
+  announceModal.classList.remove('open');
+  if (currentAnnounceId) {
+    try { localStorage.setItem(ANNOUNCE_SEEN_KEY, currentAnnounceId); } catch (e) {}
+  }
+}
 function openAnnounceModal() { if (announceModal) announceModal.classList.add('open'); }
 
 if (announceModal) {
@@ -3378,7 +3387,12 @@ async function checkAnnouncement() {
   if (bodyEl) { bodyEl.textContent = data.body; bodyEl.style.whiteSpace = 'pre-wrap'; }
 
   if (btnAnnounce) btnAnnounce.style.display = '';
-  if (data.active) openAnnounceModal();
+  currentAnnounceId = data.id ? String(data.id) : null;
+  if (!data.active || !currentAnnounceId) return;
+
+  let seen = null;
+  try { seen = localStorage.getItem(ANNOUNCE_SEEN_KEY); } catch (e) {}
+  if (seen !== currentAnnounceId) openAnnounceModal();
 }
 
 const btnAlarmCenter = document.getElementById('btnAlarmCenter');
