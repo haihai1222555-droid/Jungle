@@ -84,27 +84,18 @@ const STATE_TRANSLATION = {
 // 기기가 상태를 안 줄 때가 있다. 남은 시간만 오고 runState 가 통째로 빠진다.
 // 그때 'POWER_OFF' 로 메우면 돌아가는 기기가 '사용 가능' 이 된다.
 // 실제로 7호기 건조기가 1시간 23분 남은 채 그렇게 떠 있었다.
-// 원본(LG ThinQ)은 돌아가는 중에도 runState 를 ERROR 로 주는 일이 있다.
-// 물통 비움 안내(EMPTY_WATER_ALERT_ERROR) 같은 것이 여기 걸린다 — 기기는
-// 멀쩡히 돌고 남은 시간도 줄어드는데 우리 화면에선 '점검 필요' 가 되고
-// 알림 버튼이 아예 사라졌다. 남은 시간이 있으면 돌고 있는 것으로 본다.
-// 원본 대시보드도 같은 보정을 한다.
-function unitRemainMinutes(u) {
-  const t = (u && u.timer) || {};
-  return (t.remainHour || 0) * 60 + (t.remainMinute || 0);
-}
-
-// 오류 때문에 '멈춰 있는' 기기인지. 시간이 줄고 있으면 멈춘 게 아니다.
+// 오류로 멈춰 있는 기기인지. 남은 시간이 있어도 ERROR 면 멈춘 것이다.
+// 한때 'ERROR + 남은 시간 → 도는 중' 으로 보정했는데 틀렸다. 2호기 건조기가
+// EMPTY_WATER_ALERT_ERROR(직배수 막힘)로 ERROR↔RUNNING 을 몇 시간씩 오가며
+// 끝나지 않았고, 그동안 고장난 기기를 '작동 중' 으로 보여줬다.
 function isUnitErrorStopped(u) {
   if (!u) return false;
-  if (unitRemainMinutes(u) > 0) return false;
   const raw = u.runState && u.runState.currentState;
   return raw === 'ERROR' || !!u.error;
 }
 
 function unitState(u) {
   const s = u && u.runState && u.runState.currentState;
-  if (s === 'ERROR' && unitRemainMinutes(u) > 0) return 'RUNNING';
   if (s) return s;
   if (!u) return 'UNKNOWN';
   const t = u.timer || {};

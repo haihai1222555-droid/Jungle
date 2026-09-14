@@ -1860,21 +1860,19 @@ def unit_state(unit):
     if not isinstance(unit, dict):
         return "UNKNOWN"
     state = (unit.get("runState") or {}).get("currentState")
-    # 원본(LG ThinQ)이 돌아가는 중에도 ERROR 를 주는 일이 있다. 물통 비움
-    # 안내(EMPTY_WATER_ALERT_ERROR) 같은 것이 여기 걸린다. 시간이 줄고
-    # 있으면 멈춘 게 아니라 도는 중이다. 원본 대시보드도 같은 보정을 한다.
-    if state == "ERROR" and _mins(unit.get("timer")) > 0:
-        return "RUNNING"
     if state:
         return state
     return "UNKNOWN_RUNNING" if _mins(unit.get("timer")) > 0 else "UNKNOWN"
 
 
 def is_error_stopped(unit):
-    """오류 때문에 '멈춰 있는' 기기인지. 시간이 줄고 있으면 멈춘 게 아니다."""
+    """오류로 멈춰 있는 기기인지. 남은 시간이 있어도 ERROR 면 멈춘 것이다.
+
+    한때 'ERROR + 남은 시간 → 도는 중' 으로 보정했는데 틀렸다. 2호기 건조기가
+    EMPTY_WATER_ALERT_ERROR(직배수 막힘)로 ERROR 와 RUNNING 을 몇 시간씩 오가며
+    끝나지 않았고, 그동안 고장난 기기를 '작동 중' 으로 보여줬다.
+    """
     if not isinstance(unit, dict):
-        return False
-    if _mins(unit.get("timer")) > 0:
         return False
     raw = (unit.get("runState") or {}).get("currentState")
     return raw == "ERROR" or bool(unit.get("error"))
