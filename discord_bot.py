@@ -489,11 +489,15 @@ def fetch_live_status():
     return {}
 
 def format_timer(hour, minute):
-    if not hour and not minute:
+    # 원본이 숫자 대신 글자를 줄 때가 있다. 그대로 비교하면 배치도·/알림·/세탁기
+    # 화면이 통째로 터진다. 알림 루프에 쓰는 _mins 와 같은 방식으로 읽는다.
+    total = _mins({"remainHour": hour, "remainMinute": minute})
+    if total <= 0:
         return "대기 중"
-    if hour > 0:
-        return f"{hour}시간 {minute}분"
-    return f"{minute}분"
+    h, m = divmod(total, 60)
+    if not h:
+        return f"{m}분"
+    return f"{h}시간 {m}분" if m else f"{h}시간"
 
 def is_unit_running(state, remain_min):
     return state in RUNNING_STATES or (remain_min > 0 and state != 'ERROR' and state != 'POWER_OFF')
@@ -618,7 +622,7 @@ def render_floorplan_image(status_data):
             state_txt = "대기 중 (사용 가능)"
         else:
             accent = (234, 179, 8)
-            state_txt = STATE_LABELS.get(state, state)
+            state_txt = state_label(state)
 
         # 드럼 도어 (바깥 링 + 안쪽 원) — 세탁기 도어처럼 보이게
         cxp, cyp, r = x + 44, uy + 34, 25
@@ -1047,6 +1051,11 @@ STATE_LABELS = {
     "DETECTING": "무게 감지 중",
 }
 
+def state_label(state):
+    """상태 이름표. 처음 보는 이름이면 영어 코드를 그대로 내보내지 않는다."""
+    return STATE_LABELS.get(state) or "알 수 없는 상태"
+
+
 ZONE_SECTIONS = [
     ("men", "👦 남성 전용 (No.1 ~ No.5)"),
     ("common", "🤝 공용 (No.6 ~ No.7)"),
@@ -1067,7 +1076,7 @@ def build_unit_list_embed(unit_type):
             color=discord.Color.from_rgb(239, 68, 68),
         )
 
-    free = running = errors = unknown = 0
+    free = running = errors = unknown = done = 0
     sections = []
 
     for zone_key, zone_title in ZONE_SECTIONS:
@@ -1093,8 +1102,13 @@ def build_unit_list_embed(unit_type):
                 mark = "🟠" if unit_type == "dryer" else "🔵"
                 tail = f"**{format_timer(timer.get('remainHour', 0), timer.get('remainMinute', 0))}** 남음"
                 running += 1
-            elif state == "WRINKLE_CARE":
-                mark, tail = "🟣", "완료 · 수거 가능"
+            elif state in ("WRINKLE_CARE", "COMPLETE", "END"):
+                # 다 돌았고 빨래가 아직 들어 있다. 예전엔 COMPLETE·END 가 아래로
+                # 떨어져 '사용 중 · 시간 계산 중' 으로 나가, 끝난 기기를 쓰는 줄 알았다.
+                # 이름표에 이미 '완료' 가 있으면 '완료 · 완료 · 수거 가능' 이 된다
+                mark = "🟣"
+                tail = "수거 가능" if "완료" in state_label(state) else "완료 · 수거 가능"
+                done += 1
             elif state == "INITIAL":
                 # 시작만 안 눌렀을 뿐 빨래가 들어 있을 수 있다.
                 # 빈 기기가 아니므로 사용 중으로 센다.
@@ -1109,7 +1123,7 @@ def build_unit_list_embed(unit_type):
                 mark, tail = "⚪", "**사용 가능**"
                 free += 1
 
-            lines.append(f"{mark} `{t['label']}` {STATE_LABELS.get(state, state)} · {tail}")
+            lines.append(f"{mark} `{t['label']}` {state_label(state)} · {tail}")
         sections.append((zone_title, "\n".join(lines)))
 
     if errors:
@@ -1123,6 +1137,7 @@ def build_unit_list_embed(unit_type):
         title=f"{icon} {label} 현황",
         description=(f"사용 가능 **{free}대** · 사용 중 **{running}대** · "
                      f"점검 필요 **{errors}대**"
+                     + (f" · 수거 대기 **{done}대**" if done else "")
                      + (f" · 정보 없음 **{unknown}대**" if unknown else "")),
         color=color,
         timestamp=datetime.now(),
@@ -2099,6 +2114,14 @@ def parse_by_rules(text, ctx=None):
     (빠르고, 무료고, 결과가 항상 같다)"""
     t = text.replace(" ", "")
 
+    # 부정("걸지 마", "취소하지 말고")은 낱말만 보면 반대로 읽힌다.
+    # 실제로 "3번 건조기 알림 걸지 마" 를 등록으로 읽었다. 규칙으로 가리지 않는다.
+    if re.search(r"지마|지말|말고|하지않", t):
+        return None
+    # "3번 세탁기랑 건조기 둘 다" 는 번호 하나에 종류가 둘이다. 규칙은 앞의 하나만 읽었다.
+    if "세탁" in t and "건조" in t and len(set(re.findall(r"(\d+)\s*(?:번|호기|호)", t))) == 1:
+        return None
+
     # "전체 예약 취소", "알림 전부 꺼줘" 처럼 말이 조금씩 달라도 잡히게 한다
     if re.search(r"(전체|전부|모두|모든|싹|다)(의)?(예약|알림|알람)?(을|를)?(다)?(취소|해제|삭제|끄|꺼|지워|없애)", t):
         return {"action": "cancel_all"}
@@ -2191,10 +2214,14 @@ def parse_by_rules(text, ctx=None):
     if m and m.group(2) is None:
         tid = int(m.group(1))
         if 1 <= tid <= 9:
+            # "건조기 3번 알림" 처럼 종류를 번호 앞에 말하면 위 규칙이 종류를 못 읽는다.
+            # 비워 두면 지금 도는 쪽으로 정해져, 건조기라고 했는데 세탁기에 걸릴 수 있다.
+            kinds = {v for k, v in UNIT_WORDS.items() if k in t}
+            utype = next(iter(kinds)) if len(kinds) == 1 else None
             if any(k in t for k in CANCEL_WORDS):
-                return {"action": "cancel", "towerId": tid, "unitType": None}
+                return {"action": "cancel", "towerId": tid, "unitType": utype}
             if any(k in t for k in REGISTER_WORDS):
-                return {"action": "register", "towerId": tid, "unitType": None}
+                return {"action": "register", "towerId": tid, "unitType": utype}
 
     # 기기 번호 없이 이어서 말한 경우, 그 사람이 직전에 말한 기기를 쓴다.
     # (문맥은 사람별로 따로 보관하므로 다른 사람 요청과 섞이지 않는다)
@@ -2244,7 +2271,10 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
                              "\"현재 정보가 없습니다. 점검 중이거나 워시타워 상태를 확인해 주세요.\"")
                 continue
             d = (status_data.get(t["name"]) or {})
-            cycle = ((d.get("washer") or {}).get("cycle") or {}).get("cycleCount", 0)
+            try:
+                cycle = int(((d.get("washer") or {}).get("cycle") or {}).get("cycleCount") or 0)
+            except (TypeError, ValueError):
+                cycle = 0
             for ut, label in (("washer", "세탁기"), ("dryer", "건조기")):
                 u = d.get(ut) or {}
                 st = unit_state(u)
@@ -2252,7 +2282,7 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
                 mnt = _mins(tm)
                 err = u.get("error")
 
-                part = f"{t['id']}번 {label}({t['zoneName']}): {STATE_LABELS.get(st, st)}"
+                part = f"{t['id']}번 {label}({t['zoneName']}): {state_label(st)}"
                 if mnt:
                     part += f", {mnt}분 남음"
                 if err or st == "ERROR":
@@ -3245,7 +3275,9 @@ async def _do_step(user_id, plan, status_data, mine):
                 continue
             for ut in ("washer", "dryer"):
                 u = (status_data.get(t["name"]) or {}).get(ut) or {}
-                if unit_state(u) in FREE_STATES:
+                # 꺼져 있어도 오류 코드가 붙어 있으면 /세탁기 목록은 '점검 필요' 로 쓴다.
+                # 여기서만 빈 기기로 세면 같은 봇이 두 말을 한다.
+                if unit_state(u) in FREE_STATES and not is_error_stopped(u):
                     free += 1
         head = (reply + "\n") if reply else ""
         tail = f"-# 지금 비어 있는 기기: **{free}대**"
@@ -3745,7 +3777,7 @@ def _presence_units(status_data):
         for unit, box in (("washer", "w"), ("dryer", "d")):
             u = data.get(unit) or {}
             state = unit_state(u)
-            if state in FREE_STATES:
+            if state in FREE_STATES and not is_error_stopped(u):
                 if box == "w":
                     free_w += 1
                 else:

@@ -298,7 +298,9 @@ function towerHasData(name) {
 
 function isUnitFree(state) {
   // INITIAL 은 코스까지 골라두고 시작만 안 누른 것이라 빈 기기가 아니다.
-  return ['POWER_OFF', 'COMPLETE'].includes(state);
+  // COMPLETE 도 아니다 — 다 돌았지만 빨래가 아직 들어 있다. 예전엔 여기 들어 있어서
+  // 카드는 '완료' 인데 신호등·추천은 그 기기를 '즉시 세탁 가능' 으로 셌다. 봇도 안 센다.
+  return state === 'POWER_OFF';
 }
 
 function isUnitRunning(state) {
@@ -1370,9 +1372,8 @@ function renderCongestionStatus() {
     const data = globalStatusData[t.name] || {};
     const wState = unitState(data.washer);
     const dState = unitState(data.dryer);
-    const dErr = data.dryer?.error || data.washer?.error;
-    if (isUnitFree(wState)) freeCount++;
-    if (isUnitFree(dState) && !dErr) freeCount++;
+    if (isUnitFree(wState) && !isUnitErrorStopped(data.washer)) freeCount++;
+    if (isUnitFree(dState) && !isUnitErrorStopped(data.dryer)) freeCount++;
   });
 
   dotEl.className = 'signal-dot';
@@ -1872,11 +1873,11 @@ function renderSmartSummary() {
 
     if (dError) errorCount++;
 
-    if (isUnitFree(wState)) {
+    if (isUnitFree(wState) && !isUnitErrorStopped(data.washer)) {
       menFreeWash++;
       menFreeWashers.push({ tower: t, cycles });
     }
-    if (isUnitFree(dState) && !dError) {
+    if (isUnitFree(dState) && !isUnitErrorStopped(data.dryer)) {
       menFreeDryers.push({ tower: t, cycles });
     }
   });
@@ -1898,11 +1899,11 @@ function renderSmartSummary() {
 
     if (dError) errorCount++;
 
-    if (isUnitFree(wState)) {
+    if (isUnitFree(wState) && !isUnitErrorStopped(data.washer)) {
       womenFreeWash++;
       womenFreeWashers.push({ tower: t, cycles });
     }
-    if (isUnitFree(dState) && !dError) {
+    if (isUnitFree(dState) && !isUnitErrorStopped(data.dryer)) {
       womenFreeDryers.push({ tower: t, cycles });
     }
   });
@@ -1917,7 +1918,7 @@ function renderSmartSummary() {
     const dState = unitState(data.dryer);
     const dError = isUnitErrorStopped(data.dryer) || isUnitErrorStopped(data.washer);
     if (dError) errorCount++;
-    if (isUnitFree(wState)) commonFreeWash++;
+    if (isUnitFree(wState) && !isUnitErrorStopped(data.washer)) commonFreeWash++;
   });
 
   // 수치 업데이트
@@ -2321,11 +2322,14 @@ function getCompactContextSummary() {
     const dState = unitState(d.dryer);
     const wTime = formatTimer(d.washer?.timer?.remainHour, d.washer?.timer?.remainMinute);
     const dTime = formatTimer(d.dryer?.timer?.remainHour, d.dryer?.timer?.remainMinute);
-    const err = d.dryer?.error || d.washer?.error;
+    // 세탁기·건조기 오류를 따로 본다. 하나로 뭉치면 세탁기 오류인데 건조기에
+    // '배수점검필요' 가 붙고, 오류 난 세탁기는 '대기(사용가능)' 으로 넘어갔다.
+    const wErr = isUnitErrorStopped(d.washer);
+    const dErr = isUnitErrorStopped(d.dryer);
     const cycle = d.washer?.cycle?.cycleCount || 0;
 
-    const dFluc = analyzeDynamicTimeFluctuation('dryer', dState, d.dryer?.timer || {}, cycle, err);
-    const wFluc = analyzeDynamicTimeFluctuation('washer', wState, d.washer?.timer || {}, cycle, err);
+    const dFluc = analyzeDynamicTimeFluctuation('dryer', dState, d.dryer?.timer || {}, cycle, d.dryer?.error);
+    const wFluc = analyzeDynamicTimeFluctuation('washer', wState, d.washer?.timer || {}, cycle, d.washer?.error);
 
     // 기기가 주는 상태는 영어 코드다(SPINNING, RINSING ...).
     // 그대로 넘기면 AI 가 '쓰는 중' 인 줄 모르고 빈 기기라고 답한다.
@@ -2333,13 +2337,26 @@ function getCompactContextSummary() {
     // 화면에 쓰는 우리말 이름표를 그대로 쓰고, 앞에 '사용중' 을 붙인다.
     // 처음 보는 상태라도 영어 코드를 AI 에게 넘기지 않는다.
     const busyWord = st => `사용중(${(STATE_TRANSLATION[st] || {}).label || '확인 필요'}`;
+    // 시간이 없는 칸(완료·구김 방지·무게 감지)을 '가동중' 으로 메우면 끝난 기기를
+    // 도는 것처럼 AI 에게 넘긴다. 있는 것만 붙인다.
+    const busyDetail = (time, errFlag, tag) =>
+      [time ? `${time}남음` : '', errFlag ? '점검필요' : tag].filter(Boolean).join(', ');
+    // 한 칸을 설명한다. 오류면 상태 이름표(예: '대기 중 (사용 가능)')를 붙이지 않는다 —
+    // '사용중(대기 중 (사용 가능), 점검필요)' 처럼 점검할 기기에 '사용 가능' 이 섞였다.
+    // 예약의 남은 시간은 완료까지가 아니라 시작까지다. '90분 남음 · 정상 세탁 중' 으로 넘기면
+    // AI 가 '90분 뒤 완료' 라고 답한다.
+    const unitStr = (word, st, time, errFlag, tag) => {
+      if (errFlag) return `${word}:점검필요(사용불가)`;
+      if (st === 'RESERVED') return `${word}:사용중(예약 대기 중${time ? `, 시작까지 ${time}` : ''} — 빨래가 들어 있음)`;
+      return `${word}:${busyWord(st)}, ${busyDetail(time, false, tag)})`;
+    };
 
     const wStr = wState === 'INITIAL'
       ? '세탁:사용중(코스만 고르고 시작 전 — 빨래가 들어 있을 수 있어 빈 기기가 아님)'
-      : (isUnitFree(wState) ? '세탁:대기(사용가능)' : `세탁:${busyWord(wState)}, ${wTime}남음, ${wFluc.tagText})`);
+      : (isUnitFree(wState) && !wErr ? '세탁:대기(사용가능)' : unitStr('세탁', wState, wTime, wErr, wFluc.tagText));
     const dStr = dState === 'INITIAL'
       ? '건조:사용중(코스만 고르고 시작 전 — 빨래가 들어 있을 수 있어 빈 기기가 아님)'
-      : (isUnitFree(dState) && !err ? '건조:대기(사용가능)' : `건조:${busyWord(dState)}, ${dTime || '가동중'}${err ? ',배수점검필요' : ', ' + dFluc.tagText})`);
+      : (isUnitFree(dState) && !dErr ? '건조:대기(사용가능)' : unitStr('건조', dState, dTime, dErr, dFluc.tagText));
     return `• ${t.label}(${t.zoneName}): ${wStr} / ${dStr} / 누적${cycle}회${cycle >= 30 ? '[통살균필요]' : ''}`;
   });
   return lines.join('\n');

@@ -241,10 +241,181 @@ def test_course_not_from_device():
     check("건조 코스 수", len(washtower.DRY_COURSES) > 0, True)
 
 
+# =========================================================
+# 7. 봇 화면 — 이상한 값에 안 터지고, 끝난 기기를 '사용 중' 으로 안 쓴다
+# =========================================================
+def test_bot_display():
+    # 원본이 숫자 대신 글자를 주면 배치도·/알림·/세탁기 가 통째로 터졌다
+    check("타이머가 글자", bot.format_timer("1", "5"), "1시간 5분")
+    check("타이머가 엉뚱한 글자", bot.format_timer("abc", 3), "3분")
+    check("타이머 0", bot.format_timer(0, 0), "대기 중")
+    check("딱 떨어지는 시간", bot.format_timer(1, 0), "1시간")
+    check("분이 60을 넘음", bot.format_timer(0, 90), "1시간 30분")
+
+    # 처음 보는 상태 이름이 영어 그대로 나가지 않는다
+    check("모르는 상태 이름표", bot.state_label("WHAT_IS_THIS"), "알 수 없는 상태")
+    check("아는 상태 이름표", bot.state_label("DRYING"), "건조 중")
+
+    # 끝났는데 빨래가 들어 있는 기기를 '사용 중 · 시간 계산 중' 으로 쓰지 않는다
+    status = {f"워시타워_{i}": {"washer": {"runState": {"currentState": "POWER_OFF"}},
+                              "dryer": {"runState": {"currentState": "POWER_OFF"}}}
+              for i in range(1, 10)}
+    status["워시타워_2"]["washer"] = {"runState": {"currentState": "COMPLETE"}}
+    status["워시타워_3"]["washer"] = {"runState": {"currentState": "END"}}
+    status["워시타워_4"]["washer"] = {"runState": {"currentState": "WHAT_IS_THIS"},
+                                     "timer": {"remainHour": "0", "remainMinute": "x"}}
+    saved = bot.fetch_live_status
+    bot.fetch_live_status = lambda: status
+    try:
+        d = bot.build_unit_list_embed("washer").to_dict()
+    finally:
+        bot.fetch_live_status = saved
+    body = "\n".join(f["value"] for f in d.get("fields", []))
+    check("완료 기기를 사용 중으로 안 씀", "`No.2` 완료 (수거 대기) · 수거 가능" in body, True)
+    check("END 도 수거 가능", "`No.3` 완료 · 수거 가능" in body, True)
+    check("'완료 · 완료' 로 겹쳐 쓰지 않음", "완료 · 완료" in body, False)
+    finished = [ln for ln in body.splitlines() if "`No.2`" in ln or "`No.3`" in ln]
+    check("끝난 기기를 시간 계산 중으로 안 씀", any("시간 계산 중" in ln for ln in finished), False)
+    check("영어 상태가 안 나감", "WHAT_IS_THIS" in body, False)
+    check("요약에 수거 대기", "수거 대기 **2대**" in (d.get("description") or ""), True)
+
+
+# =========================================================
+# 8. 입력 해석 — 부정문을 반대로 읽지 않는다
+# =========================================================
+def test_rule_parsing():
+    check("걸지 마 → 규칙으로 안 읽음", bot.parse_by_rules("3번 건조기 알림 걸지 마"), None)
+    check("취소하지 말고 → 규칙으로 안 읽음",
+          bot.parse_by_rules("2번 건조기 취소하지 말고 알림 걸어"), None)
+    check("둘 다 → 규칙으로 안 읽음", bot.parse_by_rules("3번 세탁기랑 건조기 둘 다 알림"), None)
+    check("종류를 번호 앞에", bot.parse_by_rules("건조기 3번 알림"),
+          {"action": "register", "towerId": 3, "unitType": "dryer"})
+    # 원래 되던 것은 그대로
+    check("평범한 등록", bot.parse_by_rules("3번 건조기 알림 걸어줘"),
+          {"action": "register", "towerId": 3, "unitType": "dryer"})
+    check("평범한 취소", bot.parse_by_rules("2번 세탁기 알림 취소"),
+          {"action": "cancel", "towerId": 2, "unitType": "washer"})
+    check("번호만", bot.parse_by_rules("3번 알림 꺼줘"),
+          {"action": "cancel", "towerId": 3, "unitType": None})
+    check("여러 기기", bot.parse_by_rules("1번이랑 3번 건조기 알림 걸어줘"),
+          {"actions": [{"action": "register", "towerId": 1, "unitType": "dryer"},
+                       {"action": "register", "towerId": 3, "unitType": "dryer"}]})
+
+
+# =========================================================
+# 9. 같은 봇이 두 말을 하지 않는다 — 오류 코드가 붙은 꺼진 기기
+# =========================================================
+def test_bot_counts_agree():
+    status = {f"워시타워_{i}": {"washer": {"runState": {"currentState": "RUNNING"},
+                                         "timer": {"remainMinute": 30}},
+                              "dryer": {"runState": {"currentState": "RUNNING"},
+                                        "timer": {"remainMinute": 30}}}
+              for i in range(1, 10)}
+    # 1번 세탁기: 꺼져 있지만 오류 코드가 남아 있다 → 목록은 '점검 필요'
+    status["워시타워_1"]["washer"] = {"runState": {"currentState": "POWER_OFF"}, "error": "DRAIN_ERROR"}
+    # 2번 세탁기: 정말 비어 있다
+    status["워시타워_2"]["washer"] = {"runState": {"currentState": "POWER_OFF"}}
+    # 3번 건조기: 다 돌았고 빨래가 들어 있다 → 빈 기기가 아니다
+    status["워시타워_3"]["dryer"] = {"runState": {"currentState": "COMPLETE"}}
+
+    check("상태줄 빈 기기 수", bot._presence_units(status), "세탁기 1대 · 건조기 0대 사용 가능")
+    saved = bot.fetch_live_status
+    bot.fetch_live_status = lambda: status
+    try:
+        w = bot.build_unit_list_embed("washer").to_dict().get("description") or ""
+        d = bot.build_unit_list_embed("dryer").to_dict().get("description") or ""
+    finally:
+        bot.fetch_live_status = saved
+    check("세탁기 목록 요약", w.startswith("사용 가능 **1대**") and "점검 필요 **1대**" in w, True)
+    check("건조기 목록 요약", d.startswith("사용 가능 **0대**") and "수거 대기 **1대**" in d, True)
+
+
+# =========================================================
+# 10. 웹 푸시 알림 흐름 — 값이 잠깐 끊겨도 알림이 안 사라지고,
+#     다음 사람이 넣은 빨래에 앞 사람 수거 요청을 안 보낸다
+# =========================================================
+def test_server_alarm_flow():
+    import types
+
+    class _Stop(BaseException):
+        pass
+
+    t0 = 1_800_000_000.0
+
+    def unit(state, m=0):
+        if state is None:
+            return None
+        return {"runState": {"currentState": state}, "timer": {"remainHour": 0, "remainMinute": m}}
+
+    def status(u):
+        s = {f"워시타워_{i}": {"washer": unit("POWER_OFF"), "dryer": unit("POWER_OFF")}
+             for i in range(1, 10)}
+        s["워시타워_3"]["dryer"] = u
+        return s
+
+    names = ("time", "refresh_source_age", "load_subscriptions", "save_subscriptions",
+             "send_push_notification", "CACHED_STATUS")
+    saved = {k: getattr(srv, k) for k in names}
+    saved_urlopen, saved_caf = srv.urllib.request.urlopen, srv.cafeteria.refresh
+    saved_recent = device_log.recent_error
+
+    def run(steps):
+        clock, tags, idx = {"t": t0}, [], {"i": -1}
+        subs = {"l": [{"subscription": {"endpoint": "https://example.invalid/p"},
+                       "alarm": {"key": "3_dryer", "towerId": 3, "unitType": "dryer",
+                                 "deviceName": "3호기 건조기", "targetMs": (t0 + steps[0][2] * 60) * 1000,
+                                 "notified5Min": False, "notified0Min": False},
+                       "createdAt": t0}]}
+
+        def sleep(_):
+            idx["i"] += 1
+            if idx["i"] >= len(steps):
+                raise _Stop()
+            dt, stt, m = steps[idx["i"]]
+            clock["t"] = t0 + dt
+            srv.CACHED_STATUS = status(unit(stt, m))
+
+        real = saved["time"]
+        srv.time = types.SimpleNamespace(time=lambda: clock["t"], sleep=sleep, monotonic=real.monotonic,
+                                         strftime=real.strftime, localtime=real.localtime)
+        srv.urllib.request.urlopen = lambda *a, **k: (_ for _ in ()).throw(OSError("offline"))
+        srv.refresh_source_age = lambda: None
+        srv.cafeteria.refresh = lambda: None
+        srv.load_subscriptions = lambda: list(subs["l"])
+        srv.save_subscriptions = lambda lst: subs.__setitem__("l", list(lst))
+        srv.send_push_notification = lambda sub, payload: tags.append(str(payload.get("tag") or "")) or True
+        device_log.recent_error = lambda *a, **k: None
+        try:
+            srv.background_push_worker()
+        except _Stop:
+            pass
+        return tags
+
+    try:
+        drop = run([(0, "RUNNING", 10), (60, None, 0), (180, None, 0), (300, None, 0),
+                    (360, "RUNNING", 4), (660, "END", 0)])
+        check("값이 끊기면 확인 불가를 알림", any(t.startswith("nodata") for t in drop), True)
+        check("값이 돌아온 뒤 완료 알림이 감", any(t.startswith("complete") for t in drop), True)
+
+        for st in ("RESERVED", "DETECTING"):
+            nxt = run([(0, "RUNNING", 6), (120, "RUNNING", 4), (360, "END", 0),
+                       (600, st, 90 if st == "RESERVED" else 0), (1500, st, 75 if st == "RESERVED" else 0),
+                       (1560, st, 74 if st == "RESERVED" else 0)])
+            check("다음 사람 %s 뒤 앞 사람에게 수거 요청 안 감" % st,
+                  any(t.startswith("stale") for t in nxt), False)
+    finally:
+        for k, v in saved.items():
+            setattr(srv, k, v)
+        srv.urllib.request.urlopen, srv.cafeteria.refresh = saved_urlopen, saved_caf
+        device_log.recent_error = saved_recent
+
+
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
              test_unknown_states, test_device_log,
-             test_source_down_does_not_block_chat, test_course_not_from_device]
+             test_source_down_does_not_block_chat, test_course_not_from_device,
+             test_bot_display, test_rule_parsing, test_bot_counts_agree,
+             test_server_alarm_flow]
     for t in tests:
         try:
             t()

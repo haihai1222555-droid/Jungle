@@ -464,6 +464,10 @@ def background_push_worker():
                             'key': alarm.get('key'),
                             'endpoint': sub_info.get('endpoint'),
                         })
+                    # 알림은 그대로 둔다. 예전엔 여기서 active_subs 에 안 넣고 넘어가,
+                    # 값이 잠깐만 끊겨도 구독이 저장에서 통째로 빠졌다. 값이 돌아와도
+                    # 5분 전·완료 알림이 아예 안 갔다.
+                    active_subs.append(item)
                     continue
 
                 if alarm.get('noDataSince') or alarm.get('notifiedNoData'):
@@ -563,7 +567,9 @@ def background_push_worker():
                 # ── 완료 알림을 이미 보낸 뒤: 수거했는지 감시하는 구간 ──
                 if notified_0min:
                     # 기기가 다시 돌기 시작했다 = 누군가 꺼내고 새로 돌렸다는 뜻 → 감시 종료
-                    if has_live and run_state in RUNNING_STATES:
+                    # 예약(RESERVED)·무게 감지(DETECTING)도 다음 사람이 넣은 것이다. RUNNING
+                    # 계열만 보면, 남의 빨래가 들어간 뒤에도 앞 사람에게 수거 요청이 갔다.
+                    if has_live and run_state in STARTED_STATES:
                         changed = True
                         continue
 
