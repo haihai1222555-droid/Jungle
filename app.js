@@ -418,13 +418,23 @@ function formatDataAge(ms) {
   return `${Math.round(hr / 24)}일 전`;
 }
 
+// 원본이 몇 분에 한 번 기기 상태를 주는지. 서버가 X-Source-Interval 머리말로 알려준다.
+// 모르면 5분으로 본다. 이 숫자를 화면 글에 그대로 적는다. 예전에는 '5분' 이 글 안에
+// 박혀 있어서, 원본이 30분 주기로 바뀐 날에도 화면은 '기기는 5분마다 알려줍니다' 라고
+// 말했다. 사실이 아닌 안내였다.
+let sourceIntervalSec = 0;
+
+function sourceIntervalMin() {
+  return sourceIntervalSec > 0 ? Math.max(1, Math.round(sourceIntervalSec / 60)) : 5;
+}
+
 function saveLastGoodSnapshot(status, stats) {
   try {
     localStorage.setItem(LAST_GOOD_KEY, JSON.stringify({ savedAt: Date.now(), status, stats }));
   } catch (e) {}
 }
 
-// 이보다 오래된 저장본은 쓰지 않는다. 원본은 5분마다 움직이는데, 장애가 몇 시간 이어지면
+// 이보다 오래된 저장본은 쓰지 않는다. 원본은 몇 분에 한 번 움직이는데, 장애가 몇 시간 이어지면
 // 몇 시간 전 값을 신호등·추천이 '실시간 N대 이용 가능' 으로 말했다. 모르면 모른다고 한다.
 const LAST_GOOD_MAX_AGE_MS = 15 * 60 * 1000;
 
@@ -489,14 +499,16 @@ async function loadDashboardData() {
     liveDot.style.background = '#00e87a';
 
     // 값이 실제로 몇 분 전 것인지 적는다.
-    // 원본 서버가 LG 를 5분에 한 번만 확인하므로, 우리가 아무리 자주
+    // 원본 서버가 LG 를 주기마다 한 번씩만 확인하므로, 우리가 아무리 자주
     // 가져와도 값은 그보다 새로울 수 없다. '실시간' 이라고 적으면
     // 기다리는 사람이 '왜 안 바뀌지' 하고 새로고침만 반복하게 된다.
+    const srcInterval = parseInt(statusRes.headers.get('X-Source-Interval') || '', 10);
+    if (Number.isFinite(srcInterval) && srcInterval > 0) sourceIntervalSec = srcInterval;
     const srcAge = parseInt(statusRes.headers.get('X-Source-Age') || '', 10);
     if (Number.isFinite(srcAge)) {
       const m = Math.floor(srcAge / 60);
       statusText.textContent = m < 1 ? '방금 들어온 값'
-                             : `${m}분 전 값 (기기는 5분마다 알려줍니다)`;
+                             : `${m}분 전 값 (기기는 ${sourceIntervalMin()}분마다 알려줍니다)`;
     } else {
       statusText.textContent = '동기화 완료';
     }
@@ -1116,7 +1128,7 @@ setInterval(() => {
 
     // ⚠️ 1) 내가 등록한 기기가 멈추면 알린다. 오류든 일시정지든.
     //
-    // 오류일 때만 알리면 놓친다. 기기 상태는 5분에 한 번만 오므로
+    // 오류일 때만 알리면 놓친다. 기기 상태는 주기마다 한 번만 오므로
     // 오류가 났다가 일시정지로 넘어가면 오류 화면을 아예 못 보고 지나간다.
     // 실제로 배수 오류로 멈춘 건조기를 아무에게도 못 알린 적이 있다.
     const isError = isUnitErrorStopped(unitData);
@@ -1131,7 +1143,7 @@ setInterval(() => {
       playChimeSound();
       if (navigator.vibrate) navigator.vibrate([300, 120, 300]);
 
-      showToast('⏸️', `<b>[${item.deviceName}]</b> 기기가 멈춰 있습니다.<br><small style="color:#fcd34d">직접 누르신 것이면 넘기셔도 됩니다. 아니라면 오류일 수 있어요.<br>기기가 5분에 한 번만 상태를 알려줘서 그 사이에 났던 오류는 보이지 않습니다.</small>`, 'warning');
+      showToast('⏸️', `<b>[${item.deviceName}]</b> 기기가 멈춰 있습니다.<br><small style="color:#fcd34d">직접 누르신 것이면 넘기셔도 됩니다. 아니라면 오류일 수 있어요.<br>기기가 ${sourceIntervalMin()}분에 한 번만 상태를 알려줘서 그 사이에 났던 오류는 보이지 않습니다.</small>`, 'warning');
 
       if (!item.pushRegistered && 'Notification' in window && Notification.permission === 'granted') {
         new Notification(`⏸️ [멈춤] ${item.deviceName}`, {

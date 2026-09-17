@@ -461,6 +461,20 @@ _LAST_STATUS = {}
 _LAST_STATUS_AT = 0.0
 STATUS_REUSE_SEC = 90   # 이 시간 안이라면 직전 데이터를 그대로 쓴다
 
+# 원본이 몇 초에 한 번 LG 를 보는지. 웹 서버가 머리말(X-Source-Interval)로 알려준다.
+_SOURCE_INTERVAL_SEC = 0
+
+
+def source_interval_min(default=5):
+    """원본 갱신 주기(분). 모르면 5분으로 본다.
+
+    DM 글에 '5분' 을 박아 두면 원본이 주기를 바꾼 날 봇만 거짓말을 한다.
+    실제로 원본이 1800초로 바뀐 적이 있다.
+    """
+    if _SOURCE_INTERVAL_SEC > 0:
+        return max(1, round(_SOURCE_INTERVAL_SEC / 60))
+    return default
+
 
 def fetch_live_status():
     """실시간 세탁실 데이터 조회.
@@ -476,6 +490,12 @@ def fetch_live_status():
             with urllib.request.urlopen(req, timeout=6) as res:
                 if res.status == 200:
                     data = json.loads(security.read_capped(res).decode('utf-8'))
+                    global _SOURCE_INTERVAL_SEC
+                    try:
+                        _SOURCE_INTERVAL_SEC = int(
+                            res.headers.get('X-Source-Interval') or _SOURCE_INTERVAL_SEC)
+                    except (TypeError, ValueError):
+                        pass
                     if data:
                         _LAST_STATUS = data
                         _LAST_STATUS_AT = time.time()
@@ -1183,7 +1203,7 @@ def build_info_embed(user_id=None):
             "• **완료** 시 DM — `가져갔어요` 를 누르면 수거 요청을 보내지 않습니다\n"
             f"• 완료 후 **{STALE_PICKUP_SEC // 60}분** 지나도 안 가져가면 수거 요청 DM\n"
             "• 가동 중 **멈추면** 즉시 DM — 오류든 일시정지든 알려드립니다\n"
-            "-# 　기기가 5분에 한 번만 상태를 알려줘서 왜 멈췄는지는 가릴 수 없습니다\n"
+            f"-# 　기기가 {source_interval_min()}분에 한 번만 상태를 알려줘서 왜 멈췄는지는 가릴 수 없습니다\n"
             f"• 기기 값이 **{NODATA_GRACE_SEC // 60}분** 넘게 안 오면 확인이 어렵다고 알려드립니다\n"
             "• 다음 사람이 새로 돌리면 자동으로 해제됩니다"
         ),
@@ -3965,8 +3985,8 @@ async def check_laundry_alarms():
             else:
                 text = (f"⏸️ **[멈춤: {item['deviceName']}]** 기기가 멈춰 있습니다.\n"
                         f"• 직접 누르신 것이면 넘기셔도 됩니다.\n"
-                        f"• 아니라면 오류일 수 있습니다. 기기가 5분에 한 번만 상태를 "
-                        f"알려줘서 그 사이에 났던 오류는 보이지 않습니다.")
+                        f"• 아니라면 오류일 수 있습니다. 기기가 {source_interval_min()}분에 "
+                        f"한 번만 상태를 알려줘서 그 사이에 났던 오류는 보이지 않습니다.")
                 hit = await asyncio.to_thread(
                     device_log.recent_error, f"{tower['id']}호기", item["unitType"])
                 if hit:

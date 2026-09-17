@@ -498,8 +498,9 @@ def background_push_worker():
                                 % (device_name, detail))
                     else:
                         body = ('%s 가 멈춰 있습니다. 직접 누르신 것이 아니면 오류일 수 '
-                                '있습니다. 기기가 5분에 한 번만 상태를 알려줘서 그 사이에 '
-                                '났던 오류는 보이지 않습니다.' % device_name)
+                                '있습니다. 기기가 %d분에 한 번만 상태를 알려줘서 그 사이에 '
+                                '났던 오류는 보이지 않습니다.'
+                                % (device_name, source_interval_min()))
                         hit = device_log.recent_error(
                             f"{tower_id}호기", unit_type)
                         if hit:
@@ -795,6 +796,7 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 # 우리가 아무리 자주 가져와도 값은 이보다 새로울 수 없다.
                 "sourceAgeSec": source_age_sec(),
                 "sourceInterval": SOURCE_INTERVAL,
+                "sourceIntervalSec": SOURCE_INTERVAL_SEC or None,
                 **discord_bot_health(),
             }, ensure_ascii=False).encode('utf-8'))
             return
@@ -1506,6 +1508,20 @@ def refresh_source_age():
     SOURCE_INTERVAL = str(d.get("current_interval") or "")
     m = re.search(r"(\d+)", SOURCE_INTERVAL)
     SOURCE_INTERVAL_SEC = int(m.group(1)) if m else 0
+    # 이력 글도 같은 숫자를 써야 한다
+    device_log.set_source_interval_min(source_interval_min())
+
+
+def source_interval_min(default=5):
+    """원본이 LG 를 몇 분에 한 번 보는지. 모르면 5분으로 본다.
+
+    이 숫자를 화면·알림 글에 그대로 적는다. 예전에는 '5분' 이 글 안에
+    박혀 있었는데, 원본이 주기를 1800초로 바꾼 날 우리 화면만 여전히
+    '기기는 5분마다 알려줍니다' 라고 말했다. 사실이 아닌 안내였다.
+    """
+    if SOURCE_INTERVAL_SEC > 0:
+        return max(1, round(SOURCE_INTERVAL_SEC / 60))
+    return default
 
 
 def source_age_sec():
@@ -1519,7 +1535,12 @@ def source_age_sec():
     if not SOURCE_UPDATED_AT:
         return None
     age = int(time.time() - SOURCE_UPDATED_AT)
-    if age < 0 or age > 3600:
+    # 말이 되는 범위는 원본 주기에 따라 달라진다. 5분 주기일 때는 한 시간이
+    # 넘으면 시간대가 어긋난 것으로 봤다. 그런데 원본이 30분 주기로 바뀌면
+    # 한 번만 건너뛰어도 한 시간이 넘고, 그때 '모른다' 로 바꿔 버리면
+    # 화면이 묵은 값을 '동기화 완료' 라고 적는다. 주기의 세 배까지 허용한다.
+    limit = max(3600, SOURCE_INTERVAL_SEC * 3)
+    if age < 0 or age > limit:
         return None
     return age
 

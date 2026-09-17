@@ -32,6 +32,27 @@ import time
 import state_store
 
 STORE_NAME = "device_events"
+
+# 원본이 몇 분에 한 번 기기 상태를 주는지. start_server 가 원본에게 물어
+# 알려준다 (set_source_interval_min). 모르면 5분으로 본다.
+#
+# 이 숫자를 이력 글에 그대로 적는다. 예전에는 '5분' 이 글 안에 박혀 있었는데,
+# 원본이 30분 주기로 바꾼 날 이력만 여전히 5분이라고 말했다.
+_SOURCE_INTERVAL_MIN = 5
+
+
+def set_source_interval_min(minutes):
+    global _SOURCE_INTERVAL_MIN
+    try:
+        n = int(minutes)
+    except (TypeError, ValueError):
+        return
+    if n > 0:
+        _SOURCE_INTERVAL_MIN = n
+
+
+def source_interval_min():
+    return _SOURCE_INTERVAL_MIN
 KEEP_SEC = 7 * 24 * 3600      # 일주일
 MAX_ITEMS = 3000              # 일주일 안이라도 무한정 쌓이지 않게
 
@@ -161,8 +182,8 @@ def reason_of(event, error_code, by_error=None, held=None):
         # 기기 상태는 5분에 한 번만 오므로 그 사이에 났다 사라진 오류는 안 보인다.
         # 예전에는 여기서 "사용자가 일시정지를 함" 이라고 단정했고,
         # 실제로 배수 오류로 멈춘 것을 사람 탓으로 적은 적이 있다.
-        return ("원인을 가릴 수 없음 — 기기가 5분에 한 번만 상태를 알려줘서 "
-                "그 사이에 났던 오류는 보이지 않을 수 있음")
+        return ("원인을 가릴 수 없음 — 기기가 %d분에 한 번만 상태를 알려줘서 "
+                "그 사이에 났던 오류는 보이지 않을 수 있음" % _SOURCE_INTERVAL_MIN)
     if event == "resume":
         t = held_text(held)
         return ("%s 멈춰 있다가 다시 돌기 시작함" % t) if t else "다시 돌기 시작함"
