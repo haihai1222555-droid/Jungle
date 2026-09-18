@@ -181,7 +181,11 @@ TOWERS = [
 ]
 
 # 가동 중인 상태 목록 (알림 등록 대상 = 남은 시간을 계산할 수 있는 상태)
-RUNNING_STATES = ('RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING')
+RUNNING_STATES = ('RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'SOAKING',
+                  'DRYING', 'COOLING',
+                  # 처음 보는 코드인데 남은 시간이 있는 경우. 무엇을 하는지는
+                  # 몰라도 돌고 있는 것은 분명하니 알림을 걸 수 있어야 한다.
+                  'UNKNOWN_RUNNING')
 
 # 사용자가 새 빨래를 시작했다고 볼 수 있는 상태.
 # DETECTING(무게 감지 중)은 방금 돌리기 시작한 것이므로 여기 포함한다.
@@ -1066,7 +1070,7 @@ STATE_LABELS = {
     "UNKNOWN": "정보 없음",
     "POWER_OFF": "대기 중", "INITIAL": "선택 완료(시작 기다리는 중...)", "COMPLETE": "완료 (수거 대기)",
     "END": "완료", "RUNNING": "작동 중", "WASHING": "세탁 중", "RINSING": "헹굼 중",
-    "SPINNING": "탈수 중", "DRYING": "건조 중", "COOLING": "쿨링 중",
+    "SPINNING": "탈수 중", "SOAKING": "불림 중", "DRYING": "건조 중", "COOLING": "쿨링 중",
     "WRINKLE_CARE": "구김 방지 중", "PAUSE": "일시정지", "ERROR": "기기 점검/에러",
     "DETECTING": "무게 감지 중",
 }
@@ -1895,7 +1899,8 @@ def unit_state(unit):
     if not isinstance(unit, dict):
         return "UNKNOWN"
     state = (unit.get("runState") or {}).get("currentState")
-    if state:
+    # 우리가 아는 코드만 그대로 쓴다. 처음 보는 코드는 아래에서 남은 시간으로 읽는다.
+    if state and state in STATE_LABELS:
         return state
     return "UNKNOWN_RUNNING" if _mins(unit.get("timer")) > 0 else "UNKNOWN"
 

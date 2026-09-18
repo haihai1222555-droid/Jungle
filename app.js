@@ -65,6 +65,9 @@ const STATE_TRANSLATION = {
   RUNNING:      { label: '작동 중',             isFree: false, isError: false },
   DETECTING:    { label: '무게 감지 중',         isFree: false, isError: false },
   WASHING:      { label: '세탁 중',             isFree: false, isError: false },
+  // 불림(애벌) 구간. 실제로 3호기 세탁기가 이 코드를 보냈는데 이름표가 없어
+  // '사용 중 (확인 필요)' 로 나갔고, 목록 판정에서도 전부 빠져 알림 버튼이 사라졌다.
+  SOAKING:      { label: '불림 중',             isFree: false, isError: false },
   RINSING:      { label: '헹굼 중',             isFree: false, isError: false },
   SPINNING:     { label: '탈수 중',             isFree: false, isError: false },
   DRYING:       { label: '건조 중',             isFree: false, isError: false },
@@ -96,10 +99,14 @@ function isUnitErrorStopped(u) {
 
 function unitState(u) {
   const s = u && u.runState && u.runState.currentState;
-  if (s) return s;
+  if (s && Object.prototype.hasOwnProperty.call(STATE_TRANSLATION, s)) return s;
   if (!u) return 'UNKNOWN';
   const t = u.timer || {};
   const remain = (t.remainHour || 0) * 60 + (t.remainMinute || 0);
+  // 상태가 아예 안 왔거나, 우리가 모르는 코드가 왔을 때 여기로 온다.
+  // 예전에는 '코드가 없을 때' 만 여기로 왔다. 그래서 SOAKING 처럼 기기가
+  // 실제로 쓰는데 우리 표에 없는 코드는 그대로 흘러가, 이름표도 목록 판정도
+  // 전부 빗나갔다. 상세창은 '대기 중' 이라 적고 알림 버튼은 사라졌다.
   // 남은 시간이 있으면 돌아가는 중인 것은 분명하다. 거기까지만 말한다.
   return remain > 0 ? 'UNKNOWN_RUNNING' : 'UNKNOWN';
 }
@@ -304,7 +311,7 @@ function isUnitFree(state) {
 }
 
 function isUnitRunning(state) {
-  return ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING',
+  return ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'SOAKING', 'DRYING', 'COOLING',
           'WRINKLE_CARE', 'DETECTING',
           // 예약은 아직 안 돌지만 빨래가 들어 있다. 비어 있지 않다는 뜻에서 여기 둔다.
           // (5분전 알림 대상은 아니다. 남은 시간이 완료까지가 아니라 시작까지라서
@@ -318,8 +325,8 @@ function isUnitCycleActive(state, remainMinutes) {
   if (!state || ['POWER_OFF', 'INITIAL', 'COMPLETE', 'END', 'ERROR', 'WRINKLE_CARE'].includes(state)) {
     return false;
   }
-  return ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING', 'PAUSE',
-          'UNKNOWN_RUNNING'].includes(state) && remainMinutes > 0;
+  return ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'SOAKING', 'DRYING', 'COOLING',
+          'PAUSE', 'UNKNOWN_RUNNING'].includes(state) && remainMinutes > 0;
 }
 
 // 알림 등록된 기기 하나의 현재 상태를 찾아온다 (도크 렌더링과 5초 감시 타이머가 함께 쓴다)
@@ -1201,8 +1208,9 @@ setInterval(() => {
     // 3) 내가 선택한 특정 기기 완료 시 알림 & 웹사이트 알림 자동 해제!
     // 남은 시간 0분이 곧 완료는 아니다. 무게 감지(DETECTING) 중에는
     // 시간이 아직 안 잡혀서 0 분으로 온다. 그때 완료라고 하면 거짓말이다.
-    const stillGoing = ['RUNNING', 'WASHING', 'RINSING', 'SPINNING',
-                        'DRYING', 'COOLING', 'DETECTING', 'RESERVED'].includes(runState);
+    const stillGoing = ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'SOAKING',
+                        'DRYING', 'COOLING', 'DETECTING', 'RESERVED',
+                        'UNKNOWN_RUNNING'].includes(runState);
     const isFinished = !stillGoing && (
       remainMin === 0 || runState === 'END' || runState === 'COMPLETE'
       || runState === 'WRINKLE_CARE' || now >= item.targetMs);

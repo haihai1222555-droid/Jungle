@@ -150,7 +150,15 @@ NODATA_GRACE_SEC = 180
 STALE_PICKUP_SEC = int(os.environ.get('STALE_PICKUP_SEC') or 15 * 60)
 
 # 가동 중으로 볼 상태들 (완료 후 이 상태가 되면 = 다음 사람이 새로 돌린 것)
-RUNNING_STATES = ('RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'DRYING', 'COOLING')
+RUNNING_STATES = ('RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'SOAKING',
+                  'DRYING', 'COOLING',
+                  # 처음 보는 코드인데 남은 시간이 있으면 돌고 있는 것으로 본다
+                  'UNKNOWN_RUNNING')
+
+# 우리가 뜻을 아는 상태 코드. 여기 없는 코드가 오면 남은 시간으로 읽는다.
+KNOWN_STATES = RUNNING_STATES + (
+    'POWER_OFF', 'INITIAL', 'COMPLETE', 'END', 'DETECTING', 'RESERVED',
+    'WRINKLE_CARE', 'PAUSE', 'ERROR', 'UNKNOWN')
 # DETECTING(무게 감지 중)은 방금 돌리기 시작한 것이다.
 # 이때는 남은 시간이 아직 0 이라 완료로 오해하기 쉽다.
 # RESERVED(예약)도 넣는다. 예약 시간이 다 되어 남은 시간이 0 이 되는 순간
@@ -1598,7 +1606,9 @@ def unit_state(unit):
     if not isinstance(unit, dict):
         return "UNKNOWN"
     state = (unit.get("runState") or {}).get("currentState")
-    if state:
+    # 아는 코드만 그대로 쓴다. 처음 보는 코드(예: SOAKING 이 그랬다)를 흘려보내면
+    # 가동 중 목록에도, 완료 판정에도 걸리지 않아 알림이 통째로 어긋난다.
+    if state and state in KNOWN_STATES:
         return state
     return "UNKNOWN_RUNNING" if _mins(unit.get("timer")) > 0 else "UNKNOWN"
 
