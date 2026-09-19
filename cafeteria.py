@@ -243,6 +243,46 @@ POINTS_AT_MENU = re.compile(
     "석식|중식|조식|점심 메뉴|저녁 메뉴|아침 메뉴|오늘 점심|오늘 저녁|오늘 아침")
 
 
+# "사진 보여줘" 처럼 글이 아니라 사진 자체를 달라는 말.
+# 글만 받던 사람들이 "같이 올라오는 급식 사진도 보고 싶다" 고 해서 붙였다.
+_PHOTO_WORDS = re.compile("사진|이미지|짤|어떻게 생겼|어떤 모양|실물|비주얼")
+
+
+def wants_photo(question):
+    """사진을 보여 달라는 말인지. 밥 이야기이면서 사진을 달라고 해야 맞다."""
+    q = question or ""
+    return bool(_PHOTO_WORDS.search(q) and FOOD_WORDS.search(q))
+
+
+# 물어본 말에서 끼니를 고른다. 먼저 걸리는 것이 이긴다.
+_MEAL_WORDS = (("조식", "조식"), ("아침", "조식"),
+               ("중식", "중식"), ("점심", "중식"), ("런치", "중식"),
+               ("석식", "석식"), ("저녁", "석식"), ("디너", "석식"))
+
+
+def photo_for(question=None, when=None):
+    """사진으로 보여줄 끼니. 없으면 None.
+
+    끼니를 밝혔으면 그 끼니, 안 밝혔으면 지금 시각에 가까운 끼니를 고른다.
+    사진이 없는 끼니는 애초에 고르지 않는다. 사진을 준다고 해 놓고
+    빈손으로 나가면 안 된다.
+    """
+    now = when or _now_kst()
+    todays = {d["meal"]: d for d in today_menus(now) if d.get("image")}
+    if not todays:
+        return None
+    q = question or ""
+    for word, meal in _MEAL_WORDS:
+        if word in q and todays.get(meal):
+            return todays[meal]
+    # 안 밝혔다. 점심 시간 전이면 점심, 지났으면 저녁 쪽을 먼저 본다.
+    order = ("중식", "석식", "조식") if now.hour < 14 else ("석식", "중식", "조식")
+    for meal in order:
+        if todays.get(meal):
+            return todays[meal]
+    return None
+
+
 def should_show_menu(question, answer):
     """식단표 사진을 붙여야 하는지.
 
@@ -252,7 +292,35 @@ def should_show_menu(question, answer):
         return True
     return bool(question and FOOD_WORDS.search(question))
 
-_IMG_CACHE = None          # (주소, 내려받은 파일 경로)
+_IMG_CACHE = None          # (주소, 내려받은 파일 경로) — 주간 식단표
+_MEAL_IMG_CACHE = {}       # 끼니 이름 -> (주소, 파일 경로) — 그날 끼니 사진
+
+
+def _download_image(url, path):
+    """사진 하나를 파일로 받아 둔다. 못 받으면 None.
+
+    주소는 저쪽 글에 적힌 것을 그대로 쓴다. 그러니 받아 오기 전에 본다.
+    확인하지 않으면 그 자리에 우리 안쪽 주소(127.0.0.1 같은)가 적혔을 때
+    밖에서 못 보는 것을 우리가 대신 꺼내 주는 꼴이 된다.
+    """
+    if not security.outbound_url_ok(url):
+        print("[식단] 받아 올 수 없는 주소라 건너뜁니다: %s" % url[:80])
+        return None
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            ctype = (r.headers.get("Content-Type") or "").lower()
+            if not ctype.startswith("image/"):
+                raise ValueError("사진이 아닙니다 (%s)" % ctype[:40])
+            data = security.read_capped(r, security.IMAGE_MAX)
+        tmp = path + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+        return path
+    except Exception as e:
+        print("[식단] 사진을 받지 못했습니다: %s" % e)
+        return None
 
 
 def local_weekly_image(dirpath):
@@ -268,29 +336,33 @@ def local_weekly_image(dirpath):
     url = w["image"]
     if _IMG_CACHE and _IMG_CACHE[0] == url and os.path.exists(_IMG_CACHE[1]):
         return _IMG_CACHE[1]
-    path = os.path.join(dirpath, "cafeteria_weekly.cache")
-    # 주소는 저쪽 글에 적힌 것을 그대로 쓴다. 그러니 받아 오기 전에 본다.
-    # 확인하지 않으면 그 자리에 우리 안쪽 주소(127.0.0.1 같은)가 적혔을 때
-    # 밖에서 못 보는 것을 우리가 대신 꺼내 주는 꼴이 된다.
-    if not security.outbound_url_ok(url):
-        print("[식단] 받아 올 수 없는 주소라 건너뜁니다: %s" % url[:80])
+    got = _download_image(url, os.path.join(dirpath, "cafeteria_weekly.cache"))
+    if not got:
+        # 새로 못 받았으면 지난번에 받아 둔 것이라도 쓴다
         return _IMG_CACHE[1] if _IMG_CACHE and os.path.exists(_IMG_CACHE[1]) else None
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            ctype = (r.headers.get("Content-Type") or "").lower()
-            if not ctype.startswith("image/"):
-                raise ValueError("사진이 아닙니다 (%s)" % ctype[:40])
-            data = security.read_capped(r, security.IMAGE_MAX)
-        tmp = path + ".tmp"
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.replace(tmp, path)
-    except Exception as e:
-        print("[식단] 사진을 받지 못했습니다: %s" % e)
-        return _IMG_CACHE[1] if _IMG_CACHE and os.path.exists(_IMG_CACHE[1]) else None
-    _IMG_CACHE = (url, path)
-    return path
+    _IMG_CACHE = (url, got)
+    return got
+
+
+# 끼니마다 자리를 하나씩 둔다. 날마다 같은 자리에 덮어쓰므로 파일이 쌓이지 않는다.
+_MEAL_SLOT = {"조식": "breakfast", "중식": "lunch", "석식": "dinner"}
+
+
+def local_daily_image(dirpath, item):
+    """그날 끼니 사진(식판 사진)을 파일로 받아 둔다. 주소가 같으면 다시 받지 않는다."""
+    url = (item or {}).get("image")
+    if not url:
+        return None
+    slot = _MEAL_SLOT.get((item or {}).get("meal"), "meal")
+    path = os.path.join(dirpath, "cafeteria_%s.cache" % slot)
+    hit = _MEAL_IMG_CACHE.get(slot)
+    if hit and hit[0] == url and os.path.exists(hit[1]):
+        return hit[1]
+    got = _download_image(url, path)
+    if not got:
+        return None
+    _MEAL_IMG_CACHE[slot] = (url, got)
+    return got
 
 
 SEEN_NAME = "cafeteria_seen"     # 이미 알린 글 번호
@@ -385,6 +457,13 @@ def summary_for_ai():
         lines.append(
             "  ※ 'N주차' 라는 말은 쓰지 마세요. 식당 쪽 표기라 실제 주와 다를 수 있습니다. "
             "날짜는 사진 안에 있습니다.")
+
+    shot = [d for d in today_menus() if d.get("image")]
+    if shot:
+        lines.append(
+            "- 오늘 올라온 끼니마다 식판 사진이 함께 있습니다(%s). 학생이 사진을 보여 달라고 하면 "
+            "코드가 그 사진을 답변과 함께 보냅니다. 사진 주소를 지어내지 말고, "
+            "카카오 채널로 가라고도 하지 마세요." % ", ".join(d["meal"] for d in shot))
 
     # 끼니마다 한 줄씩 적는다. 없는 것도 '없다' 고 적는다.
     # 빠뜨리면 AI 가 있는 끼니의 메뉴를 없는 끼니에 갖다 쓴다.

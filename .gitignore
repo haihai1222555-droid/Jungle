@@ -53,7 +53,8 @@ assets/README.md
 
 # 식당 카카오 채널에서 가져온 식단 (서버에만 둔다)
 cafeteria.json
-cafeteria_weekly.cache
+# 주간 식단표 · 끼니 식판 사진 받아 둔 것 (같은 줄 뒤 주석은 무시되지 않는다)
+cafeteria_*.cache
 # 식단 알림 신청자 (디스코드 사용자 ID — 절대 커밋하지 않는다)
 menu_subs.json
 # 이미 알린 글 번호

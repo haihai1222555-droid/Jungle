@@ -377,6 +377,10 @@ def menu_embed(kind, item):
         description=(item.get("text") or "메뉴 글이 없어요. 식단표를 봐 주세요.")
                     .replace(",", " · ")[:2000],
         color=0x22C55E)
+    # 식당에서 글과 함께 올려 주시는 식판 사진. 글만 받던 사람들이
+    # "같이 올라오는 사진도 보고 싶다" 고 해서 붙였다.
+    if item.get("image"):
+        emb.set_image(url=item["image"])
     return emb
 
 
@@ -2717,12 +2721,26 @@ async def run_assistant(user_id, text, private=True):
     # 질문만 보면 오타를 놓친다("석시 줘"). 답이 식단표를 가리키면 무조건 붙인다.
     if not attach and cafeteria.should_show_menu(text, text_out):
         try:
-            p = await asyncio.to_thread(cafeteria.local_weekly_image, BASE_DIR)
-            if p:
-                w = cafeteria.weekly() or {}
-                attach = {"path": p, "filename": "weekly_menu.jpg",
-                          "caption": "주간 식단표 · %s 갱신 (출처: 카카오톡 채널)"
-                                     % cafeteria.fmt_when(w.get("updatedAt"))}
+            # "급식 사진 보여줘" 처럼 사진 자체를 달라고 하면 그날 식판 사진을 준다.
+            # 주간 식단표는 글자표라서, 사진을 달라고 한 사람이 원한 것이 아니다.
+            shot = cafeteria.photo_for(text) if cafeteria.wants_photo(text) else None
+            if shot:
+                p = await asyncio.to_thread(cafeteria.local_daily_image, BASE_DIR, shot)
+                if p:
+                    label = "%d월 %d일 %s" % (shot["month"], shot["day"], shot["meal"])
+                    attach = {"path": p, "filename": "meal.jpg",
+                              "caption": "%s 사진 (출처: 카카오톡 채널)" % label}
+                    # 어느 끼니 사진인지는 사진만 봐서 모른다. 한 줄로 적어 둔다.
+                    note = "\U0001f4f7 %s 사진입니다" % label
+                    text_out = ((text_out or "").rstrip() + "\n-# " + note
+                                if text_out else note)
+            if not attach:
+                p = await asyncio.to_thread(cafeteria.local_weekly_image, BASE_DIR)
+                if p:
+                    w = cafeteria.weekly() or {}
+                    attach = {"path": p, "filename": "weekly_menu.jpg",
+                              "caption": "주간 식단표 · %s 갱신 (출처: 카카오톡 채널)"
+                                         % cafeteria.fmt_when(w.get("updatedAt"))}
         except Exception as e:
             print(f"[식단] 사진을 붙이지 못했습니다: {e}")
 
@@ -3437,7 +3455,22 @@ async def cmd_menu(interaction: discord.Interaction):
             inline=False)
 
     emb.set_footer(text="출처: 카카오톡 채널 '정글 Cafeteria, Grab&Go' · 10분마다 확인합니다")
-    await interaction.response.send_message(embed=emb, ephemeral=True)
+
+    # 오늘 올라온 끼니 사진(식판 사진)도 함께 보여준다.
+    # 한 embed 에는 사진이 하나만 들어가므로 끼니마다 따로 붙인다.
+    embeds = [emb]
+    if todays:
+        for d in sorted(todays, key=lambda x: order.get(x["meal"], 9)):
+            if not d.get("image"):
+                continue
+            shot = discord.Embed(
+                title="\U0001f4f7 %d월 %d일 %s" % (d["month"], d["day"], d["meal"]),
+                color=0x22C55E)
+            shot.set_image(url=d["image"])
+            embeds.append(shot)
+            if len(embeds) >= 4:          # 조식·중식·석식이면 넉넉하다
+                break
+    await interaction.response.send_message(embeds=embeds, ephemeral=True)
 
 
 @bot.tree.command(name="코스", description="이 기기에 어떤 세탁·건조 코스가 있는지 봅니다.")

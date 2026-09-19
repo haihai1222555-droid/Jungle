@@ -11,6 +11,7 @@
 특히 '신메뉴'(그랩앤고)와 '중식당' 처럼 걸리기 쉬운 것을 넣었다.
 """
 import sys
+from datetime import datetime
 
 import cafeteria as cf
 
@@ -87,6 +88,63 @@ def test_no_flood():
     return fails
 
 
+def test_photo_pick():
+    """사진을 달라는 말인지, 그리고 어느 끼니 사진을 고르는지.
+
+    글만 받던 사람들이 "같이 올라오는 급식 사진도 보여 달라" 고 해서 붙인 기능이다.
+    두 가지가 어긋나면 안 된다.
+      · 밥 이야기가 아닌데 사진을 붙이는 것 ("세탁기 사진 보여줘")
+      · 사진을 준다고 해 놓고 사진이 없는 끼니를 고르는 것
+    """
+    fails = []
+
+    for q, want in [
+        ("급식 사진 보여줘", True),
+        ("오늘 점심 사진 좀", True),
+        ("저녁 메뉴 사진 있어?", True),
+        ("밥 어떻게 생겼어", True),
+        ("오늘 점심 뭐야", False),         # 글만 물었다
+        ("식단표 알려줘", False),
+        ("세탁기 사진 보여줘", False),     # 밥 이야기가 아니다
+        ("", False),
+        (None, False),
+    ]:
+        got = cf.wants_photo(q)
+        if got != want:
+            fails.append("사진 요청 판정 %r → %s (%s 여야 함)" % (q, got, want))
+
+    lunch = {"meal": "중식", "month": 9, "day": 19, "image": "http://x/l.jpg"}
+    dinner = {"meal": "석식", "month": 9, "day": 19, "image": "http://x/d.jpg"}
+    noon = datetime(2026, 9, 19, 11, 30, tzinfo=cf.KST)
+    night = datetime(2026, 9, 19, 18, 0, tzinfo=cf.KST)
+
+    saved = cf.today_menus
+    try:
+        cf.today_menus = lambda when=None: [lunch, dinner]
+        for q, when, want in [
+            ("급식 사진 보여줘", noon, "중식"),    # 안 밝히면 시간에 맞춰
+            ("급식 사진 보여줘", night, "석식"),
+            ("저녁 사진 보여줘", noon, "석식"),    # 밝히면 그대로
+            ("점심 사진", night, "중식"),
+            ("아침 사진 보여줘", noon, "중식"),    # 조식이 없으면 시간 기준으로
+        ]:
+            got = cf.photo_for(q, when)
+            meal = got and got.get("meal")
+            if meal != want:
+                fails.append("%r (%d시) → %s (%s 여야 함)" % (q, when.hour, meal, want))
+
+        # 사진이 없으면 고르지 않는다. 준다고 해 놓고 빈손으로 나가면 안 된다.
+        cf.today_menus = lambda when=None: [dict(lunch, image=None)]
+        if cf.photo_for("급식 사진", noon) is not None:
+            fails.append("사진이 없는 끼니를 골랐다")
+        cf.today_menus = lambda when=None: []
+        if cf.photo_for("급식 사진", noon) is not None:
+            fails.append("메뉴가 없는 날인데 끼니를 골랐다")
+    finally:
+        cf.today_menus = saved
+    return fails
+
+
 def main():
     bad = []
     for title, pinned, want in CASES:
@@ -96,8 +154,10 @@ def main():
 
     for msg in test_no_flood():
         bad.append((msg, "-", "-", "-"))
+    for msg in test_photo_pick():
+        bad.append((msg, "-", "-", "-"))
 
-    print("급식 공지 가려내기 %d가지 + 알림 쏟아짐 방지" % len(CASES))
+    print("급식 공지 가려내기 %d가지 + 알림 쏟아짐 방지 + 사진 고르기" % len(CASES))
     for title, pinned, want, got in bad:
         print("  틀림: %r (고정=%s) → %s (%s 여야 함)" % (title, pinned, got, want))
 
