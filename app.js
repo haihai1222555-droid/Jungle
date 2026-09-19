@@ -2294,11 +2294,66 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
-// 이스케이프 후 **굵게** 만 서식으로 변환 (모델이 쓰는 마크다운 별표가 그대로 노출되는 문제 해결)
-function renderChatText(text) {
+// 이스케이프한 글에 **굵게** 와 줄바꿈만 넣는다. 링크는 renderChatText 가 따로 만든다.
+function fmtChatChunk(text) {
   return escapeHtml(text)
     .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
     .replace(/\n/g, '<br>');
+}
+
+// 링크 주소로 쓸 수 있는 것만 통과시킨다.
+// javascript: 주소는 <a href> 에 넣으면 누를 때 실행된다. data: 도 마찬가지다.
+// 그래서 http/https 로 시작하고 따옴표·꺾쇠·공백이 없는 것만 받는다.
+// (그 세 글자가 없어야 escapeHtml 만으로 속성 자리에 안전하게 들어간다)
+function safeChatUrl(raw) {
+  const u = String(raw || '').trim();
+  return /^https?:\/\/[^\s<>"']+$/i.test(u) ? u : '';
+}
+
+// 마크다운 링크 [글](주소) 또는 글 속에 그냥 적힌 주소.
+const CHAT_LINK_RE = /\[([^\]\n]{1,80})\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"']+)/g;
+
+// AI 답을 화면에 그린다.
+//
+// AI 가 쓴 글은 그대로 HTML 로 실행되면 안 되므로 전부 escape 한다(탈옥 방어).
+// 그러다 보니 주소도 글자로만 남아서, 사람이 복사해 주소창에 붙여야 했다.
+// 그래서 주소만 따로 찾아 <a> 로 만든다. 만드는 쪽은 우리 코드이고,
+// AI 가 넣은 태그가 살아나는 것이 아니다.
+function renderChatText(text) {
+  const src = String(text == null ? '' : text);
+  let out = '';
+  let last = 0;
+  let m;
+  CHAT_LINK_RE.lastIndex = 0;
+  while ((m = CHAT_LINK_RE.exec(src)) !== null) {
+    out += fmtChatChunk(src.slice(last, m.index));
+    last = m.index + m[0].length;
+
+    const isMd = m[2] !== undefined;
+    let raw = isMd ? m[2] : m[3];
+    let tail = '';
+    if (!isMd) {
+      // "자세히: https://example.com/a." 처럼 문장 끝 기호가 주소에 붙어 온다.
+      // 그것까지 주소로 묶으면 링크가 깨진다. 링크 밖으로 돌려준다.
+      const t = raw.match(/[.,;:!?)\]]+$/);
+      if (t) {
+        tail = t[0];
+        raw = raw.slice(0, raw.length - tail.length);
+      }
+    }
+    const url = safeChatUrl(raw);
+    if (!url) {                       // 이상한 주소면 링크로 만들지 않고 글자로 둔다
+      out += fmtChatChunk(m[0]);
+      continue;
+    }
+    const label = isMd ? m[1] : url;
+    const shown = label.length > 60 ? label.slice(0, 57) + '…' : label;
+    out += '<a class="chat-link" href="' + escapeHtml(url)
+         + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(shown) + '</a>'
+         + fmtChatChunk(tail);
+  }
+  out += fmtChatChunk(src.slice(last));
+  return out;
 }
 
 function appendChatMessage(sender, htmlText) {
@@ -2928,7 +2983,36 @@ ${KB_PLACEHOLDER}
 // 주소는 서버(/api/menu)에서 받은 것만 쓴다. AI 가 말한 주소는 쓰지 않는다.
 // 지어낸 주소로 엉뚱한 사진이 나가면 안 된다.
 // =========================================================
-const MENU_WORDS = /식단|메뉴|밥|점심|저녁|아침|중식|석식|조식|먹을|먹지|뭐먹|식당|카페테리아/;
+const MENU_WORDS = /식단|메뉴|밥|점심|저녁|아침|중식|석식|조식|먹을|먹지|뭐먹|식당|카페테리아|급식/;
+
+// "사진 보여줘" 처럼 글이 아니라 사진 자체를 달라는 말.
+// 이때는 글자로 된 주간 식단표가 아니라 그날 식판 사진을 준다. (봇과 같은 규칙)
+const PHOTO_WORDS = /사진|이미지|짤|어떻게 생겼|어떤 모양|실물|비주얼/;
+
+// 물어본 말에서 끼니를 고른다. 먼저 걸리는 것이 이긴다.
+const MEAL_WORDS = [['조식', '조식'], ['아침', '조식'],
+                    ['중식', '중식'], ['점심', '중식'], ['런치', '중식'],
+                    ['석식', '석식'], ['저녁', '석식'], ['디너', '석식']];
+
+// 사진으로 보여줄 끼니를 고른다. 사진이 없는 끼니는 애초에 고르지 않는다.
+// 사진을 준다고 해 놓고 빈손으로 나가면 안 된다.
+function pickMealPhoto(today, question, now) {
+  const shots = (today || []).filter(d => d && d.image);
+  if (!shots.length) return null;
+  const byMeal = {};
+  shots.forEach(d => { if (!byMeal[d.meal]) byMeal[d.meal] = d; });
+  const q = question || '';
+  for (const [word, meal] of MEAL_WORDS) {
+    if (q.includes(word) && byMeal[meal]) return byMeal[meal];
+  }
+  // 안 밝혔다. 점심 시간 전이면 점심, 지났으면 저녁 쪽을 먼저 본다.
+  const order = (now || new Date()).getHours() < 14
+    ? ['중식', '석식', '조식'] : ['석식', '중식', '조식'];
+  for (const meal of order) {
+    if (byMeal[meal]) return byMeal[meal];
+  }
+  return null;
+}
 
 // 답이 식단표를 가리키는지. 질문에 오타가 있어도("석시 줘") AI 는 알아듣고
 // 제대로 답한다. 질문을 읽는 일은 AI 가 우리보다 잘하므로 답을 보고 정한다.
@@ -2942,7 +3026,8 @@ function lastAnswerText() {
 }
 
 async function maybeAppendMenuImage(question) {
-  const asked = MENU_WORDS.test((question || '').replace(/\s/g, ''));
+  const q = (question || '').replace(/\s/g, '');
+  const asked = MENU_WORDS.test(q);
   const pointed = MENU_POINTED.test(lastAnswerText());
   if (!asked && !pointed) return;
 
@@ -2951,8 +3036,11 @@ async function maybeAppendMenuImage(question) {
     const r = await fetch('/api/menu');
     if (r.ok) m = await r.json();
   } catch (e) {}
-  const weekly = m && m.weekly;
-  if (!weekly || !weekly.image) return;
+  const weekly = (m && m.weekly) || null;
+  // 사진을 달라고 했으면 그날 식판 사진, 아니면 주간 식단표.
+  const shot = (asked && PHOTO_WORDS.test(q))
+    ? pickMealPhoto(m && m.today, question, new Date()) : null;
+  if (!shot && !(weekly && weekly.image)) return;
 
   const chatBox = document.getElementById('aiChatBox');
   if (!chatBox) return;
@@ -2961,8 +3049,9 @@ async function maybeAppendMenuImage(question) {
   // https:// 로 시작하는 것만 쓴다. <a href> 는 javascript: 주소를 누르면
   // 실행되기 때문이다(<img src> 는 실행되지 않지만 href 는 된다).
   const safeUrl = u => (typeof u === 'string' && /^https:\/\//.test(u)) ? encodeURI(u) : '';
-  const imgUrl = safeUrl(weekly.image);
-  const linkUrl = safeUrl(weekly.link) || imgUrl;
+  const src = shot || weekly;
+  const imgUrl = safeUrl(src.image);
+  const linkUrl = safeUrl(src.link) || imgUrl;
   if (!imgUrl) return;          // 주소가 이상하면 아예 안 붙인다
 
   // 앞서 붙인 사진은 걷어낸다. 같은 표를 여러 장 쌓아 둘 이유가 없고,
@@ -2977,15 +3066,19 @@ async function maybeAppendMenuImage(question) {
   el.className = 'chat-message ai-msg';
   // 주차 대신 '언제 갱신됐는지' 를 적는다. 제목의 N주차는 식당 쪽 표기라
   // 실제 주와 다를 수 있고, 진짜 날짜는 사진 안에 찍혀 있다.
+  // 식판 사진은 어느 끼니인지가 사진만 봐서는 헷갈리므로 날짜와 끼니를 적는다.
+  const cap = shot
+    ? ('📷 ' + shot.month + '월 ' + shot.day + '일 ' + shot.meal + ' 사진')
+    : ('🍱 주간 식단표 · ' + (m.updatedLabel || '') + ' 갱신');
   el.innerHTML =
       '<div class="msg-bubble menu-bubble">'
-    + '<div class="menu-cap">🍱 주간 식단표 · ' + escapeHtml(m.updatedLabel || '') + ' 갱신</div>'
+    + '<div class="menu-cap">' + escapeHtml(cap) + '</div>'
     + '<a href="' + linkUrl + '" target="_blank" rel="noopener noreferrer">'
     // loading="lazy" 는 쓰지 않는다. 채팅창은 스크롤 컨테이너라, 붙는 순간
     // 높이가 0 이면 브라우저가 '아직 안 보인다' 고 판정해 영영 안 불러온다.
     // referrerpolicy 는 카카오가 나중에 외부 링크를 막을 때를 대비한 것이다.
     + '<img class="menu-img" src="' + imgUrl
-    + '" alt="주간 식단표" referrerpolicy="no-referrer">'
+    + '" alt="' + escapeHtml(shot ? cap : '주간 식단표') + '" referrerpolicy="no-referrer">'
     + '</a>'
     + '<div class="menu-src">출처: 카카오톡 채널 · 눌러서 크게 보기</div>'
     + '</div>';

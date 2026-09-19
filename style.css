@@ -4644,6 +4644,19 @@ body.light-theme .compact-card.is-active-dry  { border-color: #f59e0b; }
 .menu-cap { font-size: 12.5px; font-weight: 700; margin-bottom: 4px; }
 .menu-src { font-size: 11px; opacity: 0.62; }
 
+/* 답변 속 주소를 누를 수 있게 만들면서 생긴 것.
+   그냥 두면 브라우저 기본 남색이라 어두운 말풍선 위에서 안 읽힌다.
+   긴 주소가 말풍선을 밀고 나가지 않게 줄바꿈도 허용한다. */
+.chat-link {
+  color: #38bdf8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+.chat-link:hover { color: #7dd3fc; }
+body.light-theme .chat-link { color: #0369a1; }
+body.light-theme .chat-link:hover { color: #075985; }
+
 /* 폰 헤더: 버튼 여섯 개가 제각각 크기로 붙어 시계가 새로고침 버튼을 침범했다.
    사용법·공지·다크는 새로고침과 같은 크기의 아이콘 버튼으로 맞추고,
    글자는 가장 자주 누르는 '내 알리미' 에만 남긴다. */
