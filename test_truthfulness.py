@@ -410,12 +410,54 @@ def test_server_alarm_flow():
         device_log.recent_error = saved_recent
 
 
+# =========================================================
+# 7. 건조기 가동 횟수는 우리가 센 것이다 (기기가 안 알려준다)
+# =========================================================
+def test_dryer_care():
+    import dryer_care
+    dryer_care._PREV.clear()
+    dryer_care._DATA = {"units": {}}        # 저장소를 건드리지 않는다
+
+    def run(state, total=0):
+        unit = {"timer": {"totalHour": total // 60, "totalMinute": total % 60}}
+        return dryer_care.observe("5호기", unit, state)
+
+    # 서버가 막 떴을 때는 직전을 모르므로 세지 않는다
+    check("첫 관측은 안 센다", run("DRYING", 32), False)
+    # 돌던 것이 끝났다 -> 한 번
+    check("가동 뒤 완료면 한 번", run("END"), True)
+    check("센 횟수", dryer_care.counts()["5호기"]["count"], 1)
+    # 끝난 채로 계속 있어도 또 세지 않는다
+    check("가만히 있으면 안 센다", run("END"), False)
+    check("꺼져 있어도 안 센다", run("POWER_OFF"), False)
+
+    # 돌기 시작한 코스의 총 시간을 함께 남긴다.
+    # 끝난 뒤에는 0 으로 돌아오므로 도는 동안 붙잡아 둬야 한다.
+    run("DRYING", 210)
+    run("DRYING", 210)
+    check("두 번째 가동", run("POWER_OFF"), True)
+    ds = [d["total"] for d in dryer_care.durations("5호기")]
+    check("코스 길이를 남겼나", ds, [32, 210])
+
+    # 통살균을 했다고 하면 0 으로 되돌린다.
+    # (기기가 코스를 안 알려줘서 사람이 눌러야 한다)
+    dryer_care._DATA = {"units": {"5호기": {"count": 12, "runs": []}}}
+    dryer_care.save = lambda: None          # 저장은 건너뛴다
+    dryer_care.mark_cleaned("5호기")
+    check("통살균 뒤 0 으로", dryer_care.counts()["5호기"]["count"], 0)
+    check("한 날짜를 남겼나",
+          bool(dryer_care.counts()["5호기"]["cleanedAt"]), True)
+
+    dryer_care._DATA = None
+    dryer_care._PREV.clear()
+
+
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
              test_unknown_states, test_device_log,
              test_source_down_does_not_block_chat, test_course_not_from_device,
              test_bot_display, test_rule_parsing, test_bot_counts_agree,
-             test_server_alarm_flow]
+             test_server_alarm_flow, test_dryer_care]
     for t in tests:
         try:
             t()

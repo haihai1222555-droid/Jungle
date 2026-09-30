@@ -11,6 +11,7 @@ import threading
 import state_store
 import washtower
 import device_log
+import dryer_care
 import security
 import cafeteria
 import time
@@ -1562,12 +1563,20 @@ def record_device_events(status):
     if not isinstance(status, dict):
         return
     made = []
+    counted = False
     for i in range(1, 10):
         tower = status.get("워시타워_%d" % i)
         label = "%d호기" % i
         for unit_type in ("washer", "dryer"):
             unit = (tower or {}).get(unit_type) if isinstance(tower, dict) else None
-            made.extend(device_log.observe(label, unit_type, unit, unit_state(unit)))
+            state = unit_state(unit)
+            made.extend(device_log.observe(label, unit_type, unit, state))
+            # 건조기는 기기가 누적 횟수를 안 알려준다. 우리가 센다.
+            # (세탁기는 cycle.cycleCount 로 오므로 셀 필요가 없다)
+            if unit_type == "dryer" and dryer_care.observe(label, unit, state):
+                counted = True
+    if counted:
+        dryer_care.save()
     if made:
         device_log.append(made)
         for m in made:
