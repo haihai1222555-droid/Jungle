@@ -363,6 +363,19 @@ def _hours_of_dow(dow_map, weekday):
     return out
 
 
+def _dow_filled(weekday):
+    """그 요일이 24시간 중 몇 시간이나 찼는지. 화면에 진행을 보여주려는 것."""
+    with CONGESTION_LOCK:
+        pub = _hours_of_dow((CONGESTION.get("published") or {}).get("dow"), weekday)
+        cur = _hours_of_dow(CONGESTION.get("dow"), weekday)
+    best = 0
+    for hours in (pub, cur):
+        cnt = sum(1 for h in range(24)
+                  if (hours.get(str(h)) or {}).get("s", 0) >= CONGESTION_MIN_SAMPLES)
+        best = max(best, cnt)
+    return best
+
+
 def build_congestion_profile(weekday=None):
     """화면에 보여줄 시간대별 혼잡도를 만든다.
 
@@ -408,6 +421,10 @@ def build_congestion_profile(weekday=None):
         sl["sharePercent"] = round(sl.pop("_busy") * 100 / busy_total) if busy_total else 0
     return {"ready": True, "source": source, "week": week, "publishedAt": at,
             "basis": basis, "dowLabel": dow_label,
+            # 오늘 요일이 24시간 중 몇 시간이나 찼는지. 화면이 '모으는 중' 을
+            # 보여줄 수 있어야 한다. 아무 말도 안 하면 만든 줄을 모른다.
+            "dowFilled": _dow_filled(weekday),
+            "dowName": DOW_NAMES[weekday] + "요일",
             "slots": slots, "totalSamples": sum(v.get("s", 0) for v in hours.values())}
 
 

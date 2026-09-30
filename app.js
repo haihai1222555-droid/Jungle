@@ -290,6 +290,42 @@ function getLgCareStatus(cycleCount) {
   }
 }
 
+// LG 안내: 건조기 드럼은 한 달에 한 번 통살균 권장.
+// 세탁기(누적 30회)와 기준이 다르다. 여기서는 '마지막으로 한 뒤 며칠' 을 본다.
+//
+// 횟수는 우리가 센 값이다. 기기가 건조기 누적 횟수를 안 보내줘서
+// 상태 전이를 세고 있다. 그래서 '우리 셈' 이라고 밝혀 적는다.
+// 통살균을 한 적이 없는 게 아니라 우리가 못 본 것이므로, 기록이 없으면
+// 좋다고도 나쁘다고도 하지 않는다.
+function getDryerCareStatus(cleanedAt, count) {
+  const runs = typeof count === 'number' ? count : 0;
+  const LG_RECOMMENDED_DAYS = 30;
+
+  if (!cleanedAt) {
+    return {
+      label: '통살균 기록 없음',
+      badgeClass: '',
+      icon: '🛠️',
+      percent: 0,
+      countText: `${runs}회·우리 셈`
+    };
+  }
+
+  const days = Math.max(0, Math.floor((Date.now() / 1000 - cleanedAt) / 86400));
+  const percent = Math.min(100, Math.round((days / LG_RECOMMENDED_DAYS) * 100));
+
+  if (days >= LG_RECOMMENDED_DAYS) {
+    return { label: '통살균 청소 필요', badgeClass: 'care-danger', icon: '🚨',
+             percent, countText: `${days}일째` };
+  }
+  if (days >= 25) {
+    return { label: '통살균 청소 임박', badgeClass: 'care-warning', icon: '🟡',
+             percent, countText: `${days}일째` };
+  }
+  return { label: '관리 상태 양호', badgeClass: 'care-good', icon: '🟢',
+           percent, countText: `${days}일째` };
+}
+
 function formatTimer(remainH, remainM) {
   if (!remainH && !remainM) return '';
   if (remainH > 0) return `${remainH}시간 ${remainM}분`;
@@ -1451,7 +1487,11 @@ function analyzeStatisticalPatterns(statsData) {
     measuredAt: measured ? (congestionProfile.publishedAt || null) : null,
     // 요일별로 재어 답한 것인지. 같은 시간이라도 월요일과 토요일은 다르다.
     // 아직 요일별로 답할 만큼 안 쌀였으면 null 이다.
-    measuredDow: measured ? (congestionProfile.dowLabel || null) : null
+    measuredDow: measured ? (congestionProfile.dowLabel || null) : null,
+    // 요일별로 아직 못 답하는 동안에도 모으고 있다는 것은 보여 준다.
+    dowName: congestionProfile.dowName || null,
+    dowFilled: typeof congestionProfile.dowFilled === 'number'
+      ? congestionProfile.dowFilled : null
   };
 }
 
@@ -1480,7 +1520,7 @@ function renderCongestionStatus() {
       ? `최근 ${statAnalysis.days}일 실측 ${statAnalysis.totalRuns}회 (일평균 ${statAnalysis.avgDailyRuns}회)`
       : '가동 횟수 집계 중';
     statsSummaryEl.textContent = statAnalysis.measured
-      ? `${runs} · 시간대별 혼잡도는 실제 관측값${statAnalysis.measuredDow ? ` · ${statAnalysis.measuredDow} 기준` : ''}${statAnalysis.measuredAt ? ` (${statAnalysis.measuredAt} 갱신)` : ''}`
+      ? `${runs} · 시간대별 혼잡도는 실제 관측값${dowNote(statAnalysis)}${statAnalysis.measuredAt ? ` (${statAnalysis.measuredAt} 갱신)` : ''}`
       : `${runs} · 시간대 분포는 추정치 (관측 수집 중)`;
   }
 
@@ -1773,6 +1813,19 @@ function createTowerCardElement(tower, isFloorplan = false) {
   return cardEl;
 }
 
+// 요일별 혼잡도가 어디까지 왔는지 한 마디로. 같은 시간이라도 요일마다 다르다.
+//
+// 요일별로 답할 만큼 쌓이기 전에는 예전처럼 시간대만으로 답한다. 그때
+// 아무 말도 안 하면 요일별이 있다는 것 자체를 모른다. 그래서 모으는 중이면
+// 얼마나 찼는지 적는다. 다 차면 어느 요일 기준인지 적는다.
+function dowNote(a) {
+  if (a.measuredDow) return ` · ${a.measuredDow} 기준`;
+  if (a.dowName && typeof a.dowFilled === 'number') {
+    return ` · ${a.dowName} 관측 ${a.dowFilled}/24시간 모으는 중`;
+  }
+  return '';
+}
+
 // 기기 관리 기록. /api/care 로 받아 둔다. 없으면 아무것도 안 그린다.
 let careData = { dryer: {}, washer: {} };
 
@@ -1817,24 +1870,15 @@ function renderDryerCareRow(label) {
   const count = typeof dry.count === 'number' ? dry.count : 0;
   const day = fmtCareDay(dry.cleanedAt);
 
-  let cls = 'care-good';
-  let icon = '🟢';
-  let text = `통살균 ${day}`;
-  if (!day) {
-    // 모르는 상태다. 좋다고도 나쁘다고도 하지 않는다.
-    cls = '';
-    icon = '🛠️';
-    text = '통살균 기록 없음';
-  } else if (dry.cleanedAt && (Date.now() / 1000 - dry.cleanedAt) > 35 * 24 * 3600) {
-    cls = 'care-warning';
-    icon = '🟡';
-    text = `통살균 ${day} (한 달 넘음)`;
-  }
+  const care = getDryerCareStatus(dry.cleanedAt, count);
 
   return `
-      <div class="care-header-row" style="margin-top:6px;">
-        <span class="care-label">건조기 통살균 케어</span>
-        <span class="care-badge ${cls}">${icon} ${text} · ${count}회(우리 셈)</span>
+      <div class="care-header-row" style="margin-top:8px;">
+        <span class="care-label">건조기 통살균 케어${day ? ` · 마지막 ${day}` : ''}</span>
+        <span class="care-badge ${care.badgeClass}">${care.icon} ${care.label} (${care.countText})</span>
+      </div>
+      <div class="care-progress-track">
+        <div class="care-progress-fill ${care.badgeClass}" style="width: ${care.percent}%"></div>
       </div>`;
 }
 
