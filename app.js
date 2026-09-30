@@ -788,6 +788,27 @@ function playAlarmErrorSound() {
 // 🚀 PWA Service Worker & 백그라운드 Web Push 엔진
 let swRegistration = null;
 
+// 서비스워커 등록이 끝날 때까지 기다린다. 없으면 null.
+//
+// 페이지가 뜨자마자 알림 버튼을 누르면 등록이 아직 안 끝나 있다.
+// 예전에는 그때 바로 포기해서 잠금화면 알림이 조용히 꺼졌다.
+// navigator.serviceWorker.ready 는 등록이 끝나면 풀리는 약속이다.
+async function waitForServiceWorker(ms = 5000) {
+  if (swRegistration) return swRegistration;
+  if (!('serviceWorker' in navigator)) return null;
+  try {
+    const reg = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise(resolve => setTimeout(() => resolve(null), ms))
+    ]);
+    if (reg) swRegistration = reg;
+    return reg;
+  } catch (err) {
+    console.warn('[PWA] ServiceWorker 준비 실패:', err);
+    return null;
+  }
+}
+
 async function initServiceWorker() {
   if ('serviceWorker' in navigator) {
     try {
@@ -813,7 +834,13 @@ function urlBase64ToUint8Array(base64String) {
 // 🔔 백그라운드 Web Push 구독 생성 및 서버 동기화 (탭/앱 종료 시에도 모바일 잠금화면 푸시 전송)
 async function syncPushAlarmToServer(alarm) {
   try {
-    if (!swRegistration || !('pushManager' in swRegistration)) return false;
+    // 등록이 아직 안 끝났을 수 있다. 기다려 본다.
+    const reg = await waitForServiceWorker();
+    if (!reg || !('pushManager' in reg)) return false;
+
+    // 권한이 없으면 구독은 반드시 실패한다. 여기서 끝낸다.
+    // (물어보는 것은 버튼을 누른 그 자리에서 이미 했다)
+    if ('Notification' in window && Notification.permission !== 'granted') return false;
 
     // 1. 서버로부터 VAPID 공개키 조회 (푸시 백엔드가 없는 정적 배포에서는 404)
     const keyRes = await fetch(`${PUSH_API_BASE}/api/vapid-public-key`);
@@ -822,9 +849,9 @@ async function syncPushAlarmToServer(alarm) {
     if (!publicKey) return false;
 
     // 2. 푸시 매니저 구독 생성 (이미 있으면 재사용)
-    let subscription = await swRegistration.pushManager.getSubscription();
+    let subscription = await reg.pushManager.getSubscription();
     if (!subscription) {
-      subscription = await swRegistration.pushManager.subscribe({
+      subscription = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(publicKey)
       });
@@ -850,6 +877,27 @@ async function syncPushAlarmToServer(alarm) {
     return false;
   }
 }
+
+async function resyncPushAlarms() {
+  // 서버에 걸어둔 구독이 아직 살아 있는지 다시 확인한다.
+  //
+  // 푸시 서비스가 구독을 폐기하면(403·410) 서버가 목록에서 지운다.
+  // 그런데 화면에는 알림이 그대로 걸려 있어서, 기다리다 아무것도 못 받는다.
+  // 실제로 9/27 에 한 건 있었다. 페이지를 열 때 다시 걸어 두면 그 구멍이 메워진다.
+  // 서버는 같은 (기기+세탁기) 조합이면 덮어쓰므로 여러 번 불러도 안전하다.
+  if (!myLaundryAlarms.length) return;
+  if ('Notification' in window && Notification.permission !== 'granted') return;
+  for (const alarm of myLaundryAlarms) {
+    if (alarm.pushRegistered === false) continue;   // 애초에 못 건 것은 건드리지 않는다
+    const ok = await syncPushAlarmToServer(alarm);
+    if (alarm.pushRegistered !== ok) {
+      alarm.pushRegistered = ok;
+      saveMyAlarms();
+      updateAlarmDockUI();
+    }
+  }
+}
+
 
 async function removePushAlarmFromServer(key) {
   try {
@@ -888,7 +936,7 @@ function refreshModalAlarmActionsIfOpen(towerId) {
   wrap.innerHTML = wBtn + dBtn;
 }
 
-function toggleLaundryAlarm(towerId, unitType, deviceName, remainMinutes) {
+async function toggleLaundryAlarm(towerId, unitType, deviceName, remainMinutes) {
   const key = `${towerId}_${unitType}`;
   const existingIdx = myLaundryAlarms.findIndex(a => a.key === key);
 
@@ -898,8 +946,15 @@ function toggleLaundryAlarm(towerId, unitType, deviceName, remainMinutes) {
     removePushAlarmFromServer(removed.key);
     showToast('🔕', `<b>[${removed.deviceName}]</b> 알림이 해제되었습니다.`, 'neutral');
   } else {
-    if ('Notification' in window && Notification.permission !== 'granted') {
-      Notification.requestPermission();
+    // 대답을 기다린다. 예전에는 창만 띄워 놓고 곧바로 구독을 시도해서,
+    // 처음 쓰는 사람은 늘 실패했다. 묻는 것은 반드시 버튼을 누른 이 자리에서
+    // 해야 한다. 나중에 물으면 브라우저가 '사용자가 누른 것' 으로 안 쳐준다.
+    if ('Notification' in window && Notification.permission === 'default') {
+      try {
+        await Notification.requestPermission();
+      } catch (err) {
+        console.warn('[알림] 권한 요청 실패:', err);
+      }
     }
 
     const targetMs = Date.now() + Math.max(1, remainMinutes) * 60 * 1000;
@@ -1065,6 +1120,13 @@ function updateAlarmDockUI() {
       timeText = `약 ${remainMin}분 남음 (5분 전 알림 ON)`;
     } else {
       timeText = `<span style="color:#00e87a;font-weight:800;">${item.unitType === 'dryer' ? '건조' : '세탁'} 완료! 즉시 수거</span>`;
+    }
+
+    // 잠금화면 푸시가 안 걸린 알림은 그 사실이 계속 보여야 한다.
+    // 토스트는 사라지고, 사용자는 화면을 끄고 기다리다 아무것도 못 받는다.
+    // 모르는 상태(undefined)에는 아무 말도 하지 않는다.
+    if (item.pushRegistered === false) {
+      timeText += `<span style="color:#fbbf24;font-weight:700;"> · 📵 이 화면을 열어둔 동안만</span>`;
     }
 
     const isWashing = item.unitType === 'washer';
@@ -3580,7 +3642,7 @@ if (refreshBtn) {
 }
 
 // 초기화: Service Worker 등록, 테마 적용, 즉시 스냅샷으로 렌더링 후 비동기 데이터 갱신 시도
-initServiceWorker();
+initServiceWorker().then(resyncPushAlarms);
 initTheme();
 checkAnnouncement();
 renderAllViews();
