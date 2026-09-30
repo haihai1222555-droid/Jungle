@@ -1808,11 +1808,18 @@ async function loadCareData() {
   } catch (e) {}
 }
 
+// 관리 기록을 찾는 열쇠. 서버는 "1호기" 로 적어 둔다.
+// 부르는 쪽 이름표가 '1호기' 일 수도 'No.1' 일 수도 있어서 숫자만 뽑는다.
+// (예전에 'No.' 만 떼고 '호기' 를 붙여서 "1호기호기" 로 찾았다. 늘 0회였다.)
+function careKeyOf(label) {
+  const m = String(label || '').match(/\d+/);
+  return m ? m[0] + '호기' : String(label || '');
+}
+
 // 세탁기는 통살균을 하면 기기가 누적 횟수를 되돌린다. 그 되돌아간 때를
 // 봤으면 적는다. 못 봤으면 아무 말도 하지 않는다.
 function careWasherCleanedText(label) {
-  const key = String(label || '').replace('No.', '') + '호기';
-  const day = fmtCareDay((careData.washer[key] || {}).cleanedAt);
+  const day = fmtCareDay((careData.washer[careKeyOf(label)] || {}).cleanedAt);
   return day ? ` · 마지막 ${day}` : '';
 }
 
@@ -1833,8 +1840,7 @@ function fmtCareDay(ts) {
 // 건조기 숫자는 우리가 상태 변화를 보고 센 값이다. 기기 총 누적이 아니다.
 // 그래서 '우리 셈' 이라고 이름표에 밝혀 둔다. 같은 말로 적으면 안 된다.
 function renderDryerCareRow(label) {
-  const key = String(label || '').replace('No.', '') + '호기';
-  const dry = careData.dryer[key] || {};
+  const dry = careData.dryer[careKeyOf(label)] || {};
   const count = typeof dry.count === 'number' ? dry.count : 0;
   const day = fmtCareDay(dry.cleanedAt);
   const care = getLgCareStatus(count);
