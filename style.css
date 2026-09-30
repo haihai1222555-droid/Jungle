@@ -1042,9 +1042,21 @@ body {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 20px;
-  /* 같은 줄에서 제일 큰 카드에 높이를 맞추면, 내용이 짧은 카드는
-     기기 상자와 맨 아래 관리 지수 사이가 통째로 빈다. 제 내용만큼만 커지게 한다. */
-  align-items: start;
+}
+
+/* 카드 높이는 같은 줄끼리 맞춘다(격자 기본값). 그러면 내용이 짧은 카드에
+   남는 높이가 생기는데, 예전에는 그것이 기기 상자와 맨 아래 관리 지수
+   사이에 빈칸으로 고였다. 남는 높이를 기기 상자가 나눠 먹게 하면
+   크기는 같으면서 빈칸도 안 보인다.
+   배치도(is-compact) 보기는 칸 크기를 따로 잡으므로 건드리지 않는다. */
+.washtower-grid:not(.is-compact) .washtower-card .wt-body-hardware {
+  flex: 1;
+}
+.washtower-grid:not(.is-compact) .washtower-card .wt-body-hardware > .unit-section {
+  /* 1 1 auto 여야 한다. basis 를 0 으로 두면(flex:1) 두 상자가 무조건 같은
+     높이가 되는데, .unit-section 은 overflow:hidden 이라 최소 높이 보호가
+     풀려서 내용이 많은 쪽이 잘린다. 제 높이에서 남는 만큼만 나눠 갖게 한다. */
+  flex: 1 1 auto;
 }
 
 @media (max-width: 1100px) {
