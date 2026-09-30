@@ -1448,7 +1448,10 @@ function analyzeStatisticalPatterns(statsData) {
     currentSlot,
     slots,
     measured,
-    measuredAt: measured ? (congestionProfile.publishedAt || null) : null
+    measuredAt: measured ? (congestionProfile.publishedAt || null) : null,
+    // 요일별로 재어 답한 것인지. 같은 시간이라도 월요일과 토요일은 다르다.
+    // 아직 요일별로 답할 만큼 안 쌀였으면 null 이다.
+    measuredDow: measured ? (congestionProfile.dowLabel || null) : null
   };
 }
 
@@ -1477,7 +1480,7 @@ function renderCongestionStatus() {
       ? `최근 ${statAnalysis.days}일 실측 ${statAnalysis.totalRuns}회 (일평균 ${statAnalysis.avgDailyRuns}회)`
       : '가동 횟수 집계 중';
     statsSummaryEl.textContent = statAnalysis.measured
-      ? `${runs} · 시간대별 혼잡도는 실제 관측값${statAnalysis.measuredAt ? ` (${statAnalysis.measuredAt} 갱신)` : ''}`
+      ? `${runs} · 시간대별 혼잡도는 실제 관측값${statAnalysis.measuredDow ? ` · ${statAnalysis.measuredDow} 기준` : ''}${statAnalysis.measuredAt ? ` (${statAnalysis.measuredAt} 갱신)` : ''}`
       : `${runs} · 시간대 분포는 추정치 (관측 수집 중)`;
   }
 
@@ -1757,13 +1760,13 @@ function createTowerCardElement(tower, isFloorplan = false) {
     <!-- 🧼 LG 권장 케어/청소 지수 바 -->
     <div class="lg-care-box">
       <div class="care-header-row">
-        <span class="care-label">세탁기 통살균 케어</span>
+        <span class="care-label">세탁기 통살균 케어${careWasherCleanedText(tower.label)}</span>
         <span class="care-badge ${lgCare.badgeClass}">${lgCare.icon} ${lgCare.label} (${cycleCount}회)</span>
       </div>
       <div class="care-progress-track">
         <div class="care-progress-fill ${lgCare.badgeClass}" style="width: ${lgCare.percent}%"></div>
       </div>
-      ${renderCareFootnote(tower.label)}
+      ${renderDryerCareRow(tower.label)}
     </div>
   `;
 
@@ -1784,6 +1787,14 @@ async function loadCareData() {
   } catch (e) {}
 }
 
+// 세탁기는 통살균을 하면 기기가 누적 횟수를 되돌린다. 그 되돌아간 때를
+// 봤으면 적는다. 못 봤으면 아무 말도 하지 않는다.
+function careWasherCleanedText(label) {
+  const key = String(label || '').replace('No.', '') + '호기';
+  const day = fmtCareDay((careData.washer[key] || {}).cleanedAt);
+  return day ? ` · 마지막 ${day}` : '';
+}
+
 function fmtCareDay(ts) {
   if (!ts) return null;
   const d = new Date(ts * 1000);
@@ -1791,27 +1802,39 @@ function fmtCareDay(ts) {
   return `${d.getMonth() + 1}월 ${d.getDate()}일`;
 }
 
-// 카운트 아래 한 줄. 마지막 통살균이 언제였는지와, 건조기는 우리가 센 횟수.
+// 건조기 관리 줄. 세탁기 줄 아래에 늘 같이 보인다.
 //
 // 세탁기 숫자는 기기가 준 것이고, 건조기 숫자는 우리가 센 것이다.
 // 둘을 같은 말로 적으면 안 된다. 건조기 쪽에는 '우리 셈' 이라고 밝힌다.
-// 모르는 것은 쓰지 않는다 — 통살균을 한 적이 없는 게 아니라 우리가 못 본 것이다.
-function renderCareFootnote(label) {
+// 아직 본 적이 없는 것은 '없다' 가 아니라 '기록 없음' 이다.
+// 통살균을 한 적이 없는 게 아니라 우리가 못 봤을 뿐이다.
+//
+// LG 안내는 건조기 드럼을 한 달에 한 번 통살균하라고 한다. 세탁기(30회)와
+// 기준이 달라서 진행 막대는 두지 않고, 마지막으로 한 때를 앞세운다.
+function renderDryerCareRow(label) {
   const key = String(label || '').replace('No.', '') + '호기';
-  const w = careData.washer[key] || {};
   const dry = careData.dryer[key] || {};
-  const bits = [];
+  const count = typeof dry.count === 'number' ? dry.count : 0;
+  const day = fmtCareDay(dry.cleanedAt);
 
-  const wDay = fmtCareDay(w.cleanedAt);
-  if (wDay) bits.push(`세탁기 통살균 ${wDay}`);
-
-  if (typeof dry.count === 'number') {
-    const dDay = fmtCareDay(dry.cleanedAt);
-    bits.push(`건조기 ${dry.count}회(우리 셈)${dDay ? ` · 통살균 ${dDay}` : ''}`);
+  let cls = 'care-good';
+  let icon = '🟢';
+  let text = `통살균 ${day}`;
+  if (!day) {
+    // 모르는 상태다. 좋다고도 나쁘다고도 하지 않는다.
+    cls = '';
+    icon = '🛠️';
+    text = '통살균 기록 없음';
+  } else if (dry.cleanedAt && (Date.now() / 1000 - dry.cleanedAt) > 35 * 24 * 3600) {
+    cls = 'care-warning';
+    icon = '🟡';
+    text = `통살균 ${day} (한 달 넘음)`;
   }
-  if (!bits.length) return '';
-  return `<div class="care-header-row" style="margin-top:4px;">
-        <span class="care-label">${bits.join('</span><span class="care-label">')}</span>
+
+  return `
+      <div class="care-header-row" style="margin-top:6px;">
+        <span class="care-label">건조기 통살균 케어</span>
+        <span class="care-badge ${cls}">${icon} ${text} · ${count}회(우리 셈)</span>
       </div>`;
 }
 

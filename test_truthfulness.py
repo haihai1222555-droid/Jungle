@@ -452,12 +452,42 @@ def test_dryer_care():
     dryer_care._PREV.clear()
 
 
+# =========================================================
+# 8. 혼잡도를 요일별로 답하는지 (같은 시간도 요일마다 다르다)
+# =========================================================
+def test_congestion_dow():
+    import start_server as S
+
+    keep = (S.CONGESTION.get("hours"), S.CONGESTION.get("dow"),
+            S.CONGESTION.get("published"))
+    try:
+        S.CONGESTION["published"] = None
+        S.CONGESTION["hours"] = {str(h): {"s": 1000, "b": 100} for h in range(24)}
+        # 화요일(=1)만 따로 쌓였다고 해 둔다
+        S.CONGESTION["dow"] = {"1-%d" % h: {"s": 1000, "b": 700} for h in range(24)}
+
+        tue = S.build_congestion_profile(weekday=1)
+        check("요일별이 있으면 그것으로", tue["basis"], "dow")
+        check("요일 이름을 알려주나", tue["dowLabel"], "화요일")
+        check("화요일 값으로 쟀나", tue["slots"][0]["utilizationRate"], 70)
+
+        # 쌓이지 않은 요일은 예전처럼 시간대만으로 답한다. 비우지 않는다.
+        wed = S.build_congestion_profile(weekday=2)
+        check("없는 요일은 시간대로", wed["basis"], "hour")
+        check("없는 요일엔 요일 이름 없음", wed["dowLabel"], None)
+        check("그래도 답은 나온다", wed["ready"], True)
+        check("시간대 값으로 쟀나", wed["slots"][0]["utilizationRate"], 10)
+    finally:
+        S.CONGESTION["hours"], S.CONGESTION["dow"], S.CONGESTION["published"] = keep
+
+
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
              test_unknown_states, test_device_log,
              test_source_down_does_not_block_chat, test_course_not_from_device,
              test_bot_display, test_rule_parsing, test_bot_counts_agree,
-             test_server_alarm_flow, test_dryer_care]
+             test_server_alarm_flow, test_dryer_care,
+             test_congestion_dow]
     for t in tests:
         try:
             t()

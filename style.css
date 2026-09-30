@@ -1042,6 +1042,9 @@ body {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 20px;
+  /* 같은 줄에서 제일 큰 카드에 높이를 맞추면, 내용이 짧은 카드는
+     기기 상자와 맨 아래 관리 지수 사이가 통째로 빈다. 제 내용만큼만 커지게 한다. */
+  align-items: start;
 }
 
 @media (max-width: 1100px) {

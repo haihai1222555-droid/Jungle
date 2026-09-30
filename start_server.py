@@ -244,7 +244,13 @@ CONGESTION_SLOTS = [
     ("night_peak", 21, 2, "몰입 종료 심야 피크", "코딩 종료 후 샤워&빨래 집중 (대기 필수)"),
 ]
 
-CONGESTION = {"week": None, "hours": {}, "published": None}
+# hours 는 시간대별, dow 는 (요일, 시) 별. 요일은 월=0 … 일=6.
+# dow 를 따로 두는 이유는 예전 값을 그대로 쓰기 위해서다. 요일별이 모자란
+# 동안에도 화면이 비지 않아야 한다.
+CONGESTION = {"week": None, "hours": {}, "dow": {}, "published": None}
+
+# 요일 이름. 화면에 '화요일 기준' 이라고 적을 때 쓴다.
+DOW_NAMES = ("월", "화", "수", "목", "금", "토", "일")
 _CONGESTION_SAVED_AT = 0.0
 
 
@@ -305,16 +311,24 @@ def record_congestion_sample(status_data):
             if CONGESTION.get("hours") and _has_enough(CONGESTION["hours"]):
                 CONGESTION["published"] = {
                     "hours": CONGESTION["hours"],
+                    "dow": CONGESTION.get("dow") or {},
                     "week": CONGESTION.get("week"),
                     "at": now.strftime("%Y-%m-%d"),
                 }
                 print("[Congestion] %s주차 관측으로 혼잡도를 갱신했습니다" % CONGESTION.get("week"))
             CONGESTION["week"] = week
             CONGESTION["hours"] = {}
+            CONGESTION["dow"] = {}
 
         slot = CONGESTION["hours"].setdefault(str(now.hour), {"s": 0, "b": 0})
         slot["s"] += total
         slot["b"] += busy
+
+        # 요일별로도 같이 센다. 키는 "요일-시" (월=0).
+        dkey = "%d-%d" % (now.weekday(), now.hour)
+        dslot = CONGESTION.setdefault("dow", {}).setdefault(dkey, {"s": 0, "b": 0})
+        dslot["s"] += total
+        dslot["b"] += busy
 
     if time.time() - _CONGESTION_SAVED_AT >= CONGESTION_SAVE_SEC:
         _CONGESTION_SAVED_AT = time.time()
@@ -336,13 +350,29 @@ def _rate(hours, start, end):
     return (round(b * 100 / s) if s else 0), b
 
 
-def build_congestion_profile():
+def _hours_of_dow(dow_map, weekday):
+    """(요일, 시) 표에서 그 요일의 24시간짜리 표를 뽑는다.
+
+    뽑아 놓으면 기존 _rate·_has_enough 를 그대로 쓸 수 있다.
+    """
+    out = {}
+    for h in range(24):
+        v = (dow_map or {}).get("%d-%d" % (weekday, h))
+        if isinstance(v, dict):
+            out[str(h)] = v
+    return out
+
+
+def build_congestion_profile(weekday=None):
     """화면에 보여줄 시간대별 혼잡도를 만든다.
 
     확정판(지난 주 관측)이 있으면 그것을 쓰고,
     아직 없으면 이번 주에 모은 것을 잠정치로 쓴다.
     둘 다 모자라면 ready=False 로 알려 화면이 기존 추정값을 쓰게 한다.
     """
+    if weekday is None:
+        weekday = datetime.now(KST).weekday()
+
     with CONGESTION_LOCK:
         pub = CONGESTION.get("published") or {}
         hours, source, at, week = pub.get("hours"), "published", pub.get("at"), pub.get("week")
@@ -350,8 +380,22 @@ def build_congestion_profile():
             hours, source, at, week = CONGESTION.get("hours"), "current", None, CONGESTION.get("week")
         hours = dict(hours or {})
 
+        # 요일별이 충분히 쌓였으면 그것으로 답한다. 확정판을 먼저 보고,
+        # 없으면 이번 주에 모은 것을 본다. 둘 다 모자라면 시간대만으로 답한다.
+        dow_hours = _hours_of_dow(pub.get("dow"), weekday)
+        dow_basis = "published"
+        if not _has_enough(dow_hours):
+            dow_hours = _hours_of_dow(CONGESTION.get("dow"), weekday)
+            dow_basis = "current"
+
+    # 요일별이 준비됐으면 그쪽을 쓴다. 같은 시간이라도 요일에 따라 다르다.
+    basis, dow_label = "hour", None
+    if _has_enough(dow_hours):
+        hours, basis, source = dow_hours, "dow", dow_basis
+        dow_label = DOW_NAMES[weekday] + "요일"
+
     if not _has_enough(hours):
-        return {"ready": False, "source": source, "week": week,
+        return {"ready": False, "source": source, "week": week, "basis": basis,
                 "slots": [], "totalSamples": sum(v.get("s", 0) for v in hours.values())}
 
     slots, busy_total = [], 0
@@ -363,6 +407,7 @@ def build_congestion_profile():
     for sl in slots:
         sl["sharePercent"] = round(sl.pop("_busy") * 100 / busy_total) if busy_total else 0
     return {"ready": True, "source": source, "week": week, "publishedAt": at,
+            "basis": basis, "dowLabel": dow_label,
             "slots": slots, "totalSamples": sum(v.get("s", 0) for v in hours.values())}
 
 
