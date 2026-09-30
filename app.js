@@ -1489,8 +1489,12 @@ function analyzeStatisticalPatterns(statsData) {
     // 아직 요일별로 답할 만큼 안 쌀였으면 null 이다.
     measuredDow: measured ? (congestionProfile.dowLabel || null) : null,
     // 요일별로 아직 못 답하는 동안에도 모으고 있다는 것은 보여 준다.
-    dowName: congestionProfile.dowName || null,
-    dowFilled: typeof congestionProfile.dowFilled === 'number'
+    //
+    // congestionProfile 은 첫 불러오기 전에는 null 이다. 그걸 그냥 읽었다가
+    // 화면 첫 그리기가 통째로 터졌다. 브라우저 새로고침은 죽고 페이지 안
+    // 새로고침 단추만 살아 있었다. 위의 줄들처럼 반드시 감싼야 한다.
+    dowName: congestionProfile ? (congestionProfile.dowName || null) : null,
+    dowFilled: (congestionProfile && typeof congestionProfile.dowFilled === 'number')
       ? congestionProfile.dowFilled : null
   };
 }
