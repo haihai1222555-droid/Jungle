@@ -12,16 +12,25 @@ cycle 이 없다. 그래서 우리가 셀 수밖에 없다.
 정확한 값이 아니다. 중간에 전원을 끄면 그것도 한 번으로 센다. 그래서
 화면에는 반드시 "우리가 센 것" 이라고 적어야 한다. 기기 총 누적이 아니다.
 
-통살균을 하면 어떻게 되나. 지금은 모른다. 원본이 어떤 코스로 도는지를
-안 알려주기 때문이다. 대신 **한 번 돌 때마다 그 코스의 총 시간을 함께
-적어 둔다.** 스팀통살균은 빨래 없이 도는 고정 길이라, 값이 쌓이면
-"이 길이는 통살균뿐" 인지 데이터로 확인할 수 있다. 그때까지는 손으로
-되돌린다. 확인되기 전에 시간만 보고 단정하지 않는다 — 예전에 일시정지를
-보고 '이불 건조' 라고 단정했다가 되돌린 적이 있다.
+통살균을 하면 어떻게 되나. 세탁기는 기기가 알아서 누적 횟수를 0 으로
+되돌린다. 건조기는 우리가 세니까 우리가 되돌려야 한다. 그런데 원본은 어떤
+코스로 도는지를 안 알려준다. 알려주는 것은 **이 코스가 몇 분짜리인가**
+(timer.total) 뿐이다. 그래서 길이로 가린다.
+
+지금까지 실제로 관측한 건조 코스 길이는 57·68·70·73·87·88·103·107·178분
+이었다. 가장 긴 것이 178분이다. 통살균은 그보다 훨씬 길다 — 3시간 반쯤으로
+듣고 있다. 다만 LG 고객지원은 "모델마다 다르다" 고만 하고 분 수를 안 밝혀서
+**확인된 값이 아니다.** 그래서 200분으로 끊는다. 관측된 최장 건조(178분)보다
+위, 듣고 있는 통살균(210분)보다 아래다.
+
+어느 쪽으로 틀리는 게 나은가. '통살균을 못 알아보는' 쪽이다. 그러면 지금과
+같아지기만 하고 손으로 되돌리면 된다. 반대쪽은 하지 않은 청소를 했다고
+말하게 된다. 그래서 문턱을 넉넉히 높게 둔다.
 
 LG 안내는 건조기 드럼을 한 달에 한 번 통살균하라고 한다. 세탁기(30회)와
 기준이 다르므로, 보여줄 때는 횟수와 함께 마지막 통살균이 언제였는지도 쓴다.
 """
+import os
 import threading
 import time
 
@@ -32,6 +41,14 @@ STORE_NAME = "dryer_care"
 # 한 유닛에 남겨 둘 가동 기록 수. 코스 길이를 살펴보기 위한 것이라
 # 최근 것 얼마쯤이면 충분하다.
 MAX_RUNS = 80
+
+# 이만큼보다 긴 코스는 통살균으로 본다(분). 위 설명 참고 — 관측된 최장
+# 건조가 178분이고 통살균은 210분쯤으로 듣고 있어서 그 사이에 둔다.
+# 실제 분 수가 밝혀지면 서버에서 환경변수로만 바꾸면 된다.
+try:
+    TUB_CLEAN_MINUTES = int(os.environ.get("DRYER_TUB_CLEAN_MINUTES") or 200)
+except ValueError:
+    TUB_CLEAN_MINUTES = 200
 
 # 돌고 있는 것으로 보는 상태
 RUNNING_STATES = ("RUNNING", "DRYING", "COOLING", "WASHING", "RINSING", "SPINNING")
@@ -79,7 +96,12 @@ def _total_minutes(unit):
 
 
 def observe(tower_label, unit, state, now=None):
-    """건조기 하나를 보고, 한 번 다 돌았으면 세어 True 를 돌려준다.
+    """건조기 하나를 보고, 한 번 다 돌았으면 센다.
+
+    돌려주는 값:
+        None      아직 아무 일도 없다
+        "run"     한 번 돌았다 (횟수 +1)
+        "clean"   통살균으로 보인다 (횟수를 0 으로 되돌렸다)
 
     저장은 부르는 쪽에서 한 번에 한다. 5초마다 아홉 대를 보므로
     기기마다 저장하면 같은 일을 아홉 번 하게 된다.
@@ -103,22 +125,38 @@ def observe(tower_label, unit, state, now=None):
     _PREV[tower_label] = cur
 
     if prev is None:
-        return False        # 서버가 막 떴다. 직전을 모르니 세지 않는다.
+        return None         # 서버가 막 떴다. 직전을 모르니 세지 않는다.
     if prev["state"] not in RUNNING_STATES:
-        return False
+        return None
     if state not in DONE_STATES:
-        return False
+        return None
+
+    minutes = prev.get("lastTotal") or 0
+    cleaned = minutes >= TUB_CLEAN_MINUTES
 
     with _LOCK:
         u = _unit(tower_label)
-        u["count"] = int(u.get("count") or 0) + 1
-        if not u.get("since"):
-            u["since"] = round(now, 3)
         u["lastAt"] = round(now, 3)
-        u["runs"].append({"at": round(now, 3),
-                          "total": prev.get("lastTotal") or 0})
+        u["runs"].append({"at": round(now, 3), "total": minutes})
         u["runs"] = u["runs"][-MAX_RUNS:]
-    return True
+        if cleaned:
+            # 세탁기가 스스로 하는 것과 같은 일을 우리가 한다.
+            u["count"] = 0
+            u["since"] = round(now, 3)
+            u["cleanedAt"] = round(now, 3)
+        else:
+            u["count"] = int(u.get("count") or 0) + 1
+            if not u.get("since"):
+                u["since"] = round(now, 3)
+
+    if cleaned:
+        # 짐작으로 되돌린 것이므로 로그에 분 수를 남긴다. 나중에 이 문턱이
+        # 맞았는지 확인할 수 있어야 한다.
+        print("[관리] %s 건조기가 %d분짜리 코스를 마쳤습니다 "
+              "(%d분 넘음 -> 통살균으로 보고 횟수를 0 으로 되돌립니다)"
+              % (tower_label, minutes, TUB_CLEAN_MINUTES))
+        return "clean"
+    return "run"
 
 
 def _washer(label):

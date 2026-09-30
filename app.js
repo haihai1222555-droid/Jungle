@@ -290,42 +290,6 @@ function getLgCareStatus(cycleCount) {
   }
 }
 
-// LG 안내: 건조기 드럼은 한 달에 한 번 통살균 권장.
-// 세탁기(누적 30회)와 기준이 다르다. 여기서는 '마지막으로 한 뒤 며칠' 을 본다.
-//
-// 횟수는 우리가 센 값이다. 기기가 건조기 누적 횟수를 안 보내줘서
-// 상태 전이를 세고 있다. 그래서 '우리 셈' 이라고 밝혀 적는다.
-// 통살균을 한 적이 없는 게 아니라 우리가 못 본 것이므로, 기록이 없으면
-// 좋다고도 나쁘다고도 하지 않는다.
-function getDryerCareStatus(cleanedAt, count) {
-  const runs = typeof count === 'number' ? count : 0;
-  const LG_RECOMMENDED_DAYS = 30;
-
-  if (!cleanedAt) {
-    return {
-      label: '통살균 기록 없음',
-      badgeClass: '',
-      icon: '🛠️',
-      percent: 0,
-      countText: `${runs}회·우리 셈`
-    };
-  }
-
-  const days = Math.max(0, Math.floor((Date.now() / 1000 - cleanedAt) / 86400));
-  const percent = Math.min(100, Math.round((days / LG_RECOMMENDED_DAYS) * 100));
-
-  if (days >= LG_RECOMMENDED_DAYS) {
-    return { label: '통살균 청소 필요', badgeClass: 'care-danger', icon: '🚨',
-             percent, countText: `${days}일째` };
-  }
-  if (days >= 25) {
-    return { label: '통살균 청소 임박', badgeClass: 'care-warning', icon: '🟡',
-             percent, countText: `${days}일째` };
-  }
-  return { label: '관리 상태 양호', badgeClass: 'care-good', icon: '🟢',
-           percent, countText: `${days}일째` };
-}
-
 function formatTimer(remainH, remainM) {
   if (!remainH && !remainM) return '';
   if (remainH > 0) return `${remainH}시간 ${remainM}분`;
@@ -1861,25 +1825,24 @@ function fmtCareDay(ts) {
 
 // 건조기 관리 줄. 세탁기 줄 아래에 늘 같이 보인다.
 //
-// 세탁기 숫자는 기기가 준 것이고, 건조기 숫자는 우리가 센 것이다.
-// 둘을 같은 말로 적으면 안 된다. 건조기 쪽에는 '우리 셈' 이라고 밝힌다.
-// 아직 본 적이 없는 것은 '없다' 가 아니라 '기록 없음' 이다.
-// 통살균을 한 적이 없는 게 아니라 우리가 못 봤을 뿐이다.
+// 세탁기와 같은 잣대(getLgCareStatus)로 같은 모양을 만든다. 통살균을 하면
+// 횟수가 0 으로 되돌아가는 것도 같다 — 세탁기는 기기가 되돌리고, 건조기는
+// 200분 넘는 코스를 통살균으로 보고 서버가 되돌린다.
 //
-// LG 안내는 건조기 드럼을 한 달에 한 번 통살균하라고 한다. 세탁기(30회)와
-// 기준이 달라서 진행 막대는 두지 않고, 마지막으로 한 때를 앞세운다.
+// 다른 것은 숫자의 출처 하나다. 세탁기 숫자는 기기가 준 누적값이고
+// 건조기 숫자는 우리가 상태 변화를 보고 센 값이다. 기기 총 누적이 아니다.
+// 그래서 '우리 셈' 이라고 이름표에 밝혀 둔다. 같은 말로 적으면 안 된다.
 function renderDryerCareRow(label) {
   const key = String(label || '').replace('No.', '') + '호기';
   const dry = careData.dryer[key] || {};
   const count = typeof dry.count === 'number' ? dry.count : 0;
   const day = fmtCareDay(dry.cleanedAt);
-
-  const care = getDryerCareStatus(dry.cleanedAt, count);
+  const care = getLgCareStatus(count);
 
   return `
       <div class="care-header-row" style="margin-top:8px;">
-        <span class="care-label">건조기 통살균 케어${day ? ` · 마지막 ${day}` : ''}</span>
-        <span class="care-badge ${care.badgeClass}">${care.icon} ${care.label} (${care.countText})</span>
+        <span class="care-label">건조기 통살균 케어(우리 셈)${day ? ` · 마지막 ${day}` : ''}</span>
+        <span class="care-badge ${care.badgeClass}">${care.icon} ${care.label} (${count}회)</span>
       </div>
       <div class="care-progress-track">
         <div class="care-progress-fill ${care.badgeClass}" style="width: ${care.percent}%"></div>

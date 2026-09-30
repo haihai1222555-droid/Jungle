@@ -423,24 +423,34 @@ def test_dryer_care():
         return dryer_care.observe("5호기", unit, state)
 
     # 서버가 막 떴을 때는 직전을 모르므로 세지 않는다
-    check("첫 관측은 안 센다", run("DRYING", 32), False)
+    check("첫 관측은 안 센다", run("DRYING", 32), None)
     # 돌던 것이 끝났다 -> 한 번
-    check("가동 뒤 완료면 한 번", run("END"), True)
+    check("가동 뒤 완료면 한 번", run("END"), "run")
     check("센 횟수", dryer_care.counts()["5호기"]["count"], 1)
     # 끝난 채로 계속 있어도 또 세지 않는다
-    check("가만히 있으면 안 센다", run("END"), False)
-    check("꺼져 있어도 안 센다", run("POWER_OFF"), False)
+    check("가만히 있으면 안 센다", run("END"), None)
+    check("꺼져 있어도 안 센다", run("POWER_OFF"), None)
 
     # 돌기 시작한 코스의 총 시간을 함께 남긴다.
     # 끝난 뒤에는 0 으로 돌아오므로 도는 동안 붙잡아 둬야 한다.
-    run("DRYING", 210)
-    run("DRYING", 210)
-    check("두 번째 가동", run("POWER_OFF"), True)
+    # 178분은 지금까지 관측한 가장 긴 건조다. 통살균으로 봐선 안 된다.
+    run("DRYING", 178)
+    run("DRYING", 178)
+    check("긴 건조는 그냥 한 번", run("POWER_OFF"), "run")
+    check("문턱 아래는 쌓인다", dryer_care.counts()["5호기"]["count"], 2)
     ds = [d["total"] for d in dryer_care.durations("5호기")]
-    check("코스 길이를 남겼나", ds, [32, 210])
+    check("코스 길이를 남겼나", ds, [32, 178])
 
-    # 통살균을 했다고 하면 0 으로 되돌린다.
-    # (기기가 코스를 안 알려줘서 사람이 눌러야 한다)
+    # 문턱을 넘는 코스는 통살균으로 보고, 세탁기처럼 0 으로 되돌린다.
+    over = dryer_care.TUB_CLEAN_MINUTES
+    run("DRYING", over)
+    check("긴 코스는 통살균으로", run("END"), "clean")
+    check("통살균이면 0 으로", dryer_care.counts()["5호기"]["count"], 0)
+    check("한 날짜를 남겼나(자동)",
+          bool(dryer_care.counts()["5호기"]["cleanedAt"]), True)
+
+    # 통살균을 했다고 사람이 알려줘도 0 으로 되돌린다.
+    # (짐작이 빗나가 서버가 못 알아봤을 때 쓴다)
     dryer_care._DATA = {"units": {"5호기": {"count": 12, "runs": []}}}
     dryer_care.save = lambda: None          # 저장은 건너뛴다
     dryer_care.mark_cleaned("5호기")
