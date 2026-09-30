@@ -833,6 +833,15 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             })
             return
 
+        # 기기 관리 기록. 세탁기는 마지막으로 누적값이 되돌아간 때,
+        # 건조기는 우리가 센 횟수와 마지막 통살균.
+        if req_path == '/api/care':
+            self._json_out(200, {
+                "dryer": dryer_care.counts(),
+                "washer": dryer_care.washers(),
+            })
+            return
+
         if req_path == '/api/courses':
             self._json_out(200, washtower.as_dict())
             return
@@ -1575,6 +1584,12 @@ def record_device_events(status):
             # (세탁기는 cycle.cycleCount 로 오므로 셀 필요가 없다)
             if unit_type == "dryer" and dryer_care.observe(label, unit, state):
                 counted = True
+            # 세탁기는 기기가 세어 준다. 우리는 그 값이 되돌아가는 때
+            # (= 통살균한 때) 만 본다.
+            if unit_type == "washer" and dryer_care.observe_washer(label, unit):
+                counted = True
+                print("[관리] %s 세탁기 누적 횟수가 되돌아갔습니다 (통살균으로 봄)"
+                      % label)
     if counted:
         dryer_care.save()
     if made:

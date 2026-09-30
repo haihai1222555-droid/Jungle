@@ -121,6 +121,52 @@ def observe(tower_label, unit, state, now=None):
     return True
 
 
+def _washer(label):
+    data = _load()
+    ws = data.setdefault("washers", {})
+    w = ws.get(label)
+    if not isinstance(w, dict):
+        w = {"lastCount": None, "cleanedAt": None}
+        ws[label] = w
+    return w
+
+
+def observe_washer(tower_label, unit, now=None):
+    """세탁기 누적 횟수를 지켜본다. 줄었으면 통살균한 것으로 본다.
+
+    기기가 "통살균했다" 고 말해 주지는 않는다. 다만 통살균을 하면 누적
+    횟수가 되돌아간다. 그래서 값이 줄어든 것을 보면 그 사이에 했다는 뜻이다.
+    (수리나 교체로 줄어들 수도 있다. 그래서 화면에는 '마지막으로 되돌아간
+    때' 라는 뜻이 드러나게 적는다.)
+
+    한 번이라도 적었으면 True.
+    """
+    now = now or time.time()
+    if not isinstance(unit, dict):
+        return False
+    cyc = (unit.get("cycle") or {}).get("cycleCount")
+    if not isinstance(cyc, int) or cyc < 0:
+        return False
+
+    with _LOCK:
+        w = _washer(tower_label)
+        prev = w.get("lastCount")
+        w["lastCount"] = cyc
+        if isinstance(prev, int) and cyc < prev:
+            w["cleanedAt"] = round(now, 3)
+            return True
+    return False
+
+
+def washers():
+    """세탁기 쪽 기록. {타워: {lastCount, cleanedAt}}"""
+    with _LOCK:
+        ws = _load().get("washers") or {}
+        return {k: {"lastCount": v.get("lastCount"),
+                    "cleanedAt": v.get("cleanedAt")}
+                for k, v in ws.items() if isinstance(v, dict)}
+
+
 def save():
     """센 것을 저장소에 적는다."""
     with _LOCK:

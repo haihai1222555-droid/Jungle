@@ -484,7 +484,9 @@ async function loadDashboardData() {
       fetchWithTimeout(API_STATUS),
       fetchWithTimeout(API_STATS),
       // 실패해도 화면을 막지 않는다
-      loadCongestionProfile()
+      loadCongestionProfile(),
+      // 기기 관리 기록(마지막 통살균 등). 이것도 실패해도 화면은 그대로 뜬다.
+      loadCareData()
     ]);
     if (!statusRes.ok) throw new Error('API unavailable');
 
@@ -1755,16 +1757,62 @@ function createTowerCardElement(tower, isFloorplan = false) {
     <!-- 🧼 LG 권장 케어/청소 지수 바 -->
     <div class="lg-care-box">
       <div class="care-header-row">
-        <span class="care-label">LG 권장 케어 지수</span>
+        <span class="care-label">세탁기 통살균 케어</span>
         <span class="care-badge ${lgCare.badgeClass}">${lgCare.icon} ${lgCare.label} (${cycleCount}회)</span>
       </div>
       <div class="care-progress-track">
         <div class="care-progress-fill ${lgCare.badgeClass}" style="width: ${lgCare.percent}%"></div>
       </div>
+      ${renderCareFootnote(tower.label)}
     </div>
   `;
 
   return cardEl;
+}
+
+// 기기 관리 기록. /api/care 로 받아 둔다. 없으면 아무것도 안 그린다.
+let careData = { dryer: {}, washer: {} };
+
+async function loadCareData() {
+  try {
+    const r = await fetch('/api/care');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d && typeof d === 'object') {
+      careData = { dryer: d.dryer || {}, washer: d.washer || {} };
+    }
+  } catch (e) {}
+}
+
+function fmtCareDay(ts) {
+  if (!ts) return null;
+  const d = new Date(ts * 1000);
+  if (isNaN(d.getTime())) return null;
+  return `${d.getMonth() + 1}월 ${d.getDate()}일`;
+}
+
+// 카운트 아래 한 줄. 마지막 통살균이 언제였는지와, 건조기는 우리가 센 횟수.
+//
+// 세탁기 숫자는 기기가 준 것이고, 건조기 숫자는 우리가 센 것이다.
+// 둘을 같은 말로 적으면 안 된다. 건조기 쪽에는 '우리 셈' 이라고 밝힌다.
+// 모르는 것은 쓰지 않는다 — 통살균을 한 적이 없는 게 아니라 우리가 못 본 것이다.
+function renderCareFootnote(label) {
+  const key = String(label || '').replace('No.', '') + '호기';
+  const w = careData.washer[key] || {};
+  const dry = careData.dryer[key] || {};
+  const bits = [];
+
+  const wDay = fmtCareDay(w.cleanedAt);
+  if (wDay) bits.push(`세탁기 통살균 ${wDay}`);
+
+  if (typeof dry.count === 'number') {
+    const dDay = fmtCareDay(dry.cleanedAt);
+    bits.push(`건조기 ${dry.count}회(우리 셈)${dDay ? ` · 통살균 ${dDay}` : ''}`);
+  }
+  if (!bits.length) return '';
+  return `<div class="care-header-row" style="margin-top:4px;">
+        <span class="care-label">${bits.join('</span><span class="care-label">')}</span>
+      </div>`;
 }
 
 // 휴대폰인지. 폭으로만 판단한다 (기기 종류를 캐면 틀리기 쉽다).
