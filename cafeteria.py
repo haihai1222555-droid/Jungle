@@ -70,6 +70,12 @@ _DAILY = re.compile(
 # 고정된 주간 식단표
 _WEEKLY = re.compile(r"식단표|메뉴표|주간\s*메뉴|주간\s*식단")
 
+# 고정이 안 돼 있어도 주간 식단표로 보는 제목.
+# "9월 4주차 식단표" 처럼 '주차/주간' 과 '식단표/메뉴표' 가 함께 있는 것.
+# 고정은 사람이 눌러야 하는 것이라 빠지는 주가 있다. 실제로 9월 4주차가
+# 그래서 통째로 안 나왔다. 제목이 이만큼 분명하면 고정을 안 봐도 된다.
+_WEEKLY_CLEAR = re.compile(r"(주차|주간)\s*.{0,4}(식단표|메뉴표)")
+
 
 def classify(title, pinned=False):
     """이 글이 무엇인지. 'daily' · 'weekly' · 'other'.
@@ -84,6 +90,8 @@ def classify(title, pinned=False):
         return "other"
     if _DAILY.search(t):
         return "daily"
+    if _WEEKLY_CLEAR.search(t):
+        return "weekly"          # 제목만으로 분명하다. 고정 여부는 안 본다.
     if pinned and _WEEKLY.search(t):
         return "weekly"
     return "other"
