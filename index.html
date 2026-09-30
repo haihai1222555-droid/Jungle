@@ -162,17 +162,31 @@
           <div class="congestion-badge" id="trafficPeakBadge">🟢 여유 쾌적</div>
         </div>
 
-        <!-- 24시간 정글 라이프사이클 골든타임 타임테이블 (최근 통계 데이터 기반 동적 산출) -->
+        <!-- 24시간 정글 라이프사이클 골든타임 타임테이블 (전날 시간대 실측 분석 기반) -->
         <div class="golden-time-container">
           <div class="gt-header">
             <div class="gt-header-info">
-              <span class="gt-title">🌙 24H 세탁실 골든타임 &amp; 혼잡 패턴</span>
+              <span class="gt-title">🌙 24H 시간대별 골든타임 &amp; 혼잡 패턴</span>
               <span class="gt-current-tag" id="gtCurrentTag">📍 현재 시간대 분석 중...</span>
             </div>
-            <span class="gt-hint" id="gtStatsSummary">최근 7일 실측 반영</span>
+            <span class="gt-hint" id="gtStatsSummary">전날 시간대 실측 분석</span>
           </div>
           <div class="gt-grid" id="goldenTimeGrid">
-            <!-- JavaScript로 실제 통계 기반 5개 시간대 카드 동적 렌더링 -->
+            <!-- JavaScript로 전날 시간대 분석 기반 5개 시간대 카드 동적 렌더링 -->
+          </div>
+        </div>
+
+        <!-- 📅 요일별 혼잡도 패턴 (전 주 실측 데이터 기반) -->
+        <div class="weekly-congestion-container">
+          <div class="gt-header">
+            <div class="gt-header-info">
+              <span class="gt-title">📅 요일별 혼잡도 패턴</span>
+              <span class="gt-current-tag" id="weeklyCurrentTag">📍 오늘 요일 확인 중...</span>
+            </div>
+            <span class="gt-hint" id="weeklyStatsSummary">전 주 실측 반영</span>
+          </div>
+          <div class="weekly-grid" id="weeklyCongestionGrid">
+            <!-- JavaScript로 월~일 7개 요일 카드 동적 렌더링 -->
           </div>
         </div>
       </div>

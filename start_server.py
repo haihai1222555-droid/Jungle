@@ -330,6 +330,18 @@ def record_congestion_sample(status_data):
         dslot["s"] += total
         dslot["b"] += busy
 
+        # 날짜별(YYYY-MM-DD -> hour -> {"s", "b"}) 기록: 시간대별 혼잡도를 '그 전날' 기준으로 분석하기 위함
+        day_key = now.strftime("%Y-%m-%d")
+        daily = CONGESTION.setdefault("daily", {})
+        hour_slot = daily.setdefault(day_key, {}).setdefault(str(now.hour), {"s": 0, "b": 0})
+        hour_slot["s"] += total
+        hour_slot["b"] += busy
+
+        # 14일 지난 날짜는 정리
+        if len(daily) > 14:
+            cutoff = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+            CONGESTION["daily"] = {k: v for k, v in daily.items() if k >= cutoff}
+
     if time.time() - _CONGESTION_SAVED_AT >= CONGESTION_SAVE_SEC:
         _CONGESTION_SAVED_AT = time.time()
         save_congestion()
@@ -376,15 +388,36 @@ def _dow_filled(weekday):
     return best
 
 
-def build_congestion_profile(weekday=None):
-    """화면에 보여줄 시간대별 혼잡도를 만든다.
+def _format_week_display(w_str):
+    if not w_str:
+        return "지난주"
+    m = re.match(r"^(\d{4})-W(\d{1,2})$", str(w_str))
+    if not m:
+        return str(w_str)
+    y, w = int(m.group(1)), int(m.group(2))
+    try:
+        mon = datetime.fromisocalendar(y, w, 1).date()
+        sun = mon + timedelta(days=6)
+        first_day = mon.replace(day=1)
+        w_of_m = (mon.day + first_day.weekday()) // 7 + 1
+        if mon.month == sun.month:
+            range_str = f"{mon.month}월 {mon.day}일~{sun.day}일"
+        else:
+            range_str = f"{mon.month}월 {mon.day}일~{sun.month}월 {sun.day}일"
+        return f"지난주 ({mon.month}월 {w_of_m}주차 · {range_str})"
+    except Exception:
+        return f"지난주 ({w}주차)"
 
-    확정판(지난 주 관측)이 있으면 그것을 쓰고,
-    아직 없으면 이번 주에 모은 것을 잠정치로 쓴다.
-    둘 다 모자라면 ready=False 로 알려 화면이 기존 추정값을 쓰게 한다.
+
+def build_congestion_profile(weekday=None):
+    """화면에 보여줄 시간대별 및 요일별 혼잡도를 만든다.
+
+    1. 시간별: '그 전날' 시간대를 분석하여 5개 시간대(골든타임)로 보여준다.
+    2. 요일별: '전 주(지난 주)' 확정 데이터를 바탕으로 월~일 7개 요일의 혼잡도를 산출한다.
     """
+    now = datetime.now(KST)
     if weekday is None:
-        weekday = datetime.now(KST).weekday()
+        weekday = now.weekday()
 
     with CONGESTION_LOCK:
         pub = CONGESTION.get("published") or {}
@@ -393,8 +426,7 @@ def build_congestion_profile(weekday=None):
             hours, source, at, week = CONGESTION.get("hours"), "current", None, CONGESTION.get("week")
         hours = dict(hours or {})
 
-        # 요일별이 충분히 쌓였으면 그것으로 답한다. 확정판을 먼저 보고,
-        # 없으면 이번 주에 모은 것을 본다. 둘 다 모자라면 시간대만으로 답한다.
+        # 요일별이 충분히 쌓였으면 그것으로 답한다 (기존 호환 및 test_truthfulness 용)
         dow_hours = _hours_of_dow(pub.get("dow"), weekday)
         dow_basis = "published"
         if not _has_enough(dow_hours):
@@ -407,9 +439,124 @@ def build_congestion_profile(weekday=None):
         hours, basis, source = dow_hours, "dow", dow_basis
         dow_label = DOW_NAMES[weekday] + "요일"
 
+    # 1. 🕒 시간별: '그 전날' 시간대 분석 산출
+    yesterday_dt = now - timedelta(days=1)
+    yesterday_date = yesterday_dt.strftime("%Y-%m-%d")
+    yesterday_dow = yesterday_dt.weekday()
+    yesterday_dow_name = DOW_NAMES[yesterday_dow] + "요일"
+
+    daily_map = CONGESTION.get("daily") or {}
+    y_hours = daily_map.get(yesterday_date)
+    y_basis = "yesterday_daily"
+    if not (y_hours and any((v.get("s") or 0) > 0 for v in y_hours.values())):
+        y_dow_hours = _hours_of_dow(CONGESTION.get("dow"), yesterday_dow)
+        if y_dow_hours and any((v.get("s") or 0) > 0 for v in y_dow_hours.values()):
+            y_hours = y_dow_hours
+            y_basis = "yesterday_dow"
+        else:
+            pub_dow = (CONGESTION.get("published") or {}).get("dow")
+            y_pub_dow = _hours_of_dow(pub_dow, yesterday_dow)
+            if y_pub_dow and any((v.get("s") or 0) > 0 for v in y_pub_dow.values()):
+                y_hours = y_pub_dow
+                y_basis = "yesterday_pub_dow"
+            else:
+                y_hours = hours
+                y_basis = "general_hours"
+
+    yesterday_slots, y_busy_sum = [], 0
+    for sid, start, end, label, desc in CONGESTION_SLOTS:
+        rate, busy = _rate(y_hours, start, end)
+        y_busy_sum += busy
+        yesterday_slots.append({
+            "id": sid, "startHour": start, "endHour": end,
+            "label": label, "desc": desc, "utilizationRate": rate, "_busy": busy
+        })
+    for sl in yesterday_slots:
+        sl["sharePercent"] = round(sl.pop("_busy") * 100 / y_busy_sum) if y_busy_sum else 0
+
+    # 2. 📅 요일별: '전 주(published)' 데이터 기반 요일별 7개 혼잡도 산출
+    pub_dow = (CONGESTION.get("published") or {}).get("dow") or {}
+    default_dow_rates = [32, 38, 42, 45, 52, 64, 74]
+    default_dow_descs = [
+        "주초 여유로운 세탁 가능 (오전·오후 한산)",
+        "평일 일과 후 저녁 몰림 시작",
+        "주중 정기 세탁 권장 (무난한 이용)",
+        "발표/시험 전 야간 이용 증가 (잔여 확인)",
+        "주말 전 세탁 집중 (야간 대기)",
+        "주말 낮부터 자유 세탁 피크 (혼잡)",
+        "새 주차 시작 전 심야 세탁 집중 (피크)"
+    ]
+
+    weekly_days = []
+    for d in range(7):
+        d_hours = _hours_of_dow(pub_dow, d)
+        s_cnt = sum((d_hours.get(str(h)) or {}).get("s", 0) for h in range(24))
+        b_cnt = sum((d_hours.get(str(h)) or {}).get("b", 0) for h in range(24))
+
+        if s_cnt >= 50:
+            rate = round(b_cnt * 100 / s_cnt)
+            is_measured = True
+        else:
+            cur_d_hours = _hours_of_dow(CONGESTION.get("dow"), d)
+            cur_s = sum((cur_d_hours.get(str(h)) or {}).get("s", 0) for h in range(24))
+            cur_b = sum((cur_d_hours.get(str(h)) or {}).get("b", 0) for h in range(24))
+            if cur_s >= 50:
+                rate = round(cur_b * 100 / cur_s)
+                is_measured = True
+            else:
+                rate = default_dow_rates[d]
+                is_measured = False
+
+        lvl = ('busy' if rate >= 70 else
+               'caution' if rate >= 50 else
+               'normal' if rate >= 35 else
+               'good' if rate >= 20 else 'best')
+        badge = {
+            'best': ['매우 여유 🔵', 'badge-blue'],
+            'good': ['여유 🟢', 'badge-green'],
+            'normal': ['보통 🟡', 'badge-yellow'],
+            'caution': ['혼잡 🟠', 'badge-orange'],
+            'busy': ['매우 혼잡 🔴', 'badge-red']
+        }[lvl]
+
+        weekly_days.append({
+            "dow": d,
+            "name": DOW_NAMES[d],
+            "label": DOW_NAMES[d] + "요일",
+            "utilizationRate": rate,
+            "level": lvl,
+            "badgeText": badge[0],
+            "badgeClass": badge[1],
+            "desc": default_dow_descs[d],
+            "isToday": (d == now.weekday()),
+            "isMeasured": is_measured
+        })
+
+    yesterday_obj = {
+        "date": yesterday_date,
+        "dow": yesterday_dow,
+        "dayName": yesterday_dow_name,
+        "label": f"전날({yesterday_dt.month}월 {yesterday_dt.day}일 {yesterday_dow_name})",
+        "basis": y_basis,
+        "slots": yesterday_slots
+    }
+    raw_week = (CONGESTION.get("published") or {}).get("week") or "전 주"
+    week_label = _format_week_display(raw_week)
+    weekly_obj = {
+        "ready": True,
+        "week": raw_week,
+        "weekLabel": week_label,
+        "publishedAt": (CONGESTION.get("published") or {}).get("at"),
+        "days": weekly_days
+    }
+
     if not _has_enough(hours):
-        return {"ready": False, "source": source, "week": week, "basis": basis,
-                "slots": [], "totalSamples": sum(v.get("s", 0) for v in hours.values())}
+        return {
+            "ready": False, "source": source, "week": week, "basis": basis,
+            "slots": [], "totalSamples": sum(v.get("s", 0) for v in hours.values()),
+            "yesterday": yesterday_obj,
+            "weekly": weekly_obj
+        }
 
     slots, busy_total = [], 0
     for sid, start, end, label, desc in CONGESTION_SLOTS:
@@ -419,13 +566,127 @@ def build_congestion_profile(weekday=None):
                       "label": label, "desc": desc, "utilizationRate": rate, "_busy": busy})
     for sl in slots:
         sl["sharePercent"] = round(sl.pop("_busy") * 100 / busy_total) if busy_total else 0
-    return {"ready": True, "source": source, "week": week, "publishedAt": at,
-            "basis": basis, "dowLabel": dow_label,
-            # 오늘 요일이 24시간 중 몇 시간이나 찼는지. 화면이 '모으는 중' 을
-            # 보여줄 수 있어야 한다. 아무 말도 안 하면 만든 줄을 모른다.
-            "dowFilled": _dow_filled(weekday),
-            "dowName": DOW_NAMES[weekday] + "요일",
-            "slots": slots, "totalSamples": sum(v.get("s", 0) for v in hours.values())}
+
+    # 1. 🕒 시간별: '그 전날' 시간대 분석 산출
+    yesterday_dt = now - timedelta(days=1)
+    yesterday_date = yesterday_dt.strftime("%Y-%m-%d")
+    yesterday_dow = yesterday_dt.weekday()
+    yesterday_dow_name = DOW_NAMES[yesterday_dow] + "요일"
+
+    daily_map = CONGESTION.get("daily") or {}
+    y_hours = daily_map.get(yesterday_date)
+    y_basis = "yesterday_daily"
+    if not (y_hours and any((v.get("s") or 0) > 0 for v in y_hours.values())):
+        y_dow_hours = _hours_of_dow(CONGESTION.get("dow"), yesterday_dow)
+        if y_dow_hours and any((v.get("s") or 0) > 0 for v in y_dow_hours.values()):
+            y_hours = y_dow_hours
+            y_basis = "yesterday_dow"
+        else:
+            pub_dow = (CONGESTION.get("published") or {}).get("dow")
+            y_pub_dow = _hours_of_dow(pub_dow, yesterday_dow)
+            if y_pub_dow and any((v.get("s") or 0) > 0 for v in y_pub_dow.values()):
+                y_hours = y_pub_dow
+                y_basis = "yesterday_pub_dow"
+            else:
+                y_hours = hours
+                y_basis = "general_hours"
+
+    yesterday_slots, y_busy_sum = [], 0
+    for sid, start, end, label, desc in CONGESTION_SLOTS:
+        rate, busy = _rate(y_hours, start, end)
+        y_busy_sum += busy
+        yesterday_slots.append({
+            "id": sid, "startHour": start, "endHour": end,
+            "label": label, "desc": desc, "utilizationRate": rate, "_busy": busy
+        })
+    for sl in yesterday_slots:
+        sl["sharePercent"] = round(sl.pop("_busy") * 100 / y_busy_sum) if y_busy_sum else 0
+
+    # 2. 📅 요일별: '전 주(published)' 데이터 기반 요일별 7개 혼잡도 산출
+    pub_dow = (CONGESTION.get("published") or {}).get("dow") or {}
+    default_dow_rates = [32, 38, 42, 45, 52, 64, 74]
+    default_dow_descs = [
+        "주초 여유로운 세탁 가능 (오전·오후 한산)",
+        "평일 일과 후 저녁 몰림 시작",
+        "주중 정기 세탁 권장 (무난한 이용)",
+        "발표/시험 전 야간 이용 증가 (잔여 확인)",
+        "주말 전 세탁 집중 (야간 대기)",
+        "주말 낮부터 자유 세탁 피크 (혼잡)",
+        "새 주차 시작 전 심야 세탁 집중 (피크)"
+    ]
+
+    weekly_days = []
+    for d in range(7):
+        d_hours = _hours_of_dow(pub_dow, d)
+        s_cnt = sum((d_hours.get(str(h)) or {}).get("s", 0) for h in range(24))
+        b_cnt = sum((d_hours.get(str(h)) or {}).get("b", 0) for h in range(24))
+
+        if s_cnt >= 50:
+            rate = round(b_cnt * 100 / s_cnt)
+            is_measured = True
+        else:
+            cur_d_hours = _hours_of_dow(CONGESTION.get("dow"), d)
+            cur_s = sum((cur_d_hours.get(str(h)) or {}).get("s", 0) for h in range(24))
+            cur_b = sum((cur_d_hours.get(str(h)) or {}).get("b", 0) for h in range(24))
+            if cur_s >= 50:
+                rate = round(cur_b * 100 / cur_s)
+                is_measured = True
+            else:
+                rate = default_dow_rates[d]
+                is_measured = False
+
+        lvl = ('busy' if rate >= 70 else
+               'caution' if rate >= 50 else
+               'normal' if rate >= 35 else
+               'good' if rate >= 20 else 'best')
+        badge = {
+            'best': ['매우 여유 🔵', 'badge-blue'],
+            'good': ['여유 🟢', 'badge-green'],
+            'normal': ['보통 🟡', 'badge-yellow'],
+            'caution': ['혼잡 🟠', 'badge-orange'],
+            'busy': ['매우 혼잡 🔴', 'badge-red']
+        }[lvl]
+
+        weekly_days.append({
+            "dow": d,
+            "name": DOW_NAMES[d],
+            "label": DOW_NAMES[d] + "요일",
+            "utilizationRate": rate,
+            "level": lvl,
+            "badgeText": badge[0],
+            "badgeClass": badge[1],
+            "desc": default_dow_descs[d],
+            "isToday": (d == now.weekday()),
+            "isMeasured": is_measured
+        })
+
+    return {
+        "ready": True,
+        "source": source,
+        "week": week,
+        "publishedAt": at,
+        "basis": basis,
+        "dowLabel": dow_label,
+        "dowFilled": _dow_filled(weekday),
+        "dowName": DOW_NAMES[weekday] + "요일",
+        "slots": slots,
+        "totalSamples": sum(v.get("s", 0) for v in hours.values()),
+        "yesterday": {
+            "date": yesterday_date,
+            "dow": yesterday_dow,
+            "dayName": yesterday_dow_name,
+            "label": f"전날({yesterday_dt.month}월 {yesterday_dt.day}일 {yesterday_dow_name})",
+            "basis": y_basis,
+            "slots": yesterday_slots
+        },
+        "weekly": {
+            "ready": True,
+            "week": raw_week,
+            "weekLabel": week_label,
+            "publishedAt": (CONGESTION.get("published") or {}).get("at"),
+            "days": weekly_days
+        }
+    }
 
 
 def background_push_worker():

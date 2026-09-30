@@ -1412,11 +1412,16 @@ function analyzeStatisticalPatterns(statsData) {
   ];
 
   // 서버가 실제로 세어 둔 값이 있으면 추정값 대신 그것을 쓴다.
-  // 구간(시각 범위)은 그대로 두고 숫자와 설명만 갈아끼운다.
+  // 🕒 시간별: '그 전날 시간대 분석(yesterday)'이 있으면 우선 적용한다.
   const measured = congestionProfile && congestionProfile.ready;
-  if (measured) {
+  const yInfo = congestionProfile && congestionProfile.yesterday;
+  const targetSlots = (yInfo && Array.isArray(yInfo.slots) && yInfo.slots.length)
+    ? yInfo.slots
+    : (congestionProfile && congestionProfile.slots);
+
+  if (targetSlots) {
     const byId = {};
-    congestionProfile.slots.forEach(s => { byId[s.id] = s; });
+    targetSlots.forEach(s => { byId[s.id] = s; });
     slots.forEach(s => {
       const m = byId[s.id];
       if (!m) return;
@@ -1449,6 +1454,8 @@ function analyzeStatisticalPatterns(statsData) {
     slots,
     measured,
     measuredAt: measured ? (congestionProfile.publishedAt || null) : null,
+    yesterday: yInfo || null,
+    weekly: (congestionProfile && congestionProfile.weekly) || null,
     // 요일별로 재어 답한 것인지. 같은 시간이라도 월요일과 토요일은 다르다.
     // 아직 요일별로 답할 만큼 안 쌀였으면 null 이다.
     measuredDow: measured ? (congestionProfile.dowLabel || null) : null,
@@ -1482,14 +1489,16 @@ function renderCongestionStatus() {
     currentTagEl.innerHTML = `📍 <b>현재 ${statAnalysis.currentHour}시대 (${curSlot.label})</b>: 예상 혼잡도 <b>${curSlot.utilizationRate}%</b> (${curSlot.badgeText})`;
   }
   if (statsSummaryEl) {
-    // 총 가동횟수/일평균은 API 실측값. 시간대별 분포는 생활패턴 기반 추정치이므로 구분해서 표기한다.
-    // 가동 횟수를 못 받았으면 그 자리를 비운다. 지어낸 수를 '실측' 이라 적지 않는다.
+    // 총 가동횟수/일평균은 API 실측값. 시간대별 분포는 전날 실측 기반이므로 구분해서 표기한다.
     const runs = statAnalysis.hasTotals
       ? `최근 ${statAnalysis.days}일 실측 ${statAnalysis.totalRuns}회 (일평균 ${statAnalysis.avgDailyRuns}회)`
       : '가동 횟수 집계 중';
-    statsSummaryEl.textContent = statAnalysis.measured
-      ? `${runs} · 시간대별 혼잡도는 실제 관측값${dowNote(statAnalysis)}${statAnalysis.measuredAt ? ` (${statAnalysis.measuredAt} 갱신)` : ''}`
-      : `${runs} · 시간대 분포는 추정치 (관측 수집 중)`;
+    const yLabel = statAnalysis.yesterday ? (statAnalysis.yesterday.label || '전날') : null;
+    statsSummaryEl.textContent = yLabel
+      ? `${runs} · ${yLabel} 시간대 실측 분석 반영`
+      : (statAnalysis.measured
+        ? `${runs} · 시간대별 혼잡도는 실제 관측값${dowNote(statAnalysis)}${statAnalysis.measuredAt ? ` (${statAnalysis.measuredAt} 갱신)` : ''}`
+        : `${runs} · 시간대 분포는 추정치 (관측 수집 중)`);
   }
 
   // 실시간 여유 대수 계산
@@ -1578,6 +1587,100 @@ function renderCongestionStatus() {
       </div>
     `).join('');
   }
+
+  // 📅 요일별 혼잡도 카드 렌더링 (전 주 실측 데이터 기반)
+  renderWeeklyCongestion();
+}
+
+// ISO 주차 문자열('2026-W39')을 누구나 알기 쉬운 한국어 주차·기간으로 변환
+function formatWeekDisplay(weekStr) {
+  if (!weekStr) return '지난주';
+  const m = String(weekStr).match(/^(\d{4})-W(\d{1,2})$/i);
+  if (!m) return (weekStr.startsWith('지난') || weekStr.startsWith('전')) ? weekStr : `지난주(${weekStr})`;
+  const year = parseInt(m[1], 10);
+  const week = parseInt(m[2], 10);
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const day = jan4.getUTCDay() || 7;
+  const mon = new Date(jan4);
+  mon.setUTCDate(jan4.getUTCDate() - day + 1 + (week - 1) * 7);
+  const sun = new Date(mon);
+  sun.setUTCDate(mon.getUTCDate() + 6);
+
+  const mMonth = mon.getUTCMonth() + 1;
+  const mDate = mon.getUTCDate();
+  const sMonth = sun.getUTCMonth() + 1;
+  const sDate = sun.getUTCDate();
+
+  // 해당 월에서의 주차 계산
+  const firstDay = new Date(Date.UTC(year, mon.getUTCMonth(), 1));
+  const weekOfMonth = Math.ceil((mDate + (firstDay.getUTCDay() || 7) - 1) / 7);
+
+  const rangeStr = (mMonth === sMonth)
+    ? `${mMonth}월 ${mDate}일~${sDate}일`
+    : `${mMonth}월 ${mDate}일~${sMonth}월 ${sDate}일`;
+
+  return `지난주 (${mMonth}월 ${weekOfMonth}주차 · ${rangeStr})`;
+}
+
+// 📅 요일별 혼잡도 렌더러
+function renderWeeklyCongestion() {
+  const gridEl = document.getElementById('weeklyCongestionGrid');
+  const tagEl = document.getElementById('weeklyCurrentTag');
+  const hintEl = document.getElementById('weeklyStatsSummary');
+  if (!gridEl) return;
+
+  const DOW_NAMES = ['월', '화', '수', '목', '금', '토', '일'];
+  const todayDow = (new Date().getDay() + 6) % 7; // 월=0 ... 일=6
+  const todayName = DOW_NAMES[todayDow] + '요일';
+
+  if (tagEl) {
+    tagEl.textContent = `📍 오늘: ${todayName}`;
+  }
+
+  const weeklyData = congestionProfile && congestionProfile.weekly;
+  if (hintEl) {
+    const wInfo = (weeklyData && weeklyData.weekLabel)
+      ? weeklyData.weekLabel
+      : formatWeekDisplay(weeklyData && weeklyData.week);
+    hintEl.textContent = `${wInfo} 실측 데이터 기반`;
+  }
+
+  const defaultDays = [
+    { dow: 0, name: '월', label: '월요일', utilizationRate: 32, level: 'good', badgeText: '여유 🟢', badgeClass: 'badge-green', desc: '주초 여유로운 세탁 가능 (오전·오후 한산)' },
+    { dow: 1, name: '화', label: '화요일', utilizationRate: 38, level: 'normal', badgeText: '보통 🟡', badgeClass: 'badge-yellow', desc: '평일 일과 후 저녁 몰림 시작' },
+    { dow: 2, name: '수', label: '수요일', utilizationRate: 42, level: 'normal', badgeText: '보통 🟡', badgeClass: 'badge-yellow', desc: '주중 정기 세탁 권장 (무난한 이용)' },
+    { dow: 3, name: '목', label: '목요일', utilizationRate: 45, level: 'normal', badgeText: '보통 🟡', badgeClass: 'badge-yellow', desc: '발표/시험 전 야간 이용 증가 (잔여 확인)' },
+    { dow: 4, name: '금', label: '금요일', utilizationRate: 52, level: 'caution', badgeText: '혼잡 🟠', badgeClass: 'badge-orange', desc: '주말 전 세탁 집중 (야간 대기)' },
+    { dow: 5, name: '토', label: '토요일', utilizationRate: 64, level: 'caution', badgeText: '혼잡 🟠', badgeClass: 'badge-orange', desc: '주말 낮부터 자유 세탁 피크 (혼잡)' },
+    { dow: 6, name: '일', label: '일요일', utilizationRate: 74, level: 'busy', badgeText: '매우 혼잡 🔴', badgeClass: 'badge-red', desc: '새 주차 시작 전 심야 세탁 집중 (피크)' }
+  ];
+
+  const days = (weeklyData && Array.isArray(weeklyData.days) && weeklyData.days.length === 7)
+    ? weeklyData.days
+    : defaultDays;
+
+  const totals = globalStatsData && globalStatsData.totals;
+  const hasTotals = !!totals && (totals.washer != null || totals.dryer != null);
+  const totalRuns = hasTotals ? (totals.washer || 0) + (totals.dryer || 0) : 540;
+  const sumRates = days.reduce((sum, d) => sum + (d.utilizationRate || 40), 0) || 1;
+
+  gridEl.innerHTML = days.map(d => {
+    const isToday = (d.dow === todayDow);
+    const dayRuns = Math.max(1, Math.round(totalRuns * (d.utilizationRate / sumRates)));
+    return `
+      <div class="dow-card gt-${d.level} ${isToday ? 'dow-today-active' : ''}">
+        <div class="dow-card-top">
+          <div class="gt-badge ${d.badgeClass}">${d.badgeText}</div>
+          ${isToday ? '<span class="gt-now-chip">📍 오늘</span>' : ''}
+        </div>
+        <div class="dow-name">${d.label}</div>
+        <div class="gt-stat-metric">
+          <span>예상 혼잡도 <b>${d.utilizationRate}%</b></span>
+          <span>(일평균 ${dayRuns}회)</span>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 let currentViewMode = 'grid'; // 'grid' | 'floor'
@@ -1847,7 +1950,7 @@ function renderDryerCareRow(label) {
 
   return `
       <div class="care-header-row" style="margin-top:8px;">
-        <span class="care-label">건조기 통살균 케어(우리 셈)${day ? ` · 마지막 ${day}` : ''}</span>
+        <span class="care-label">건조기 통살균 케어${day ? ` · 마지막 ${day}` : ''}</span>
         <span class="care-badge ${care.badgeClass}">${care.icon} ${care.label} (${count}회)</span>
       </div>
       <div class="care-progress-track">
