@@ -2,7 +2,9 @@
 // 열쇠는 실제로 들어오는 이름표('5호기')로 확인한다. 'No.5' 로만 확인해서
 // "1호기호기" 버그를 놓친 적이 있다.
 const fs = require('fs');
-const src = fs.readFileSync('C:/jungle-laundry/app.js', 'utf8');
+const path = require('path');
+// 이 파일이 있는 곳의 app.js 를 본다. 자리를 옮겨도 돌아가야 한다.
+const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 
 function grab(name) {
   const i = src.indexOf('function ' + name + '(');
