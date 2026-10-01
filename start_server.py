@@ -556,15 +556,15 @@ def build_congestion_profile(weekday=None):
         basis_label = "요일별 관측을 모으는 중입니다 (아직 답할 만큼 안 모였습니다)"
     else:
         if used_sources == {"published"}:
-            src_txt = week_label
+            src_txt = "%s 실측" % week_label
         elif used_sources == {"current"}:
             src_txt = "이번 주 관측"
         else:
             src_txt = "%s·이번 주 관측" % week_label
         if measured_cnt == 7:
-            basis_label = "%s 실측" % src_txt
+            basis_label = src_txt
         else:
-            basis_label = ("%s 실측 · 7일 중 %d일 · 나머지는 모으는 중"
+            basis_label = ("%s · 7일 중 %d일 · 나머지는 모으는 중"
                            % (src_txt, measured_cnt))
 
     weekly_obj = {
