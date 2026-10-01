@@ -1637,36 +1637,32 @@ function renderWeeklyCongestion() {
     tagEl.textContent = `📍 오늘: ${todayName}`;
   }
 
+  // 서버가 준 것만 그린다. 예전에는 여기에도 고정표가 있어서, 서버가
+  // 아무것도 못 줘도 월요일 32% 같은 값이 그려졌다. 지어낸 값이었다.
   const weeklyData = congestionProfile && congestionProfile.weekly;
-  if (hintEl) {
-    const wInfo = (weeklyData && weeklyData.weekLabel)
-      ? weeklyData.weekLabel
-      : formatWeekDisplay(weeklyData && weeklyData.week);
-    hintEl.textContent = `${wInfo} 실측 데이터 기반`;
-  }
-
-  const defaultDays = [
-    { dow: 0, name: '월', label: '월요일', utilizationRate: 32, level: 'good', badgeText: '여유 🟢', badgeClass: 'badge-green', desc: '주초 여유로운 세탁 가능 (오전·오후 한산)' },
-    { dow: 1, name: '화', label: '화요일', utilizationRate: 38, level: 'normal', badgeText: '보통 🟡', badgeClass: 'badge-yellow', desc: '평일 일과 후 저녁 몰림 시작' },
-    { dow: 2, name: '수', label: '수요일', utilizationRate: 42, level: 'normal', badgeText: '보통 🟡', badgeClass: 'badge-yellow', desc: '주중 정기 세탁 권장 (무난한 이용)' },
-    { dow: 3, name: '목', label: '목요일', utilizationRate: 45, level: 'normal', badgeText: '보통 🟡', badgeClass: 'badge-yellow', desc: '발표/시험 전 야간 이용 증가 (잔여 확인)' },
-    { dow: 4, name: '금', label: '금요일', utilizationRate: 52, level: 'caution', badgeText: '혼잡 🟠', badgeClass: 'badge-orange', desc: '주말 전 세탁 집중 (야간 대기)' },
-    { dow: 5, name: '토', label: '토요일', utilizationRate: 64, level: 'caution', badgeText: '혼잡 🟠', badgeClass: 'badge-orange', desc: '주말 낮부터 자유 세탁 피크 (혼잡)' },
-    { dow: 6, name: '일', label: '일요일', utilizationRate: 74, level: 'busy', badgeText: '매우 혼잡 🔴', badgeClass: 'badge-red', desc: '새 주차 시작 전 심야 세탁 집중 (피크)' }
-  ];
-
   const days = (weeklyData && Array.isArray(weeklyData.days) && weeklyData.days.length === 7)
     ? weeklyData.days
-    : defaultDays;
+    : null;
 
-  const totals = globalStatsData && globalStatsData.totals;
-  const hasTotals = !!totals && (totals.washer != null || totals.dryer != null);
-  const totalRuns = hasTotals ? (totals.washer || 0) + (totals.dryer || 0) : 540;
-  const sumRates = days.reduce((sum, d) => sum + (d.utilizationRate || 40), 0) || 1;
+  if (hintEl) {
+    hintEl.textContent = (weeklyData && weeklyData.basisLabel)
+      ? weeklyData.basisLabel
+      : '요일별 관측을 모으는 중입니다';
+  }
 
+  if (!days) {
+    gridEl.innerHTML = `
+      <div class="dow-empty">요일별 관측을 모으는 중입니다.
+        한 요일이 하루 다 지나면 그 요일부터 보여 드립니다.</div>`;
+    return;
+  }
+
+  // 잰 요일만 숫자를 적는다. 안 잰 요일은 '모으는 중' 이라고만 적는다.
+  // 일평균 횟수는 뺐다 — 요일별 가동 횟수는 따로 세고 있지 않아서,
+  // 예전 값은 혼잡도에서 거꾸로 계산한 추정치였다.
   gridEl.innerHTML = days.map(d => {
     const isToday = (d.dow === todayDow);
-    const dayRuns = Math.max(1, Math.round(totalRuns * (d.utilizationRate / sumRates)));
+    const known = typeof d.utilizationRate === 'number';
     return `
       <div class="dow-card gt-${d.level} ${isToday ? 'dow-today-active' : ''}">
         <div class="dow-card-top">
@@ -1675,8 +1671,9 @@ function renderWeeklyCongestion() {
         </div>
         <div class="dow-name">${d.label}</div>
         <div class="gt-stat-metric">
-          <span>예상 혼잡도 <b>${d.utilizationRate}%</b></span>
-          <span>(일평균 ${dayRuns}회)</span>
+          ${known
+            ? `<span>관측 혼잡도 <b>${d.utilizationRate}%</b></span>`
+            : `<span class="dow-pending">아직 관측 없음</span>`}
         </div>
       </div>
     `;
@@ -1950,7 +1947,7 @@ function renderDryerCareRow(label) {
 
   return `
       <div class="care-header-row" style="margin-top:8px;">
-        <span class="care-label">건조기 통살균 케어${day ? ` · 마지막 ${day}` : ''}</span>
+        <span class="care-label" title="기기가 건조기 누적 횟수를 알려주지 않아, 가동이 끝나는 것을 보고 우리가 센 값입니다. 세탁기 숫자는 기기가 준 누적값입니다.">건조기 통살균 케어${day ? ` · 마지막 ${day}` : ''}</span>
         <span class="care-badge ${care.badgeClass}">${care.icon} ${care.label} (${count}회)</span>
       </div>
       <div class="care-progress-track">

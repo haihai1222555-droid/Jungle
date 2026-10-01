@@ -491,13 +491,77 @@ def test_congestion_dow():
         S.CONGESTION["hours"], S.CONGESTION["dow"], S.CONGESTION["published"] = keep
 
 
+# =========================================================
+# 14. 안 잰 요일에 숫자를 지어내지 않는지
+# =========================================================
+def test_congestion_weekly_no_invention():
+    """한동안 안 잰 요일에 고정표(32·38·42…)를 넣고 '실측' 이라고 적었다.
+
+    7일 중 5일이 지어낸 값이었다. 요일별 집계는 붙은 지 얼마 안 돼서
+    '지난주' 값은 있을 수가 없었는데도 머리말이 지난주라고 말했다.
+    숫자가 적힌 요일은 반드시 잰 요일이어야 한다.
+    """
+    import start_server as S
+
+    keep = (S.CONGESTION.get("hours"), S.CONGESTION.get("dow"),
+            S.CONGESTION.get("published"), S.CONGESTION.get("daily"))
+    full = lambda b: {str(h): {"s": 1000, "b": b} for h in range(24)}
+    try:
+        # (1) 요일별이 하나도 없을 때 — 일곱 칸 모두 비어 있어야 한다
+        S.CONGESTION["published"] = None
+        S.CONGESTION["daily"] = {}
+        S.CONGESTION["hours"] = full(100)
+        S.CONGESTION["dow"] = {}
+
+        w = S.build_congestion_profile(weekday=0)["weekly"]
+        check("안 잰 요일 수", sum(1 for d in w["days"]
+                                if d["utilizationRate"] is None), 7)
+        check("안 쟀으면 ready 아님", w["ready"], False)
+        check("잰 요일 수", w["measuredDays"], 0)
+        check("머리말이 모으는 중이라 말하나",
+              "모으는 중" in w["basisLabel"], True)
+        check("안 잰 칸은 좋다 나쁘다 안 함",
+              set(d["level"] for d in w["days"]), {"unknown"})
+
+        # (2) 이번 주에 화요일만 쌓였을 때
+        S.CONGESTION["dow"] = {"1-%d" % h: {"s": 1000, "b": 700} for h in range(24)}
+        w = S.build_congestion_profile(weekday=0)["weekly"]
+        got = {d["label"]: d["utilizationRate"] for d in w["days"]}
+        check("화요일만 숫자가 있다",
+              [k for k, v in got.items() if v is not None], ["화요일"])
+        check("화요일 값", got["화요일"], 70)
+        check("잰 요일 수(1)", w["measuredDays"], 1)
+        check("몇 일 찼는지 밝히나", "7일 중 1일" in w["basisLabel"], True)
+        # 지난주 것이 아니라 이번 주 것이다. 머리말이 지난주라고 하면 안 된다.
+        check("출처를 이번 주라고 적나",
+              "이번 주" in w["basisLabel"], True)
+        check("지난주라고 하지 않나", "지난주" in w["basisLabel"], False)
+
+        # (3) 지난주 확정판이 일곱 요일 다 있을 때
+        S.CONGESTION["published"] = {
+            "hours": full(100), "week": "2026-W39", "at": "2026-09-28",
+            "dow": {"%d-%d" % (d, h): {"s": 1000, "b": 300}
+                    for d in range(7) for h in range(24)},
+        }
+        S.CONGESTION["dow"] = {}
+        w = S.build_congestion_profile(weekday=0)["weekly"]
+        check("일곱 요일 다 숫자", sum(1 for d in w["days"]
+                                 if d["utilizationRate"] == 30), 7)
+        check("잰 요일 수(7)", w["measuredDays"], 7)
+        check("다 찼으면 모으는 중이라 안 함",
+              "모으는 중" in w["basisLabel"], False)
+    finally:
+        (S.CONGESTION["hours"], S.CONGESTION["dow"],
+         S.CONGESTION["published"], S.CONGESTION["daily"]) = keep
+
+
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
              test_unknown_states, test_device_log,
              test_source_down_does_not_block_chat, test_course_not_from_device,
              test_bot_display, test_rule_parsing, test_bot_counts_agree,
              test_server_alarm_flow, test_dryer_care,
-             test_congestion_dow]
+             test_congestion_dow, test_congestion_weekly_no_invention]
     for t in tests:
         try:
             t()
