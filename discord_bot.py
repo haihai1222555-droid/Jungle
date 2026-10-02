@@ -1815,9 +1815,27 @@ def get_history(user_id):
     return (h.get("turns") or [])
 
 
+def _sweep_history(now):
+    """오래된 대화 기억을 치운다.
+
+    get_history 는 그 사람이 다시 말을 걸 때만 지운다. 한 번 묻고 안 오는
+    사람 것은 영영 남는다. 한 사람당 8턴 x 1500자라, 쓰는 사람이 늘면
+    메모리 954MB 짜리 기계에서는 부담이 된다.
+    """
+    old = [k for k, v in CHAT_HISTORY.items()
+           if now - (v.get("at") or 0) > CHAT_TTL_SEC]
+    for k in old:
+        CHAT_HISTORY.pop(k, None)
+        LAST_CONTEXT.pop(k, None)
+
+
 def push_history(user_id, role, text):
     if not text:
         return
+    now = datetime.now().timestamp()
+    # 가끔 한 번씩만 쓸어도 충분하다. 매번 전체를 훑을 일이 아니다.
+    if len(CHAT_HISTORY) > 50:
+        _sweep_history(now)
     h = CHAT_HISTORY.setdefault(user_id, {"turns": [], "at": 0})
     h["turns"].append({"role": role, "parts": [{"text": text[:1500]}]})
     h["turns"] = h["turns"][-CHAT_MAX_TURNS:]
@@ -2565,12 +2583,14 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                     _mark_key_dead(key, f"HTTP {e.code}")
                     continue
                 # 5xx 는 구글 쪽이 아픈 것이다. 바로 다시 물어도 또 아프다.
+                # 다만 이 키의 사정일 수 있으니 다음 키는 써 본다.
                 if e.code >= 500:
                     rest, cnt = _slow_block(model, key)
                     print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} "
                           f"HTTP {e.code} — {rest:.0f}초 쉼 (연속 {cnt}번째)")
-                else:
-                    print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} HTTP {e.code}")
+                    continue
+                # 4xx 는 보낸 내용 문제다. 키를 바꿔도 똑같으므로 이 모델은 접는다.
+                print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} HTTP {e.code}")
                 break
             except Exception as e:
                 # 늘어진 조합을 기억해 둔다.
@@ -2578,7 +2598,11 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                 rest, cnt = _slow_block(model, key)
                 print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} "
                       f"실패({e}) — {rest:.0f}초 쉼 (연속 {cnt}번째)")
-                break
+                # 늘어진 것은 이 조합의 사정이지 모델 전체의 사정이 아니다.
+                # 예전에는 여기서 모델을 통째로 접어, 0.78초짜리 다른 키를
+                # 건너뛰고 2.55초짜리 다음 모델로 갔다. 다음 키로 이어 간다.
+                # (예산이 모자라면 위의 left < 2 가 먼저 끊는다)
+                continue
     if tried == 0:
         blocked, total, _ = quota_status()
         print(f"[Gemini] {blocked}/{total} 조합이 한도로 쉬는 중 — 바로 Groq 로")

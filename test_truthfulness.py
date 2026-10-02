@@ -734,6 +734,70 @@ def test_health_reports_stale_source():
         S.SOURCE_UPDATED_AT, S.SOURCE_INTERVAL_SEC = keep
 
 
+# =========================================================
+# 17. 키 하나가 늘어져도 같은 모델의 다른 키를 써 보는지
+# =========================================================
+def test_gemini_tries_next_key():
+    """늘어지는 것은 그 조합의 사정이지 모델 전체의 사정이 아니다.
+
+    예전에는 시간 초과가 나면 break 로 모델을 통째로 접었다. 실측상
+    flash-lite 두 키가 모두 0.78초인데, 한쪽이 한 번 늘어졌다고 다른 쪽을
+    안 써 보고 2.55초짜리 다음 모델로 넘어갔다.
+    """
+    import json as _json
+
+    keep_keys = bot.GEMINI_API_KEYS
+    keep_open = bot.urllib.request.urlopen
+    keep_models = bot.GEMINI_MODELS
+    try:
+        bot.GEMINI_API_KEYS = ["KEY_A", "KEY_B"]
+        bot.GEMINI_MODELS = ["model-1", "model-2"]
+        bot._QUOTA_BLOCKED.clear()
+        bot._FAIL_STREAK.clear()
+        bot._DEAD_KEYS.clear()
+        tried = []
+
+        class _Res:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self, *a):
+                # security.read_capped 가 read(상한) 으로 부른다
+                return _json.dumps({"candidates": [{"content": {"parts": [
+                    {"text": '{"reply": "됐다"}'}]}}]}).encode()
+
+        def fake(req, *a, **k):
+            url = req.full_url
+            # 다른 스레드(혼잡도 수집 등)가 쓰는 주소는 그대로 흘려보낸다.
+            # 안 그러면 엉뚱한 곳에서 터져 로그가 헷갈린다.
+            if "/models/" not in url:
+                return keep_open(req, *a, **k)
+            model = url.split("/models/")[1].split(":")[0]
+            key = url.split("key=")[1]
+            tried.append((model, key))
+            if key == "KEY_A":
+                raise TimeoutError("The read operation timed out")
+            return _Res()
+
+        bot.urllib.request.urlopen = fake
+        plan = bot.ask_gemini("비었어?", {}, None, None, False)
+
+        check("답을 받아냈나", bool(plan), True)
+        # 첫 키가 늘어졌어도 같은 모델의 둘째 키를 써 봐야 한다
+        check("같은 모델에서 다음 키를 써 봤나",
+              ("model-1", "KEY_B") in tried, True)
+        # 둘째 모델까지 갈 일이 없다
+        check("다음 모델로 넘어가지 않았나",
+              any(m == "model-2" for m, _ in tried), False)
+        check("어느 키로 답했나", "키 2번" in (plan or {}).get("_engine", ""), True)
+    finally:
+        bot.GEMINI_API_KEYS = keep_keys
+        bot.GEMINI_MODELS = keep_models
+        bot.urllib.request.urlopen = keep_open
+        bot._QUOTA_BLOCKED.clear()
+        bot._FAIL_STREAK.clear()
+        bot._DEAD_KEYS.clear()
+
+
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
              test_unknown_states, test_device_log,
@@ -741,7 +805,8 @@ def main():
              test_bot_display, test_rule_parsing, test_bot_counts_agree,
              test_server_alarm_flow, test_dryer_care,
              test_congestion_dow, test_congestion_weekly_no_invention,
-             test_alarm_stays_on_my_cycle, test_health_reports_stale_source]
+             test_alarm_stays_on_my_cycle, test_health_reports_stale_source,
+             test_gemini_tries_next_key]
     for t in tests:
         try:
             t()
