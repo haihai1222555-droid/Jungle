@@ -2927,9 +2927,14 @@ AI_POOL = concurrent.futures.ThreadPoolExecutor(
     max_workers=4, thread_name_prefix="ai")
 
 
-def _ai_thread(fn, *args):
-    """AI 함수를 전용 일꾼에게 맡긴다. asyncio.to_thread 대신 쓴다."""
-    return asyncio.get_running_loop().run_in_executor(AI_POOL, fn, *args)
+async def _ai_thread(fn, *args):
+    """AI 함수를 전용 일꾼에게 맡긴다. asyncio.to_thread 대신 쓴다.
+
+    async 로 둬야 한다. run_in_executor 는 코루틴이 아니라 Future 를 주는데,
+    asyncio.create_task() 는 코루틴만 받는다. 그냥 돌려주면
+    "a coroutine was expected, got Future" 로 모든 질문이 터진다.
+    """
+    return await asyncio.get_running_loop().run_in_executor(AI_POOL, fn, *args)
 
 
 def _peek(task, label):
