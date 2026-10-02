@@ -166,6 +166,33 @@ KNOWN_STATES = RUNNING_STATES + (
 # '끝났다' 로 읽히면, 기계가 이제 막 돌기 시작하는데 완료 알림이 나간다.
 STARTED_STATES = RUNNING_STATES + ('DETECTING', 'RESERVED')
 
+
+def alarm_cycle_delta(alarm, unit_data, tower_id, unit_type, care_counts):
+    """등록할 때의 사이클에서 몇 번이나 지났는지 센다.
+
+        0     아직 내가 등록한 그 사이클이다
+        1     내 사이클은 끝났다 (수거했는지 지켜보는 구간)
+        2 이상 그 뒤로도 더 돌았다. 지금 도는 것은 남의 빨래다
+        None  알 수 없다 (이 기능 이전에 등록된 알림)
+
+    세탁기는 기기가 주는 누적 횟수를, 건조기는 우리가 센 횟수를 쓴다.
+    건조기는 기기가 누적을 안 알려줘서 dryer_care 가 가동->완료를 센다.
+
+    통살균을 돌리면 두 값 모두 0 으로 되돌아간다. 되돌아간 것을 보면
+    내 사이클은 이미 한참 전에 끝난 것이므로 2 로 본다.
+    """
+    if unit_type == 'washer':
+        at = alarm.get('cycleAtRegister')
+        now_count = (unit_data.get('cycle') or {}).get('cycleCount')
+    else:
+        at = alarm.get('dryerCountAtRegister')
+        now_count = (care_counts.get('%s호기' % tower_id) or {}).get('count')
+
+    if not isinstance(at, int) or not isinstance(now_count, int):
+        return None
+    delta = now_count - at
+    return 2 if delta < 0 else delta
+
 # 구독 파일에 대한 읽기/쓰기를 직렬화한다 (워커 스레드와 요청 스레드가 동시에 접근)
 SUBS_LOCK = threading.Lock()
 
@@ -650,6 +677,11 @@ def background_push_worker():
             now_ms = time.time() * 1000
             changed = False
             active_subs = []
+            # 건조기 사이클 번호. 기기가 누적을 안 알려줘서 우리가 센 값이다.
+            try:
+                care_counts = dryer_care.counts()
+            except Exception:
+                care_counts = {}
 
             for item in subs:
                 sub_info = item.get('subscription')
@@ -685,11 +717,47 @@ def background_push_worker():
                 unit_data = (tower_data.get('dryer' if unit_type == 'dryer' else 'washer') or {})
                 run_state = unit_state(unit_data)
 
+                # 이 알림이 아직 '내 사이클' 의 것인지. 아래 판단의 바탕이 된다.
+                cycle_delta = alarm_cycle_delta(
+                    alarm, unit_data, tower_id, unit_type, care_counts)
+
                 # 실시간 상태를 실제로 받아왔는지 (못 받아온 상태에서 '완료' 로 오판하면 안 된다)
                 has_live = bool(unit_data)
                 # 남은 시간 0분이 곧 완료는 아니다. 무게 감지(DETECTING) 중에는
                 # 시간이 아직 안 잡혀서 0 분으로 온다.
                 still_going = has_live and run_state in STARTED_STATES
+
+                # 내 사이클에서 두 번 이상 지났다. 지금 돌고 있는 것은 남의
+                # 빨래다. 여기서 떼지 않으면 남의 기기에 5분 전 알림이 간다.
+                if cycle_delta is not None and cycle_delta >= 2:
+                    print(f"[Alarm] 지난 사이클 정리: {device_name} "
+                          f"(등록 뒤 {cycle_delta}번 돌았음)")
+                    changed = True
+                    continue
+
+                # 내 사이클은 끝났는데 완료를 못 알렸다. 기기가 5분에 한 번만
+                # 알려줘서 끝나는 순간을 못 보고 지나간 것이다. 끝난 것은
+                # 분명하므로 알리되, 언제 끝났는지는 모른다고 적는다.
+                if (cycle_delta is not None and cycle_delta >= 1
+                        and not notified_0min):
+                    alarm['notified0Min'] = True
+                    alarm['completedAt'] = time.time()
+                    notified_0min = True
+                    changed = True
+                    print(f"[Alarm] 뒤늦게 완료 확인: {device_name}")
+                    send_push_notification(sub_info, {
+                        'title': f"🏁 [선택 기기 완료] {device_name} 완료!",
+                        'body': (f"{device_name} 가동이 끝났습니다. 기기가 "
+                                 f"{source_interval_min()}분에 한 번만 알려줘서 끝난 "
+                                 "시각은 정확히 알 수 없습니다. 빨래를 수거해 주세요."),
+                        'tag': f"complete-{device_name}",
+                        'actions': ([] if alarm.get('pickedUp')
+                                    else [{'action': 'picked', 'title': '🧺 가져갔어요'}]),
+                        'key': alarm.get('key'),
+                        'endpoint': sub_info.get('endpoint'),
+                    })
+                    active_subs.append(item)
+                    continue
 
                 # ⭐ 기기가 알려주는 실제 남은 시간을 우선한다.
                 #    건조기 옷감 감지로 9분 -> 4분처럼 줄거나, 반대로 늘어나는 경우가 잦은데
@@ -784,7 +852,10 @@ def background_push_worker():
                     remain_min = (target_ms - now_ms) / (60 * 1000)
 
                 # 멈춰 있는 동안은 시계가 얼어붙는다. 그걸 보고 "5분 뒤 완료" 라고 하면 거짓말이다.
+                # 차이가 0 일 때만 '5분 전' 을 보낸다. 내 사이클이 아닌데
+                # 보내면 남의 빨래를 두고 나한테 알리는 꼴이 된다.
                 if (not notified_5min and not is_stopped
+                        and (cycle_delta is None or cycle_delta == 0)
                         and remain_min <= 5.0 and remain_min > 0):
                     alarm['notified5Min'] = True
                     changed = True

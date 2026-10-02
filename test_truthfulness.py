@@ -555,13 +555,154 @@ def test_congestion_weekly_no_invention():
          S.CONGESTION["published"], S.CONGESTION["daily"]) = keep
 
 
+# =========================================================
+# 15. 알림은 내가 등록한 그 사이클의 것이다
+# =========================================================
+def test_alarm_stays_on_my_cycle():
+    """남이 새로 돌린 빨래에 내 알림이 들러붙지 않는지.
+
+    건조기는 기기가 누적 횟수를 안 준다. 그래서 예전에는 시간으로만
+    짐작했는데, 기기가 돌고 있으면 예상 완료 시각을 그 남은 시간으로
+    계속 뒤로 밀고 있었다. 남이 새로 돌리면 그 남은 시간으로 밀렸고,
+    '예상 완료 + 40분' 이라는 판정이 영영 오지 않았다. 알림이 남의
+    빨래에 붙은 채 풀리지 않고 "5분 전" 까지 울렸다.
+
+    이제 dryer_care 가 센 횟수를 사이클 번호로 쓴다.
+    """
+    import types
+
+    class _Stop(BaseException):
+        pass
+
+    t0 = 1_800_000_000.0
+
+    def unit(state, m=0, cyc=None):
+        if state is None:
+            return None
+        u = {"runState": {"currentState": state},
+             "timer": {"remainHour": 0, "remainMinute": m}}
+        if cyc is not None:
+            u["cycle"] = {"cycleCount": cyc}
+        return u
+
+    def status(u, unit_type):
+        s = {f"워시타워_{i}": {"washer": unit("POWER_OFF"), "dryer": unit("POWER_OFF")}
+             for i in range(1, 10)}
+        s["워시타워_3"][unit_type] = u
+        return s
+
+    names = ("time", "refresh_source_age", "load_subscriptions", "save_subscriptions",
+             "send_push_notification", "CACHED_STATUS")
+    saved = {k: getattr(srv, k) for k in names}
+    saved_urlopen, saved_caf = srv.urllib.request.urlopen, srv.cafeteria.refresh
+    saved_counts, saved_recent = srv.dryer_care.counts, device_log.recent_error
+
+    def run(steps, alarm_extra, unit_type="dryer"):
+        """steps: (경과초, 상태, 남은분, 지금_사이클번호)"""
+        clock, tags, idx = {"t": t0}, [], {"i": -1}
+        care = {"c": 0}
+        base = {"key": "3_%s" % unit_type, "towerId": 3, "unitType": unit_type,
+                "deviceName": "3호기 건조기", "targetMs": (t0 + steps[0][2] * 60) * 1000,
+                "notified5Min": False, "notified0Min": False}
+        base.update(alarm_extra)
+        subs = {"l": [{"subscription": {"endpoint": "https://example.invalid/p"},
+                       "alarm": base, "createdAt": t0}]}
+
+        def sleep(_):
+            idx["i"] += 1
+            if idx["i"] >= len(steps):
+                raise _Stop()
+            dt, stt, m, cyc = steps[idx["i"]]
+            clock["t"] = t0 + dt
+            care["c"] = cyc
+            srv.CACHED_STATUS = status(
+                unit(stt, m, cyc if unit_type == "washer" else None), unit_type)
+
+        real = saved["time"]
+        srv.time = types.SimpleNamespace(time=lambda: clock["t"], sleep=sleep,
+                                         monotonic=real.monotonic, strftime=real.strftime,
+                                         localtime=real.localtime)
+        srv.urllib.request.urlopen = lambda *a, **k: (_ for _ in ()).throw(OSError("offline"))
+        srv.refresh_source_age = lambda: None
+        srv.cafeteria.refresh = lambda: None
+        srv.dryer_care.counts = lambda: {"3호기": {"count": care["c"]}}
+        srv.load_subscriptions = lambda: list(subs["l"])
+        srv.save_subscriptions = lambda lst: subs.__setitem__("l", list(lst))
+        srv.send_push_notification = lambda sub, payload: tags.append(str(payload.get("tag") or "")) or True
+        device_log.recent_error = lambda *a, **k: None
+        try:
+            srv.background_push_worker()
+        except _Stop:
+            pass
+        return tags, subs["l"]
+
+    try:
+        # 내가 등록한 건조기(우리 셈 4회째)가 끝나고, 남이 새로 돌렸다.
+        # 남의 빨래가 5분 남은 시점에 나한테 알림이 가면 안 된다.
+        tags, left = run(
+            [(0, "RUNNING", 30, 4),      # 내 빨래가 돌고 있다
+             (300, "END", 0, 5),         # 내 빨래가 끝났다 (셈 +1)
+             (900, "RUNNING", 90, 5),    # 남이 새로 돌렸다
+             (5000, "RUNNING", 4, 5)],   # 남의 빨래가 5분 남았다
+            {"dryerCountAtRegister": 4})
+        check("내 완료는 알린다", any(t.startswith("complete") for t in tags), True)
+        check("남의 빨래 5분 전은 안 알린다",
+              any(t.startswith("5min") for t in tags), False)
+        check("남이 돌리면 알림을 뗀다", left, [])
+
+        # 끝나는 순간을 못 보고 지나갔다 (기기가 5분에 한 번만 알려준다).
+        # 셈이 늘어난 것으로 끝난 줄 알고 한 번은 알려야 한다.
+        tags, _ = run(
+            [(0, "RUNNING", 30, 4),
+             (300, "RUNNING", 80, 5)],   # END 를 못 보고 남의 빨래가 이미 돌고 있다
+            {"dryerCountAtRegister": 4})
+        check("놓친 완료도 뒤늦게 알린다",
+              any(t.startswith("complete") for t in tags), True)
+        check("그 와중에 5분 전은 안 나간다",
+              any(t.startswith("5min") for t in tags), False)
+
+        # 두 번 이상 지났으면 완료조차 보내지 않는다. 너무 늦었다.
+        tags, left = run(
+            [(0, "RUNNING", 30, 4), (300, "RUNNING", 50, 6)],
+            {"dryerCountAtRegister": 4})
+        check("한참 지난 알림은 조용히 뗀다", tags, [])
+        check("조용히 뗀 뒤 남는 것 없음", left, [])
+
+        # 아직 내 사이클이면 예전처럼 5분 전이 간다 (고치면서 막으면 안 된다)
+        tags, _ = run(
+            [(0, "RUNNING", 30, 4), (300, "RUNNING", 4, 4)],
+            {"dryerCountAtRegister": 4})
+        check("내 사이클이면 5분 전이 간다",
+              any(t.startswith("5min") for t in tags), True)
+
+        # 세탁기는 기기가 주는 누적 횟수로 같은 판단을 한다
+        tags, _ = run(
+            [(0, "RUNNING", 30, 11), (300, "RUNNING", 4, 13)],
+            {"cycleAtRegister": 11}, unit_type="washer")
+        check("세탁기도 남의 사이클엔 안 알린다",
+              any(t.startswith("5min") for t in tags), False)
+
+        # 번호를 모르는 예전 알림은 하던 대로 움직인다
+        tags, _ = run(
+            [(0, "RUNNING", 30, 0), (300, "RUNNING", 4, 0)], {})
+        check("예전 알림은 하던 대로",
+              any(t.startswith("5min") for t in tags), True)
+    finally:
+        for k, v in saved.items():
+            setattr(srv, k, v)
+        srv.urllib.request.urlopen, srv.cafeteria.refresh = saved_urlopen, saved_caf
+        srv.dryer_care.counts = saved_counts
+        device_log.recent_error = saved_recent
+
+
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
              test_unknown_states, test_device_log,
              test_source_down_does_not_block_chat, test_course_not_from_device,
              test_bot_display, test_rule_parsing, test_bot_counts_agree,
              test_server_alarm_flow, test_dryer_care,
-             test_congestion_dow, test_congestion_weekly_no_invention]
+             test_congestion_dow, test_congestion_weekly_no_invention,
+             test_alarm_stays_on_my_cycle]
     for t in tests:
         try:
             t()

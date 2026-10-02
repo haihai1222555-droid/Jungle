@@ -891,6 +891,11 @@ async function resyncPushAlarms() {
   if ('Notification' in window && Notification.permission !== 'granted') return;
   for (const alarm of myLaundryAlarms) {
     if (alarm.pushRegistered === false) continue;   // 애초에 못 건 것은 건드리지 않는다
+    // 앱을 닫아 둔 사이에 끝난 알림이 남아 있을 수 있다. 그것을 다시 걸면
+    // 서버가 남의 빨래로 5분 전 알림을 보내게 된다.
+    const _t = TOWERS.find(t => t.id === alarm.towerId);
+    const _d = _t ? globalStatusData[_t.name] : null;
+    if (_d && (alarmCycleDelta(alarm, _d) || 0) >= 2) continue;
     const ok = await syncPushAlarmToServer(alarm);
     if (alarm.pushRegistered !== ok) {
       alarm.pushRegistered = ok;
@@ -962,8 +967,13 @@ async function toggleLaundryAlarm(towerId, unitType, deviceName, remainMinutes) 
     const targetMs = Date.now() + Math.max(1, remainMinutes) * 60 * 1000;
     // 등록 시점의 누적 가동 횟수를 남겨둔다.
     // 나중에 이 값이 늘어나 있으면 '내가 등록한 사이클은 이미 끝났다'는 확실한 신호다.
+    // 제 기기의 번호를 남겨야 한다. 예전에는 건조기 알림에도 세탁기
+    // 누적을 넣고 있었다. 쓰이지 않아 드러나지 않았을 뿐 틀린 값이었다.
     const _tower = TOWERS.find(t => t.id === towerId);
-    const cycleAtRegister = _tower ? globalStatusData[_tower.name]?.washer?.cycle?.cycleCount : undefined;
+    const cycleAtRegister = (unitType === 'washer' && _tower)
+      ? globalStatusData[_tower.name]?.washer?.cycle?.cycleCount : undefined;
+    const dryerCountAtRegister = (unitType === 'dryer')
+      ? careDryerCount(towerId) : undefined;
 
     const newAlarm = {
       key,
@@ -972,6 +982,7 @@ async function toggleLaundryAlarm(towerId, unitType, deviceName, remainMinutes) 
       deviceName,
       targetMs,
       cycleAtRegister,
+      dryerCountAtRegister,
       remainMinutes,
       registeredAt: Date.now(),
       notified5Min: false,
@@ -1014,6 +1025,35 @@ const STALE_GRACE_MS = 40 * 60 * 1000; // 건조기 습도 감지 연장(최대 
 // 기기 값이 이만큼 계속 안 오면 모른다고 알린다.
 // 잠깐 끊기는 일은 흔해서 바로 알리면 시끄럽다. 봇·서버와 같은 기준이다.
 const NODATA_GRACE_MS = 3 * 60 * 1000;
+
+// 건조기가 몇 번째 사이클인지. 기기가 안 알려줘서 서버가 센 값을 쓴다.
+function careDryerCount(towerId) {
+  const v = careData.dryer[String(towerId) + '호기'];
+  return v && typeof v.count === 'number' ? v.count : undefined;
+}
+
+// 등록할 때의 사이클에서 몇 번이나 지났는지.
+//
+//   0     아직 내가 등록한 그 사이클이다
+//   1     내 사이클은 끝났다
+//   2 이상 그 뒤로도 더 돌았다. 지금 도는 것은 남의 빨래다
+//   null  알 수 없다 (이 기능 이전에 등록된 알림)
+//
+// 통살균을 돌리면 두 값 모두 0 으로 되돌아간다. 되돌아간 것을 봤으면
+// 내 사이클은 이미 한참 전에 끝난 것이므로 2 로 본다.
+function alarmCycleDelta(item, towerData) {
+  let at, nowCount;
+  if (item.unitType === 'washer') {
+    at = item.cycleAtRegister;
+    nowCount = towerData?.washer?.cycle?.cycleCount;
+  } else {
+    at = item.dryerCountAtRegister;
+    nowCount = careDryerCount(item.towerId);
+  }
+  if (typeof at !== 'number' || typeof nowCount !== 'number') return null;
+  const d = nowCount - at;
+  return d < 0 ? 2 : d;
+}
 
 function isAlarmStale(item, towerData, now) {
   // 1) 세탁기: 누적 가동 횟수가 늘었으면 내 사이클은 확실히 종료됨
@@ -1177,9 +1217,18 @@ setInterval(() => {
       changed = true;
     }
 
-    // 🧹 0) 내가 등록했던 사이클이 이미 끝났으면 조용히 해제하고 건너뛴다.
+    // 🧹 0) 내가 등록했던 사이클에서 두 번 이상 지났으면 조용히 해제한다.
     //       (그대로 두면 다음 사람 빨래에 내 알림이 울린다)
-    if (isAlarmStale(item, data, now)) {
+    //
+    //       한 번만 지난 것(= 내 사이클이 막 끝난 것)은 여기서 떼지 않는다.
+    //       아래 완료 처리가 알림을 띄우고 나서 떼야 한다.
+    const cycleDelta = alarmCycleDelta(item, data);
+    if (cycleDelta !== null && cycleDelta >= 2) {
+      staleKeys.push(item.key);
+      return;
+    }
+    // 사이클 번호를 모를 때만 시간으로 짐작한다
+    if (cycleDelta === null && isAlarmStale(item, data, now)) {
       staleKeys.push(item.key);
       return;
     }
@@ -1188,8 +1237,13 @@ setInterval(() => {
     // 등록할 때 정한 시각만 믿으면, 오래 멈췄다 다시 도는 내 빨래를 '지난 빨래' 로 보고
     // 조용히 지웠다 (서버 푸시 구독까지). 멈춘 동안에도 남은 시간은 그대로 온다.
     // 앱을 껐다 켰을 때의 정리는 위에서 먼저 하므로 그 보호는 그대로다.
+    //
+    // 미는 것은 아직 내 사이클일 때만 한다. 예전에는 조건 없이 밀어서,
+    // 남이 새로 돌리면 그 남은 시간으로 예상 완료가 계속 미뤄졌다.
+    // 그러면 '예상 완료 + 40분' 이라는 지난 빨래 판정이 영영 안 왔고,
+    // 알림이 남의 빨래에 들러붙은 채 풀리지 않았다.
     const liveMin = (unitTimer.remainHour || 0) * 60 + (unitTimer.remainMinute || 0);
-    if (liveMin > 0) {
+    if (liveMin > 0 && (cycleDelta === null || cycleDelta === 0)) {
       const nextTarget = now + liveMin * 60 * 1000;
       if (nextTarget > item.targetMs + 60 * 1000) {
         item.targetMs = nextTarget;
@@ -1252,7 +1306,9 @@ setInterval(() => {
     const remainMin = estimateRemainMinutes(unitTimer, runState, item, now);
 
     // 2) 내가 선택한 특정 기기 5분 전 도달 시 알림
-    if (!isStopped && remainMin <= 5 && remainMin > 0 && !item.notified5Min) {
+    // 내 사이클일 때만 보낸다. 아니면 남의 빨래를 두고 나한테 알리게 된다.
+    if (!isStopped && (cycleDelta === null || cycleDelta === 0)
+        && remainMin <= 5 && remainMin > 0 && !item.notified5Min) {
       item.notified5Min = true;
       changed = true;
 
@@ -1275,9 +1331,11 @@ setInterval(() => {
     const stillGoing = ['RUNNING', 'WASHING', 'RINSING', 'SPINNING', 'SOAKING',
                         'DRYING', 'COOLING', 'DETECTING', 'RESERVED',
                         'UNKNOWN_RUNNING'].includes(runState);
-    const isFinished = !stillGoing && (
+    // 사이클 번호가 넘어갔으면 끝난 것이 분명하다. 기기가 몇 분에 한 번만
+    // 알려줘서 END 를 못 보고 지나가는 일이 있는데, 그때도 놓치지 않는다.
+    const isFinished = (cycleDelta !== null && cycleDelta >= 1) || (!stillGoing && (
       remainMin === 0 || runState === 'END' || runState === 'COMPLETE'
-      || runState === 'WRINKLE_CARE' || now >= item.targetMs);
+      || runState === 'WRINKLE_CARE' || now >= item.targetMs));
     if (!isStopped && isFinished && !item.notified0Min) {
       item.notified0Min = true;
       changed = true;
