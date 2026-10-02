@@ -1108,11 +1108,16 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             return
         # UptimeRobot 등이 주기적으로 두드려 서비스가 잠들지 않게 하는 용도
         if req_path == '/api/health':
-            self.send_response(200)
+            # 값이 멈췄으면 2xx 를 주지 않는다. 감시 도구가 그대로 잡는다.
+            # 우리 서버가 살아 있는 것과 보여줄 값이 살아 있는 것은 다르다.
+            stale = source_is_stale()
+            self.send_response(503 if stale else 200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.end_headers()
             self.wfile.write(json.dumps({
-                "ok": True,
+                "ok": not stale,
+                # 사람이 읽을 한 마디. 감시 도구에 낱말로 걸어도 된다.
+                "source": "값이 멈췄습니다" if stale else "정상",
                 "webpush": HAS_WEBPUSH,
                 "alarms": len(load_subscriptions()),
                 "store": state_store.store_enabled(),
@@ -1857,6 +1862,25 @@ def source_interval_min(default=5):
     if SOURCE_INTERVAL_SEC > 0:
         return max(1, round(SOURCE_INTERVAL_SEC / 60))
     return default
+
+
+# 원본이 이만큼 소식이 없으면 값이 멈춘 것으로 본다.
+# 주기의 세 배, 최소 15분. 한 번쯤 거르는 것으로는 울리지 않는다.
+SOURCE_STALE_MIN_SEC = int(os.environ.get('SOURCE_STALE_MIN_SEC') or 15 * 60)
+
+
+def source_is_stale():
+    """원본에서 새 값이 끊긴 지 오래됐는지.
+
+    source_age_sec() 을 쓰지 않고 시각을 직접 본다. 그쪽은 값이 말이 안 되게
+    오래되면 '모른다(None)' 고 답하는데, 여기서는 그 경우야말로 울려야 한다.
+    """
+    if not SOURCE_UPDATED_AT:
+        # 서버를 막 켰다. 원본을 아직 한 번도 못 봤을 뿐이다.
+        # 모르는 것으로 장애를 알리면 배포할 때마다 울린다.
+        return False
+    limit = max(SOURCE_STALE_MIN_SEC, (SOURCE_INTERVAL_SEC or 300) * 3)
+    return (time.time() - SOURCE_UPDATED_AT) > limit
 
 
 def source_age_sec():

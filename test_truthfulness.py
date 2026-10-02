@@ -695,6 +695,45 @@ def test_alarm_stays_on_my_cycle():
         device_log.recent_error = saved_recent
 
 
+# =========================================================
+# 16. 값이 멈춘 것을 밖에서도 알 수 있는지
+# =========================================================
+def test_health_reports_stale_source():
+    """우리 서버가 살아 있는 것과 보여줄 값이 살아 있는 것은 다르다.
+
+    9월에 원본이 죽었을 때 우리 서버는 200 을 주면서 옛날 값을 보여줬다.
+    밖에서 보면 멀쩡해 보였고, 감시 기록에 100% 로 남았다.
+    """
+    import start_server as S
+
+    keep = (S.SOURCE_UPDATED_AT, S.SOURCE_INTERVAL_SEC)
+    try:
+        S.SOURCE_INTERVAL_SEC = 300          # 원본은 5분마다 본다
+
+        # 막 켰다. 원본을 아직 한 번도 못 봤다.
+        S.SOURCE_UPDATED_AT = 0
+        check("모르는 것으로 장애를 알리지 않는다", S.source_is_stale(), False)
+
+        now = S.time.time()
+        S.SOURCE_UPDATED_AT = now - 310      # 한 번 걸렀다
+        check("한 번 거른 것으로는 안 울린다", S.source_is_stale(), False)
+
+        S.SOURCE_UPDATED_AT = now - 14 * 60  # 14분
+        check("문턱 아래는 정상", S.source_is_stale(), False)
+
+        S.SOURCE_UPDATED_AT = now - 16 * 60  # 16분
+        check("15분 넘으면 멈춘 것으로 본다", S.source_is_stale(), True)
+
+        # 원본 주기가 길어지면 문턱도 따라 늘어난다 (주기의 세 배)
+        S.SOURCE_INTERVAL_SEC = 1800         # 30분 주기
+        S.SOURCE_UPDATED_AT = now - 60 * 60  # 1시간
+        check("주기가 길면 문턱도 는다", S.source_is_stale(), False)
+        S.SOURCE_UPDATED_AT = now - 100 * 60
+        check("그래도 너무 오래면 울린다", S.source_is_stale(), True)
+    finally:
+        S.SOURCE_UPDATED_AT, S.SOURCE_INTERVAL_SEC = keep
+
+
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
              test_unknown_states, test_device_log,
@@ -702,7 +741,7 @@ def main():
              test_bot_display, test_rule_parsing, test_bot_counts_agree,
              test_server_alarm_flow, test_dryer_care,
              test_congestion_dow, test_congestion_weekly_no_invention,
-             test_alarm_stays_on_my_cycle]
+             test_alarm_stays_on_my_cycle, test_health_reports_stale_source]
     for t in tests:
         try:
             t()
