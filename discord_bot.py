@@ -5,6 +5,7 @@ import io
 import unicodedata
 import json
 import asyncio
+import concurrent.futures
 import time
 import random
 import threading
@@ -1311,18 +1312,28 @@ _QUOTA_LOCK = threading.Lock()
 QUOTA_COOLDOWN_DEFAULT = 60    # 알려주지 않으면 1분 쉬어 본다
 QUOTA_COOLDOWN_MAX = 3600
 
-# 한 번 요청에 이만큼까지만 기다린다. 정상 응답이 2초 안팎이다.
-GEMINI_TIMEOUT = 5
+# 한 번 요청에 이만큼까지만 기다린다.
+# 실측 평소 응답이 1.5초다. 5초로 잡아 뒀더니, 가끔 나는 일시적인 체증을
+# '아픈 조합' 으로 적어 두고 30초·60초씩 쉬게 했다. 살아있는 조합이
+# 2키 x 2모델 = 4칸뿐이라 몇 개만 쉬어도 금방 전부 막혀 Groq 으로 직행했다.
+GEMINI_TIMEOUT = 8
 # 이만큼 기다려도 제미나이가 안 오면 그때 Groq 도 부른다.
 # 제미나이가 건강하면 여기서 이미 끝나므로 Groq 을 부르지 않는다.
 # Groq 도 한도가 있어서, 매번 부르면 정작 필요할 때 못 쓴다.
-GROQ_JOIN_AFTER = 2.0
+#
+# 2.0초로 두었더니 평소 응답(1.5초)과의 사이가 0.5초뿐이라, 조금만
+# 흔들려도 Groq 이 깼다. 깨어난 Groq 은 답을 안 쓰더라도 한도는 그대로
+# 쓴다 — 실제로 429 가 찍혔다. 아껴 두려던 예비 엔진이 헛돌며 닳았다.
+GROQ_JOIN_AFTER = 3.0
 # Groq 을 부른 뒤에도 제미나이에게 주는 시간.
 # 제미나이만 정글 안내 전문을 받으므로 답이 더 낫다.
 GEMINI_GRACE = 2.0
 # 제미나이에 쓸 전체 시간. 이걸 넘기면 미련 없이 Groq 으로 넘어간다.
-# Groq 이 1.5~2초에 답하므로 최악이 10초쯤에서 끝난다.
-GEMINI_BUDGET = 8
+# 한 번 상한(8초)보다 넉넉해야 한다. 같으면 늘어진 한 번이 예산을 통째로
+# 먹어 둘째 키를 아예 못 써 본다.
+# 사용자가 기다리는 시간은 이 값이 아니라 GROQ_JOIN_AFTER + GEMINI_GRACE
+# (3+2=5초) 로 정해진다. 그 뒤에는 Groq 답을 쓴다.
+GEMINI_BUDGET = 12
 # 늘어지거나 서버가 아플 때 그 조합을 쉬게 하는 첫 시간.
 # 기억하지 않으면 다음 사람이 같은 시간을 또 버린다.
 SLOW_COOLDOWN = 30
@@ -1777,11 +1788,15 @@ GROQ_MODELS = [
 ]
 # 앞에서부터 시도한다. 앞쪽이 더 똑똑하고, 뒤로 갈수록 가볍고 빠르다.
 # (뒤쪽은 앞 모델이 혼잡할 때를 대비한 예비용이다)
+# 서버에서 직접 잰 값이다 (실제 질문과 같은 몸통, 2026-10-02).
+# 한도는 모델마다 따로 잡히므로 여러 개를 두는 것이 그대로 여유가 된다.
 GEMINI_MODELS = [
-    "gemini-3.5-flash-lite",   # 실측 2.34초, 정답 5/5 — 가장 빠르다
-    "gemini-3.1-flash-lite",   # 실측 3.92초, 정답 5/5 — 한도가 따로다
-    "gemini-3.5-flash",        # 실측 3.57초 — 또 다른 한도
+    "gemini-3.5-flash-lite",   # 0.78~0.79초 — 평소 이 줄에서 끝난다
+    "gemini-3.1-flash-lite",   # 2.55~3.35초 — 위가 한도에 걸렸을 때
 ]
+# gemini-3.5-flash 는 뺐다. 같은 조건에서 11.3~11.8초가 나온다.
+# 예산(아래 GEMINI_BUDGET) 안에 들어올 수가 없어서, 차례가 와도
+# 시간만 버리고 Groq 으로 넘어가게 만들었다.
 
 # 사람별 대화 기억. 공용 채널에서 여러 명이 말해도 섞이면 안 되므로
 # 반드시 사용자 ID 를 열쇠로 쓴다.
@@ -1800,9 +1815,27 @@ def get_history(user_id):
     return (h.get("turns") or [])
 
 
+def _sweep_history(now):
+    """오래된 대화 기억을 치운다.
+
+    get_history 는 그 사람이 다시 말을 걸 때만 지운다. 한 번 묻고 안 오는
+    사람 것은 영영 남는다. 한 사람당 8턴 x 1500자라, 쓰는 사람이 늘면
+    메모리 954MB 짜리 기계에서는 부담이 된다.
+    """
+    old = [k for k, v in CHAT_HISTORY.items()
+           if now - (v.get("at") or 0) > CHAT_TTL_SEC]
+    for k in old:
+        CHAT_HISTORY.pop(k, None)
+        LAST_CONTEXT.pop(k, None)
+
+
 def push_history(user_id, role, text):
     if not text:
         return
+    now = datetime.now().timestamp()
+    # 가끔 한 번씩만 쓸어도 충분하다. 매번 전체를 훑을 일이 아니다.
+    if len(CHAT_HISTORY) > 50:
+        _sweep_history(now)
     h = CHAT_HISTORY.setdefault(user_id, {"turns": [], "at": 0})
     h["turns"].append({"role": role, "parts": [{"text": text[:1500]}]})
     h["turns"] = h["turns"][-CHAT_MAX_TURNS:]
@@ -2550,12 +2583,14 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                     _mark_key_dead(key, f"HTTP {e.code}")
                     continue
                 # 5xx 는 구글 쪽이 아픈 것이다. 바로 다시 물어도 또 아프다.
+                # 다만 이 키의 사정일 수 있으니 다음 키는 써 본다.
                 if e.code >= 500:
                     rest, cnt = _slow_block(model, key)
                     print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} "
                           f"HTTP {e.code} — {rest:.0f}초 쉼 (연속 {cnt}번째)")
-                else:
-                    print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} HTTP {e.code}")
+                    continue
+                # 4xx 는 보낸 내용 문제다. 키를 바꿔도 똑같으므로 이 모델은 접는다.
+                print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} HTTP {e.code}")
                 break
             except Exception as e:
                 # 늘어진 조합을 기억해 둔다.
@@ -2563,7 +2598,11 @@ def ask_gemini(text, status_data, mine, history=None, admin=False):
                 rest, cnt = _slow_block(model, key)
                 print(f"[Gemini] {model} 키#{GEMINI_API_KEYS.index(key) + 1} "
                       f"실패({e}) — {rest:.0f}초 쉼 (연속 {cnt}번째)")
-                break
+                # 늘어진 것은 이 조합의 사정이지 모델 전체의 사정이 아니다.
+                # 예전에는 여기서 모델을 통째로 접어, 0.78초짜리 다른 키를
+                # 건너뛰고 2.55초짜리 다음 모델로 갔다. 다음 키로 이어 간다.
+                # (예산이 모자라면 위의 left < 2 가 먼저 끊는다)
+                continue
     if tried == 0:
         blocked, total, _ = quota_status()
         print(f"[Gemini] {blocked}/{total} 조합이 한도로 쉬는 중 — 바로 Groq 로")
@@ -2694,7 +2733,7 @@ async def run_assistant(user_id, text, private=True):
             status_data = await asyncio.to_thread(fetch_live_status)
             mine = [a for a in active_alarms if a.get("userId") == user_id]
             fn = ask_groq if forced == "groq" else ask_gemini
-            plan = await asyncio.to_thread(fn, stripped, status_data, mine, None, True)
+            plan = await _ai_thread(fn, stripped, status_data, mine, None, True)
             if not plan:
                 return f"⚠️ {forced} 엔진이 답하지 못했습니다. (한도 초과이거나 혼잡)", None, False
             return f"{(plan.get('reply') or '').strip()}\n-# {LAST_ENGINE}", None, False
@@ -2900,6 +2939,28 @@ async def _finish(task, label):
         return None
 
 
+# AI 호출만 쓰는 일꾼들.
+#
+# asyncio.to_thread 는 기본 풀을 쓴다. 이 서버는 2코어라 기본 풀이 6명뿐인데,
+# 그 풀을 배치도 그림 그리기와 상태 가져오기까지 같이 쓴다(코드에 33군데).
+# 무거운 일이 돌면 AI 쪽 소켓 읽기가 제때 못 돌아 시간 초과가 난다.
+# 실제로 시간 초과 세 번이 모두 질문이 몰린 같은 구간에 났다.
+#
+# 따로 떼어 두면 그림을 그리는 중에도 AI 는 제 차례를 기다리지 않는다.
+AI_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="ai")
+
+
+async def _ai_thread(fn, *args):
+    """AI 함수를 전용 일꾼에게 맡긴다. asyncio.to_thread 대신 쓴다.
+
+    async 로 둬야 한다. run_in_executor 는 코루틴이 아니라 Future 를 주는데,
+    asyncio.create_task() 는 코루틴만 받는다. 그냥 돌려주면
+    "a coroutine was expected, got Future" 로 모든 질문이 터진다.
+    """
+    return await asyncio.get_running_loop().run_in_executor(AI_POOL, fn, *args)
+
+
 def _peek(task, label):
     """이미 끝난 작업에서 결과를 꺼낸다."""
     try:
@@ -2918,7 +2979,7 @@ async def _ask_ai(text, status_data, mine, hist, is_admin):
     제미나이가 진짜 죽은 날에 기댈 곳이 남는다.
     """
     g = asyncio.create_task(
-        asyncio.to_thread(ask_gemini, text, status_data, mine, hist, is_admin))
+        _ai_thread(ask_gemini, text, status_data, mine, hist, is_admin))
 
     # 1) 잠깐은 제미나이만 기다린다. 대개 여기서 끝난다.
     done, _ = await asyncio.wait({g}, timeout=GROQ_JOIN_AFTER)
@@ -2928,13 +2989,13 @@ async def _ask_ai(text, status_data, mine, hist, is_admin):
             return plan
         # 제미나이가 실패했다. 이제 Groq 차례다.
         return await _finish(
-            asyncio.to_thread(ask_groq, text, status_data, mine, hist, is_admin),
+            _ai_thread(ask_groq, text, status_data, mine, hist, is_admin),
             "Groq")
 
     # 2) 늦는다. Groq 을 붙인다.
     print(f"[Assistant] 제미나이가 {GROQ_JOIN_AFTER:.0f}초 안에 안 와 Groq 도 부릅니다")
     q = asyncio.create_task(
-        asyncio.to_thread(ask_groq, text, status_data, mine, hist, is_admin))
+        _ai_thread(ask_groq, text, status_data, mine, hist, is_admin))
 
     # 3) 제미나이에게 조금 더 준다. 답이 더 나으므로 기다릴 값어치가 있다.
     done, _ = await asyncio.wait({g}, timeout=GEMINI_GRACE)
@@ -2984,6 +3045,11 @@ async def _run_assistant_inner(user_id, text):
         # 동시에 돌았으므로 전역 변수는 상대 엔진 것일 수 있다.
         global LAST_ENGINE
         LAST_ENGINE = plan.get("_engine") or LAST_ENGINE
+        # 실제로 사용자에게 간 답이 어느 엔진 것인지 남긴다.
+        # [Groq] ... 로 답했습니다 는 Groq 이 끝났다는 뜻일 뿐이다. 제미나이가
+        # 먼저 와서 취소해도 이미 돌던 스레드는 안 멈춰 그 줄이 그대로 찍힌다.
+        # 그래서 로그만 보면 Groq 이 다 답한 것처럼 보였다.
+        print(f"[Assistant] 답한 엔진: {LAST_ENGINE}")
 
     if plan is None:
         # AI 가 둘 다 막혔다. 규칙으로라도 기본 동작은 살린다.

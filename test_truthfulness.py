@@ -491,13 +491,322 @@ def test_congestion_dow():
         S.CONGESTION["hours"], S.CONGESTION["dow"], S.CONGESTION["published"] = keep
 
 
+# =========================================================
+# 14. 안 잰 요일에 숫자를 지어내지 않는지
+# =========================================================
+def test_congestion_weekly_no_invention():
+    """한동안 안 잰 요일에 고정표(32·38·42…)를 넣고 '실측' 이라고 적었다.
+
+    7일 중 5일이 지어낸 값이었다. 요일별 집계는 붙은 지 얼마 안 돼서
+    '지난주' 값은 있을 수가 없었는데도 머리말이 지난주라고 말했다.
+    숫자가 적힌 요일은 반드시 잰 요일이어야 한다.
+    """
+    import start_server as S
+
+    keep = (S.CONGESTION.get("hours"), S.CONGESTION.get("dow"),
+            S.CONGESTION.get("published"), S.CONGESTION.get("daily"))
+    full = lambda b: {str(h): {"s": 1000, "b": b} for h in range(24)}
+    try:
+        # (1) 요일별이 하나도 없을 때 — 일곱 칸 모두 비어 있어야 한다
+        S.CONGESTION["published"] = None
+        S.CONGESTION["daily"] = {}
+        S.CONGESTION["hours"] = full(100)
+        S.CONGESTION["dow"] = {}
+
+        w = S.build_congestion_profile(weekday=0)["weekly"]
+        check("안 잰 요일 수", sum(1 for d in w["days"]
+                                if d["utilizationRate"] is None), 7)
+        check("안 쟀으면 ready 아님", w["ready"], False)
+        check("잰 요일 수", w["measuredDays"], 0)
+        check("머리말이 모으는 중이라 말하나",
+              "모으는 중" in w["basisLabel"], True)
+        check("안 잰 칸은 좋다 나쁘다 안 함",
+              set(d["level"] for d in w["days"]), {"unknown"})
+
+        # (2) 이번 주에 화요일만 쌓였을 때
+        S.CONGESTION["dow"] = {"1-%d" % h: {"s": 1000, "b": 700} for h in range(24)}
+        w = S.build_congestion_profile(weekday=0)["weekly"]
+        got = {d["label"]: d["utilizationRate"] for d in w["days"]}
+        check("화요일만 숫자가 있다",
+              [k for k, v in got.items() if v is not None], ["화요일"])
+        check("화요일 값", got["화요일"], 70)
+        check("잰 요일 수(1)", w["measuredDays"], 1)
+        check("몇 일 찼는지 밝히나", "7일 중 1일" in w["basisLabel"], True)
+        # 지난주 것이 아니라 이번 주 것이다. 머리말이 지난주라고 하면 안 된다.
+        check("출처를 이번 주라고 적나",
+              "이번 주" in w["basisLabel"], True)
+        check("지난주라고 하지 않나", "지난주" in w["basisLabel"], False)
+
+        # (3) 지난주 확정판이 일곱 요일 다 있을 때
+        S.CONGESTION["published"] = {
+            "hours": full(100), "week": "2026-W39", "at": "2026-09-28",
+            "dow": {"%d-%d" % (d, h): {"s": 1000, "b": 300}
+                    for d in range(7) for h in range(24)},
+        }
+        S.CONGESTION["dow"] = {}
+        w = S.build_congestion_profile(weekday=0)["weekly"]
+        check("일곱 요일 다 숫자", sum(1 for d in w["days"]
+                                 if d["utilizationRate"] == 30), 7)
+        check("잰 요일 수(7)", w["measuredDays"], 7)
+        check("다 찼으면 모으는 중이라 안 함",
+              "모으는 중" in w["basisLabel"], False)
+    finally:
+        (S.CONGESTION["hours"], S.CONGESTION["dow"],
+         S.CONGESTION["published"], S.CONGESTION["daily"]) = keep
+
+
+# =========================================================
+# 15. 알림은 내가 등록한 그 사이클의 것이다
+# =========================================================
+def test_alarm_stays_on_my_cycle():
+    """남이 새로 돌린 빨래에 내 알림이 들러붙지 않는지.
+
+    건조기는 기기가 누적 횟수를 안 준다. 그래서 예전에는 시간으로만
+    짐작했는데, 기기가 돌고 있으면 예상 완료 시각을 그 남은 시간으로
+    계속 뒤로 밀고 있었다. 남이 새로 돌리면 그 남은 시간으로 밀렸고,
+    '예상 완료 + 40분' 이라는 판정이 영영 오지 않았다. 알림이 남의
+    빨래에 붙은 채 풀리지 않고 "5분 전" 까지 울렸다.
+
+    이제 dryer_care 가 센 횟수를 사이클 번호로 쓴다.
+    """
+    import types
+
+    class _Stop(BaseException):
+        pass
+
+    t0 = 1_800_000_000.0
+
+    def unit(state, m=0, cyc=None):
+        if state is None:
+            return None
+        u = {"runState": {"currentState": state},
+             "timer": {"remainHour": 0, "remainMinute": m}}
+        if cyc is not None:
+            u["cycle"] = {"cycleCount": cyc}
+        return u
+
+    def status(u, unit_type):
+        s = {f"워시타워_{i}": {"washer": unit("POWER_OFF"), "dryer": unit("POWER_OFF")}
+             for i in range(1, 10)}
+        s["워시타워_3"][unit_type] = u
+        return s
+
+    names = ("time", "refresh_source_age", "load_subscriptions", "save_subscriptions",
+             "send_push_notification", "CACHED_STATUS")
+    saved = {k: getattr(srv, k) for k in names}
+    saved_urlopen, saved_caf = srv.urllib.request.urlopen, srv.cafeteria.refresh
+    saved_counts, saved_recent = srv.dryer_care.counts, device_log.recent_error
+
+    def run(steps, alarm_extra, unit_type="dryer"):
+        """steps: (경과초, 상태, 남은분, 지금_사이클번호)"""
+        clock, tags, idx = {"t": t0}, [], {"i": -1}
+        care = {"c": 0}
+        base = {"key": "3_%s" % unit_type, "towerId": 3, "unitType": unit_type,
+                "deviceName": "3호기 건조기", "targetMs": (t0 + steps[0][2] * 60) * 1000,
+                "notified5Min": False, "notified0Min": False}
+        base.update(alarm_extra)
+        subs = {"l": [{"subscription": {"endpoint": "https://example.invalid/p"},
+                       "alarm": base, "createdAt": t0}]}
+
+        def sleep(_):
+            idx["i"] += 1
+            if idx["i"] >= len(steps):
+                raise _Stop()
+            dt, stt, m, cyc = steps[idx["i"]]
+            clock["t"] = t0 + dt
+            care["c"] = cyc
+            srv.CACHED_STATUS = status(
+                unit(stt, m, cyc if unit_type == "washer" else None), unit_type)
+
+        real = saved["time"]
+        srv.time = types.SimpleNamespace(time=lambda: clock["t"], sleep=sleep,
+                                         monotonic=real.monotonic, strftime=real.strftime,
+                                         localtime=real.localtime)
+        srv.urllib.request.urlopen = lambda *a, **k: (_ for _ in ()).throw(OSError("offline"))
+        srv.refresh_source_age = lambda: None
+        srv.cafeteria.refresh = lambda: None
+        srv.dryer_care.counts = lambda: {"3호기": {"count": care["c"]}}
+        srv.load_subscriptions = lambda: list(subs["l"])
+        srv.save_subscriptions = lambda lst: subs.__setitem__("l", list(lst))
+        srv.send_push_notification = lambda sub, payload: tags.append(str(payload.get("tag") or "")) or True
+        device_log.recent_error = lambda *a, **k: None
+        try:
+            srv.background_push_worker()
+        except _Stop:
+            pass
+        return tags, subs["l"]
+
+    try:
+        # 내가 등록한 건조기(우리 셈 4회째)가 끝나고, 남이 새로 돌렸다.
+        # 남의 빨래가 5분 남은 시점에 나한테 알림이 가면 안 된다.
+        tags, left = run(
+            [(0, "RUNNING", 30, 4),      # 내 빨래가 돌고 있다
+             (300, "END", 0, 5),         # 내 빨래가 끝났다 (셈 +1)
+             (900, "RUNNING", 90, 5),    # 남이 새로 돌렸다
+             (5000, "RUNNING", 4, 5)],   # 남의 빨래가 5분 남았다
+            {"dryerCountAtRegister": 4})
+        check("내 완료는 알린다", any(t.startswith("complete") for t in tags), True)
+        check("남의 빨래 5분 전은 안 알린다",
+              any(t.startswith("5min") for t in tags), False)
+        check("남이 돌리면 알림을 뗀다", left, [])
+
+        # 끝나는 순간을 못 보고 지나갔다 (기기가 5분에 한 번만 알려준다).
+        # 셈이 늘어난 것으로 끝난 줄 알고 한 번은 알려야 한다.
+        tags, _ = run(
+            [(0, "RUNNING", 30, 4),
+             (300, "RUNNING", 80, 5)],   # END 를 못 보고 남의 빨래가 이미 돌고 있다
+            {"dryerCountAtRegister": 4})
+        check("놓친 완료도 뒤늦게 알린다",
+              any(t.startswith("complete") for t in tags), True)
+        check("그 와중에 5분 전은 안 나간다",
+              any(t.startswith("5min") for t in tags), False)
+
+        # 두 번 이상 지났으면 완료조차 보내지 않는다. 너무 늦었다.
+        tags, left = run(
+            [(0, "RUNNING", 30, 4), (300, "RUNNING", 50, 6)],
+            {"dryerCountAtRegister": 4})
+        check("한참 지난 알림은 조용히 뗀다", tags, [])
+        check("조용히 뗀 뒤 남는 것 없음", left, [])
+
+        # 아직 내 사이클이면 예전처럼 5분 전이 간다 (고치면서 막으면 안 된다)
+        tags, _ = run(
+            [(0, "RUNNING", 30, 4), (300, "RUNNING", 4, 4)],
+            {"dryerCountAtRegister": 4})
+        check("내 사이클이면 5분 전이 간다",
+              any(t.startswith("5min") for t in tags), True)
+
+        # 세탁기는 기기가 주는 누적 횟수로 같은 판단을 한다
+        tags, _ = run(
+            [(0, "RUNNING", 30, 11), (300, "RUNNING", 4, 13)],
+            {"cycleAtRegister": 11}, unit_type="washer")
+        check("세탁기도 남의 사이클엔 안 알린다",
+              any(t.startswith("5min") for t in tags), False)
+
+        # 번호를 모르는 예전 알림은 하던 대로 움직인다
+        tags, _ = run(
+            [(0, "RUNNING", 30, 0), (300, "RUNNING", 4, 0)], {})
+        check("예전 알림은 하던 대로",
+              any(t.startswith("5min") for t in tags), True)
+    finally:
+        for k, v in saved.items():
+            setattr(srv, k, v)
+        srv.urllib.request.urlopen, srv.cafeteria.refresh = saved_urlopen, saved_caf
+        srv.dryer_care.counts = saved_counts
+        device_log.recent_error = saved_recent
+
+
+# =========================================================
+# 16. 값이 멈춘 것을 밖에서도 알 수 있는지
+# =========================================================
+def test_health_reports_stale_source():
+    """우리 서버가 살아 있는 것과 보여줄 값이 살아 있는 것은 다르다.
+
+    9월에 원본이 죽었을 때 우리 서버는 200 을 주면서 옛날 값을 보여줬다.
+    밖에서 보면 멀쩡해 보였고, 감시 기록에 100% 로 남았다.
+    """
+    import start_server as S
+
+    keep = (S.SOURCE_UPDATED_AT, S.SOURCE_INTERVAL_SEC)
+    try:
+        S.SOURCE_INTERVAL_SEC = 300          # 원본은 5분마다 본다
+
+        # 막 켰다. 원본을 아직 한 번도 못 봤다.
+        S.SOURCE_UPDATED_AT = 0
+        check("모르는 것으로 장애를 알리지 않는다", S.source_is_stale(), False)
+
+        now = S.time.time()
+        S.SOURCE_UPDATED_AT = now - 310      # 한 번 걸렀다
+        check("한 번 거른 것으로는 안 울린다", S.source_is_stale(), False)
+
+        S.SOURCE_UPDATED_AT = now - 14 * 60  # 14분
+        check("문턱 아래는 정상", S.source_is_stale(), False)
+
+        S.SOURCE_UPDATED_AT = now - 16 * 60  # 16분
+        check("15분 넘으면 멈춘 것으로 본다", S.source_is_stale(), True)
+
+        # 원본 주기가 길어지면 문턱도 따라 늘어난다 (주기의 세 배)
+        S.SOURCE_INTERVAL_SEC = 1800         # 30분 주기
+        S.SOURCE_UPDATED_AT = now - 60 * 60  # 1시간
+        check("주기가 길면 문턱도 는다", S.source_is_stale(), False)
+        S.SOURCE_UPDATED_AT = now - 100 * 60
+        check("그래도 너무 오래면 울린다", S.source_is_stale(), True)
+    finally:
+        S.SOURCE_UPDATED_AT, S.SOURCE_INTERVAL_SEC = keep
+
+
+# =========================================================
+# 17. 키 하나가 늘어져도 같은 모델의 다른 키를 써 보는지
+# =========================================================
+def test_gemini_tries_next_key():
+    """늘어지는 것은 그 조합의 사정이지 모델 전체의 사정이 아니다.
+
+    예전에는 시간 초과가 나면 break 로 모델을 통째로 접었다. 실측상
+    flash-lite 두 키가 모두 0.78초인데, 한쪽이 한 번 늘어졌다고 다른 쪽을
+    안 써 보고 2.55초짜리 다음 모델로 넘어갔다.
+    """
+    import json as _json
+
+    keep_keys = bot.GEMINI_API_KEYS
+    keep_open = bot.urllib.request.urlopen
+    keep_models = bot.GEMINI_MODELS
+    try:
+        bot.GEMINI_API_KEYS = ["KEY_A", "KEY_B"]
+        bot.GEMINI_MODELS = ["model-1", "model-2"]
+        bot._QUOTA_BLOCKED.clear()
+        bot._FAIL_STREAK.clear()
+        bot._DEAD_KEYS.clear()
+        tried = []
+
+        class _Res:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self, *a):
+                # security.read_capped 가 read(상한) 으로 부른다
+                return _json.dumps({"candidates": [{"content": {"parts": [
+                    {"text": '{"reply": "됐다"}'}]}}]}).encode()
+
+        def fake(req, *a, **k):
+            url = req.full_url
+            # 다른 스레드(혼잡도 수집 등)가 쓰는 주소는 그대로 흘려보낸다.
+            # 안 그러면 엉뚱한 곳에서 터져 로그가 헷갈린다.
+            if "/models/" not in url:
+                return keep_open(req, *a, **k)
+            model = url.split("/models/")[1].split(":")[0]
+            key = url.split("key=")[1]
+            tried.append((model, key))
+            if key == "KEY_A":
+                raise TimeoutError("The read operation timed out")
+            return _Res()
+
+        bot.urllib.request.urlopen = fake
+        plan = bot.ask_gemini("비었어?", {}, None, None, False)
+
+        check("답을 받아냈나", bool(plan), True)
+        # 첫 키가 늘어졌어도 같은 모델의 둘째 키를 써 봐야 한다
+        check("같은 모델에서 다음 키를 써 봤나",
+              ("model-1", "KEY_B") in tried, True)
+        # 둘째 모델까지 갈 일이 없다
+        check("다음 모델로 넘어가지 않았나",
+              any(m == "model-2" for m, _ in tried), False)
+        check("어느 키로 답했나", "키 2번" in (plan or {}).get("_engine", ""), True)
+    finally:
+        bot.GEMINI_API_KEYS = keep_keys
+        bot.GEMINI_MODELS = keep_models
+        bot.urllib.request.urlopen = keep_open
+        bot._QUOTA_BLOCKED.clear()
+        bot._FAIL_STREAK.clear()
+        bot._DEAD_KEYS.clear()
+
+
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
              test_unknown_states, test_device_log,
              test_source_down_does_not_block_chat, test_course_not_from_device,
              test_bot_display, test_rule_parsing, test_bot_counts_agree,
              test_server_alarm_flow, test_dryer_care,
-             test_congestion_dow]
+             test_congestion_dow, test_congestion_weekly_no_invention,
+             test_alarm_stays_on_my_cycle, test_health_reports_stale_source,
+             test_gemini_tries_next_key]
     for t in tests:
         try:
             t()

@@ -166,6 +166,33 @@ KNOWN_STATES = RUNNING_STATES + (
 # '끝났다' 로 읽히면, 기계가 이제 막 돌기 시작하는데 완료 알림이 나간다.
 STARTED_STATES = RUNNING_STATES + ('DETECTING', 'RESERVED')
 
+
+def alarm_cycle_delta(alarm, unit_data, tower_id, unit_type, care_counts):
+    """등록할 때의 사이클에서 몇 번이나 지났는지 센다.
+
+        0     아직 내가 등록한 그 사이클이다
+        1     내 사이클은 끝났다 (수거했는지 지켜보는 구간)
+        2 이상 그 뒤로도 더 돌았다. 지금 도는 것은 남의 빨래다
+        None  알 수 없다 (이 기능 이전에 등록된 알림)
+
+    세탁기는 기기가 주는 누적 횟수를, 건조기는 우리가 센 횟수를 쓴다.
+    건조기는 기기가 누적을 안 알려줘서 dryer_care 가 가동->완료를 센다.
+
+    통살균을 돌리면 두 값 모두 0 으로 되돌아간다. 되돌아간 것을 보면
+    내 사이클은 이미 한참 전에 끝난 것이므로 2 로 본다.
+    """
+    if unit_type == 'washer':
+        at = alarm.get('cycleAtRegister')
+        now_count = (unit_data.get('cycle') or {}).get('cycleCount')
+    else:
+        at = alarm.get('dryerCountAtRegister')
+        now_count = (care_counts.get('%s호기' % tower_id) or {}).get('count')
+
+    if not isinstance(at, int) or not isinstance(now_count, int):
+        return None
+    delta = now_count - at
+    return 2 if delta < 0 else delta
+
 # 구독 파일에 대한 읽기/쓰기를 직렬화한다 (워커 스레드와 요청 스레드가 동시에 접근)
 SUBS_LOCK = threading.Lock()
 
@@ -474,39 +501,45 @@ def build_congestion_profile(weekday=None):
     for sl in yesterday_slots:
         sl["sharePercent"] = round(sl.pop("_busy") * 100 / y_busy_sum) if y_busy_sum else 0
 
-    # 2. 📅 요일별: '전 주(published)' 데이터 기반 요일별 7개 혼잡도 산출
+    # 2. 📅 요일별: 실제로 잰 요일만 답한다.
+    #
+    # 예전에는 못 잰 요일에 고정표를 넣고 화면에는 '실측 데이터 기반' 이라고
+    # 적었다. 7일 중 5일이 지어낸 값이었다. 안 잰 것은 안 잰 것이다.
+    # 비워서 보내고, 화면이 '모으는 중' 이라고 적게 한다.
     pub_dow = (CONGESTION.get("published") or {}).get("dow") or {}
-    default_dow_rates = [32, 38, 42, 45, 52, 64, 74]
-    default_dow_descs = [
-        "주초 여유로운 세탁 가능 (오전·오후 한산)",
-        "평일 일과 후 저녁 몰림 시작",
-        "주중 정기 세탁 권장 (무난한 이용)",
-        "발표/시험 전 야간 이용 증가 (잔여 확인)",
-        "주말 전 세탁 집중 (야간 대기)",
-        "주말 낮부터 자유 세탁 피크 (혼잡)",
-        "새 주차 시작 전 심야 세탁 집중 (피크)"
-    ]
+    cur_dow = CONGESTION.get("dow") or {}
 
     weekly_days = []
+    measured_cnt = 0
+    used_sources = set()
     for d in range(7):
-        d_hours = _hours_of_dow(pub_dow, d)
-        s_cnt = sum((d_hours.get(str(h)) or {}).get("s", 0) for h in range(24))
-        b_cnt = sum((d_hours.get(str(h)) or {}).get("b", 0) for h in range(24))
+        rate, src = None, None
+        # 확정판(지난주)을 먼저 보고, 없으면 이번 주에 모은 것을 본다.
+        for dow_map, src_name in ((pub_dow, "published"), (cur_dow, "current")):
+            d_hours = _hours_of_dow(dow_map, d)
+            s_cnt = sum((d_hours.get(str(h)) or {}).get("s", 0) for h in range(24))
+            if s_cnt >= CONGESTION_MIN_SAMPLES:
+                b_cnt = sum((d_hours.get(str(h)) or {}).get("b", 0) for h in range(24))
+                rate, src = round(b_cnt * 100 / s_cnt), src_name
+                break
 
-        if s_cnt >= 50:
-            rate = round(b_cnt * 100 / s_cnt)
-            is_measured = True
-        else:
-            cur_d_hours = _hours_of_dow(CONGESTION.get("dow"), d)
-            cur_s = sum((cur_d_hours.get(str(h)) or {}).get("s", 0) for h in range(24))
-            cur_b = sum((cur_d_hours.get(str(h)) or {}).get("b", 0) for h in range(24))
-            if cur_s >= 50:
-                rate = round(cur_b * 100 / cur_s)
-                is_measured = True
-            else:
-                rate = default_dow_rates[d]
-                is_measured = False
+        if rate is None:
+            weekly_days.append({
+                "dow": d,
+                "name": DOW_NAMES[d],
+                "label": DOW_NAMES[d] + "요일",
+                "utilizationRate": None,
+                "level": "unknown",
+                "badgeText": "모으는 중",
+                "badgeClass": "badge-mute",
+                "isToday": (d == now.weekday()),
+                "isMeasured": False,
+                "source": None
+            })
+            continue
 
+        measured_cnt += 1
+        used_sources.add(src)
         lvl = ('busy' if rate >= 70 else
                'caution' if rate >= 50 else
                'normal' if rate >= 35 else
@@ -527,9 +560,9 @@ def build_congestion_profile(weekday=None):
             "level": lvl,
             "badgeText": badge[0],
             "badgeClass": badge[1],
-            "desc": default_dow_descs[d],
             "isToday": (d == now.weekday()),
-            "isMeasured": is_measured
+            "isMeasured": True,
+            "source": src
         })
 
     yesterday_obj = {
@@ -542,10 +575,31 @@ def build_congestion_profile(weekday=None):
     }
     raw_week = (CONGESTION.get("published") or {}).get("week") or "전 주"
     week_label = _format_week_display(raw_week)
+
+    # 머리말은 값이 실제로 어디서 왔는지 말해야 한다. 요일별 집계는
+    # 2026-09-30 에 붙었으므로 한동안은 '이번 주 관측' 밖에 없다.
+    # 그걸 '지난주 실측' 이라고 적으면 거짓말이 된다.
+    if measured_cnt == 0:
+        basis_label = "요일별 관측을 모으는 중입니다 (아직 답할 만큼 안 모였습니다)"
+    else:
+        if used_sources == {"published"}:
+            src_txt = "%s 실측" % week_label
+        elif used_sources == {"current"}:
+            src_txt = "이번 주 관측"
+        else:
+            src_txt = "%s·이번 주 관측" % week_label
+        if measured_cnt == 7:
+            basis_label = src_txt
+        else:
+            basis_label = ("%s · 7일 중 %d일 · 나머지는 모으는 중"
+                           % (src_txt, measured_cnt))
+
     weekly_obj = {
-        "ready": True,
+        "ready": measured_cnt > 0,
         "week": raw_week,
         "weekLabel": week_label,
+        "basisLabel": basis_label,
+        "measuredDays": measured_cnt,
         "publishedAt": (CONGESTION.get("published") or {}).get("at"),
         "days": weekly_days
     }
@@ -567,99 +621,6 @@ def build_congestion_profile(weekday=None):
     for sl in slots:
         sl["sharePercent"] = round(sl.pop("_busy") * 100 / busy_total) if busy_total else 0
 
-    # 1. 🕒 시간별: '그 전날' 시간대 분석 산출
-    yesterday_dt = now - timedelta(days=1)
-    yesterday_date = yesterday_dt.strftime("%Y-%m-%d")
-    yesterday_dow = yesterday_dt.weekday()
-    yesterday_dow_name = DOW_NAMES[yesterday_dow] + "요일"
-
-    daily_map = CONGESTION.get("daily") or {}
-    y_hours = daily_map.get(yesterday_date)
-    y_basis = "yesterday_daily"
-    if not (y_hours and any((v.get("s") or 0) > 0 for v in y_hours.values())):
-        y_dow_hours = _hours_of_dow(CONGESTION.get("dow"), yesterday_dow)
-        if y_dow_hours and any((v.get("s") or 0) > 0 for v in y_dow_hours.values()):
-            y_hours = y_dow_hours
-            y_basis = "yesterday_dow"
-        else:
-            pub_dow = (CONGESTION.get("published") or {}).get("dow")
-            y_pub_dow = _hours_of_dow(pub_dow, yesterday_dow)
-            if y_pub_dow and any((v.get("s") or 0) > 0 for v in y_pub_dow.values()):
-                y_hours = y_pub_dow
-                y_basis = "yesterday_pub_dow"
-            else:
-                y_hours = hours
-                y_basis = "general_hours"
-
-    yesterday_slots, y_busy_sum = [], 0
-    for sid, start, end, label, desc in CONGESTION_SLOTS:
-        rate, busy = _rate(y_hours, start, end)
-        y_busy_sum += busy
-        yesterday_slots.append({
-            "id": sid, "startHour": start, "endHour": end,
-            "label": label, "desc": desc, "utilizationRate": rate, "_busy": busy
-        })
-    for sl in yesterday_slots:
-        sl["sharePercent"] = round(sl.pop("_busy") * 100 / y_busy_sum) if y_busy_sum else 0
-
-    # 2. 📅 요일별: '전 주(published)' 데이터 기반 요일별 7개 혼잡도 산출
-    pub_dow = (CONGESTION.get("published") or {}).get("dow") or {}
-    default_dow_rates = [32, 38, 42, 45, 52, 64, 74]
-    default_dow_descs = [
-        "주초 여유로운 세탁 가능 (오전·오후 한산)",
-        "평일 일과 후 저녁 몰림 시작",
-        "주중 정기 세탁 권장 (무난한 이용)",
-        "발표/시험 전 야간 이용 증가 (잔여 확인)",
-        "주말 전 세탁 집중 (야간 대기)",
-        "주말 낮부터 자유 세탁 피크 (혼잡)",
-        "새 주차 시작 전 심야 세탁 집중 (피크)"
-    ]
-
-    weekly_days = []
-    for d in range(7):
-        d_hours = _hours_of_dow(pub_dow, d)
-        s_cnt = sum((d_hours.get(str(h)) or {}).get("s", 0) for h in range(24))
-        b_cnt = sum((d_hours.get(str(h)) or {}).get("b", 0) for h in range(24))
-
-        if s_cnt >= 50:
-            rate = round(b_cnt * 100 / s_cnt)
-            is_measured = True
-        else:
-            cur_d_hours = _hours_of_dow(CONGESTION.get("dow"), d)
-            cur_s = sum((cur_d_hours.get(str(h)) or {}).get("s", 0) for h in range(24))
-            cur_b = sum((cur_d_hours.get(str(h)) or {}).get("b", 0) for h in range(24))
-            if cur_s >= 50:
-                rate = round(cur_b * 100 / cur_s)
-                is_measured = True
-            else:
-                rate = default_dow_rates[d]
-                is_measured = False
-
-        lvl = ('busy' if rate >= 70 else
-               'caution' if rate >= 50 else
-               'normal' if rate >= 35 else
-               'good' if rate >= 20 else 'best')
-        badge = {
-            'best': ['매우 여유 🔵', 'badge-blue'],
-            'good': ['여유 🟢', 'badge-green'],
-            'normal': ['보통 🟡', 'badge-yellow'],
-            'caution': ['혼잡 🟠', 'badge-orange'],
-            'busy': ['매우 혼잡 🔴', 'badge-red']
-        }[lvl]
-
-        weekly_days.append({
-            "dow": d,
-            "name": DOW_NAMES[d],
-            "label": DOW_NAMES[d] + "요일",
-            "utilizationRate": rate,
-            "level": lvl,
-            "badgeText": badge[0],
-            "badgeClass": badge[1],
-            "desc": default_dow_descs[d],
-            "isToday": (d == now.weekday()),
-            "isMeasured": is_measured
-        })
-
     return {
         "ready": True,
         "source": source,
@@ -671,21 +632,10 @@ def build_congestion_profile(weekday=None):
         "dowName": DOW_NAMES[weekday] + "요일",
         "slots": slots,
         "totalSamples": sum(v.get("s", 0) for v in hours.values()),
-        "yesterday": {
-            "date": yesterday_date,
-            "dow": yesterday_dow,
-            "dayName": yesterday_dow_name,
-            "label": f"전날({yesterday_dt.month}월 {yesterday_dt.day}일 {yesterday_dow_name})",
-            "basis": y_basis,
-            "slots": yesterday_slots
-        },
-        "weekly": {
-            "ready": True,
-            "week": raw_week,
-            "weekLabel": week_label,
-            "publishedAt": (CONGESTION.get("published") or {}).get("at"),
-            "days": weekly_days
-        }
+        # 위에서 한 번 만들어 둔 것을 그대로 쓴다. 두 벌로 두면
+        # 한쪽만 고쳤을 때 경우에 따라 다른 값이 나간다.
+        "yesterday": yesterday_obj,
+        "weekly": weekly_obj,
     }
 
 
@@ -727,6 +677,11 @@ def background_push_worker():
             now_ms = time.time() * 1000
             changed = False
             active_subs = []
+            # 건조기 사이클 번호. 기기가 누적을 안 알려줘서 우리가 센 값이다.
+            try:
+                care_counts = dryer_care.counts()
+            except Exception:
+                care_counts = {}
 
             for item in subs:
                 sub_info = item.get('subscription')
@@ -762,11 +717,47 @@ def background_push_worker():
                 unit_data = (tower_data.get('dryer' if unit_type == 'dryer' else 'washer') or {})
                 run_state = unit_state(unit_data)
 
+                # 이 알림이 아직 '내 사이클' 의 것인지. 아래 판단의 바탕이 된다.
+                cycle_delta = alarm_cycle_delta(
+                    alarm, unit_data, tower_id, unit_type, care_counts)
+
                 # 실시간 상태를 실제로 받아왔는지 (못 받아온 상태에서 '완료' 로 오판하면 안 된다)
                 has_live = bool(unit_data)
                 # 남은 시간 0분이 곧 완료는 아니다. 무게 감지(DETECTING) 중에는
                 # 시간이 아직 안 잡혀서 0 분으로 온다.
                 still_going = has_live and run_state in STARTED_STATES
+
+                # 내 사이클에서 두 번 이상 지났다. 지금 돌고 있는 것은 남의
+                # 빨래다. 여기서 떼지 않으면 남의 기기에 5분 전 알림이 간다.
+                if cycle_delta is not None and cycle_delta >= 2:
+                    print(f"[Alarm] 지난 사이클 정리: {device_name} "
+                          f"(등록 뒤 {cycle_delta}번 돌았음)")
+                    changed = True
+                    continue
+
+                # 내 사이클은 끝났는데 완료를 못 알렸다. 기기가 5분에 한 번만
+                # 알려줘서 끝나는 순간을 못 보고 지나간 것이다. 끝난 것은
+                # 분명하므로 알리되, 언제 끝났는지는 모른다고 적는다.
+                if (cycle_delta is not None and cycle_delta >= 1
+                        and not notified_0min):
+                    alarm['notified0Min'] = True
+                    alarm['completedAt'] = time.time()
+                    notified_0min = True
+                    changed = True
+                    print(f"[Alarm] 뒤늦게 완료 확인: {device_name}")
+                    send_push_notification(sub_info, {
+                        'title': f"🏁 [선택 기기 완료] {device_name} 완료!",
+                        'body': (f"{device_name} 가동이 끝났습니다. 기기가 "
+                                 f"{source_interval_min()}분에 한 번만 알려줘서 끝난 "
+                                 "시각은 정확히 알 수 없습니다. 빨래를 수거해 주세요."),
+                        'tag': f"complete-{device_name}",
+                        'actions': ([] if alarm.get('pickedUp')
+                                    else [{'action': 'picked', 'title': '🧺 가져갔어요'}]),
+                        'key': alarm.get('key'),
+                        'endpoint': sub_info.get('endpoint'),
+                    })
+                    active_subs.append(item)
+                    continue
 
                 # ⭐ 기기가 알려주는 실제 남은 시간을 우선한다.
                 #    건조기 옷감 감지로 9분 -> 4분처럼 줄거나, 반대로 늘어나는 경우가 잦은데
@@ -861,7 +852,10 @@ def background_push_worker():
                     remain_min = (target_ms - now_ms) / (60 * 1000)
 
                 # 멈춰 있는 동안은 시계가 얼어붙는다. 그걸 보고 "5분 뒤 완료" 라고 하면 거짓말이다.
+                # 차이가 0 일 때만 '5분 전' 을 보낸다. 내 사이클이 아닌데
+                # 보내면 남의 빨래를 두고 나한테 알리는 꼴이 된다.
                 if (not notified_5min and not is_stopped
+                        and (cycle_delta is None or cycle_delta == 0)
                         and remain_min <= 5.0 and remain_min > 0):
                     alarm['notified5Min'] = True
                     changed = True
@@ -1114,11 +1108,16 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             return
         # UptimeRobot 등이 주기적으로 두드려 서비스가 잠들지 않게 하는 용도
         if req_path == '/api/health':
-            self.send_response(200)
+            # 값이 멈췄으면 2xx 를 주지 않는다. 감시 도구가 그대로 잡는다.
+            # 우리 서버가 살아 있는 것과 보여줄 값이 살아 있는 것은 다르다.
+            stale = source_is_stale()
+            self.send_response(503 if stale else 200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.end_headers()
             self.wfile.write(json.dumps({
-                "ok": True,
+                "ok": not stale,
+                # 사람이 읽을 한 마디. 감시 도구에 낱말로 걸어도 된다.
+                "source": "값이 멈췄습니다" if stale else "정상",
                 "webpush": HAS_WEBPUSH,
                 "alarms": len(load_subscriptions()),
                 "store": state_store.store_enabled(),
@@ -1863,6 +1862,25 @@ def source_interval_min(default=5):
     if SOURCE_INTERVAL_SEC > 0:
         return max(1, round(SOURCE_INTERVAL_SEC / 60))
     return default
+
+
+# 원본이 이만큼 소식이 없으면 값이 멈춘 것으로 본다.
+# 주기의 세 배, 최소 15분. 한 번쯤 거르는 것으로는 울리지 않는다.
+SOURCE_STALE_MIN_SEC = int(os.environ.get('SOURCE_STALE_MIN_SEC') or 15 * 60)
+
+
+def source_is_stale():
+    """원본에서 새 값이 끊긴 지 오래됐는지.
+
+    source_age_sec() 을 쓰지 않고 시각을 직접 본다. 그쪽은 값이 말이 안 되게
+    오래되면 '모른다(None)' 고 답하는데, 여기서는 그 경우야말로 울려야 한다.
+    """
+    if not SOURCE_UPDATED_AT:
+        # 서버를 막 켰다. 원본을 아직 한 번도 못 봤을 뿐이다.
+        # 모르는 것으로 장애를 알리면 배포할 때마다 울린다.
+        return False
+    limit = max(SOURCE_STALE_MIN_SEC, (SOURCE_INTERVAL_SEC or 300) * 3)
+    return (time.time() - SOURCE_UPDATED_AT) > limit
 
 
 def source_age_sec():
