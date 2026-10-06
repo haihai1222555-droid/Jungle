@@ -88,6 +88,56 @@ def real_ip(peer, xff):
     return parts[-1] if parts else peer
 
 
+def parse_device_info(user_agent):
+    """User-Agent 문자열을 사람이 읽기 편한 기기·OS·브라우저 요약으로 바꾼다.
+
+    관리자에게 제보와 함께 보여줄 정보다.
+    예) "iPhone · Safari", "Android · 삼성인터넷", "Windows · Chrome", "Mac · Safari"
+    """
+    if not user_agent or not isinstance(user_agent, str):
+        return ""
+    ua = user_agent.strip()
+    if not ua:
+        return ""
+
+    device = ""
+    if "iPhone" in ua:
+        device = "iPhone"
+    elif "iPad" in ua:
+        device = "iPad"
+    elif "Android" in ua:
+        device = "Android"
+    elif "Windows" in ua:
+        device = "Windows"
+    elif "Macintosh" in ua or "Mac OS" in ua:
+        device = "Mac"
+    elif "Linux" in ua:
+        device = "Linux"
+
+    browser = ""
+    ua_upper = ua.upper()
+    if "KAKAOTALK" in ua_upper:
+        browser = "카카오톡"
+    elif "NAVER" in ua_upper:
+        browser = "네이버앱"
+    elif "Whale" in ua:
+        browser = "웨일"
+    elif "SamsungBrowser" in ua:
+        browser = "삼성인터넷"
+    elif "Edg/" in ua or "Edge/" in ua:
+        browser = "Edge"
+    elif "Chrome" in ua or "CriOS" in ua:
+        browser = "Chrome"
+    elif "Safari" in ua and "Chrome" not in ua and "Android" not in ua:
+        browser = "Safari"
+    elif "Firefox" in ua or "FxiOS" in ua:
+        browser = "Firefox"
+
+    if device and browser:
+        return f"{device} · {browser}"
+    return device or browser or ua[:30]
+
+
 def origin_ok(origin, referer, host_header):
     """브라우저가 말해 준 출처가 우리 것인지.
 

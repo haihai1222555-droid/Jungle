@@ -802,6 +802,27 @@ def test_gemini_tries_next_key():
         bot._DEAD_KEYS.clear()
 
 
+def test_parse_device_info():
+    import security
+    p = security.parse_device_info
+    check("빈 값", p(""), "")
+    check("아이폰 사파리",
+          p("Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"),
+          "iPhone · Safari")
+    check("갤럭시 삼성인터넷",
+          p("Mozilla/5.0 (Linux; Android 14; SM-S928N) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/31.0 Chrome/148.0.0.0 Mobile Safari/537.36"),
+          "Android · 삼성인터넷")
+    check("윈도우 크롬",
+          p("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"),
+          "Windows · Chrome")
+    check("맥 사파리",
+          p("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"),
+          "Mac · Safari")
+    check("카카오톡 인앱",
+          p("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) Mobile/15E148 KAKAOTALK 9.9.0"),
+          "iPhone · 카카오톡")
+
+
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
              test_unknown_states, test_device_log,
@@ -810,7 +831,7 @@ def main():
              test_server_alarm_flow, test_dryer_care,
              test_congestion_dow, test_congestion_weekly_no_invention,
              test_alarm_stays_on_my_cycle, test_health_reports_stale_source,
-             test_gemini_tries_next_key]
+             test_gemini_tries_next_key, test_parse_device_info]
     for t in tests:
         try:
             t()

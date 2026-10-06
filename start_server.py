@@ -1554,7 +1554,10 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 self._json_out(503, {"ok": False,
                                      "error": "지금은 접수할 수 없어요. 잠시 후 다시 시도해 주세요."})
                 return
-            who_label = f"IP {who}" if who and who != "?" else "IP 알수없음"
+            ua = self.headers.get('User-Agent') or ''
+            dev = security.parse_device_info(ua)
+            ip_str = f"IP {who}" if who and who != "?" else "IP 알수없음"
+            who_label = f"{ip_str} ({dev})" if dev else ip_str
             try:
                 item = DISCORD_MODULE.submit_report(kind, text, 'web', who=who_label)
             except Exception as e:
