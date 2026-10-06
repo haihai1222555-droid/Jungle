@@ -1554,15 +1554,16 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 self._json_out(503, {"ok": False,
                                      "error": "지금은 접수할 수 없어요. 잠시 후 다시 시도해 주세요."})
                 return
+            who_label = f"IP {who}" if who and who != "?" else "IP 알수없음"
             try:
-                item = DISCORD_MODULE.submit_report(kind, text, 'web')
+                item = DISCORD_MODULE.submit_report(kind, text, 'web', who=who_label)
             except Exception as e:
                 print(f"[제보] 접수 실패: {e}")
                 item = None
             if not item:
                 self._json_out(500, {"ok": False, "error": "접수하지 못했습니다."})
                 return
-            print(f"[제보] 웹에서 접수 #{item['id']} ({item['kind']})")
+            print(f"[제보] 웹에서 접수 #{item['id']} ({item['kind']}) — {who_label}")
             self._json_out(200, {"ok": True, "id": item['id']})
             return
 

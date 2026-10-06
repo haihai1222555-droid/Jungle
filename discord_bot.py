@@ -303,7 +303,7 @@ def add_report(kind, text, source, who=None):
 
     kind   : "bug" 또는 "idea"
     source : "discord" 또는 "web"
-    who    : 남긴 사람 표시 (디스코드 이름 등). 웹은 익명이다.
+    who    : 남긴 사람 표시 (디스코드 이름 또는 웹 제보자 IP).
     """
     load_reports()
     body = _clean_report_text(text)
