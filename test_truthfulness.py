@@ -433,17 +433,21 @@ def test_dryer_care():
 
     # 돌기 시작한 코스의 총 시간을 함께 남긴다.
     # 끝난 뒤에는 0 으로 돌아오므로 도는 동안 붙잡아 둬야 한다.
-    # 178분은 지금까지 관측한 가장 긴 건조다. 통살균으로 봐선 안 된다.
+    # 178~180분은 일반 건조(이불/시간건조 3시간)다. 통살균으로 봐선 안 된다.
     run("DRYING", 178)
     run("DRYING", 178)
     check("긴 건조는 그냥 한 번", run("POWER_OFF"), "run")
     check("문턱 아래는 쌓인다", dryer_care.counts()["5호기"]["count"], 2)
+    run("DRYING", 180)
+    check("3시간 건조도 일반 건조", run("POWER_OFF"), "run")
+    check("3회 누적", dryer_care.counts()["5호기"]["count"], 3)
     ds = [d["total"] for d in dryer_care.durations("5호기")]
-    check("코스 길이를 남겼나", ds, [32, 178])
+    check("코스 길이를 남겼나", ds, [32, 178, 180])
 
-    # 문턱을 넘는 코스는 통살균으로 보고, 세탁기처럼 0 으로 되돌린다.
+    # 188분(실제 관측된 스팀통살균) 등 문턱을 넘는 코스는 통살균으로 보고, 세탁기처럼 0 으로 되돌린다.
     over = dryer_care.TUB_CLEAN_MINUTES
-    run("DRYING", over)
+    check("통살균 문턱 185분", over, 185)
+    run("DRYING", 188)
     check("긴 코스는 통살균으로", run("END"), "clean")
     check("통살균이면 0 으로", dryer_care.counts()["5호기"]["count"], 0)
     check("한 날짜를 남겼나(자동)",
