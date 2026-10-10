@@ -181,6 +181,7 @@ class Limiter:
         self.name = name
         self._hits = {}
         self._lock = threading.Lock()
+        self._swept = 0.0
 
     def allow(self, key, now=None):
         """한 번 쓴 것으로 치고, 써도 되면 True."""
@@ -193,7 +194,10 @@ class Limiter:
                 return False
             seen.append(now)
             self._hits[key] = seen
-            if len(self._hits) > self.MAX_KEYS:
+            # 창이 한 번 지날 때마다 다 지난 것을 치운다. 열쇠가 IP·사용자 ID 라서,
+            # 상한(MAX_KEYS)에 닿을 때만 치우면 한 번 온 사람 것이 재시작 전까지 남는다.
+            if len(self._hits) > self.MAX_KEYS or now - self._swept >= self.window:
+                self._swept = now
                 self._sweep(now)
             return True
 

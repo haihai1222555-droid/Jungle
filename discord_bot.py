@@ -424,7 +424,8 @@ async def push_menu_alarms():
                 await user.send(embed=emb)
                 sent += 1
             except Exception as e:
-                print(f"[식단알림] DM 실패({uid}): {e}")
+                # 로그에는 ID 끝 네 자리만 남긴다 (처리방침: 로그에 사람을 남기지 않는다)
+                print(f"[식단알림] DM 실패(…{str(uid)[-4:]}): {e}")
             await asyncio.sleep(0.3)      # 한꺼번에 쏟지 않는다
         print(f"[식단알림] {f['kind']} 알림을 {sent}명에게 보냈습니다.")
 
@@ -1591,7 +1592,7 @@ def admin_toggle(user_id, text):
     if not ADMIN_PASSPHRASE or ADMIN_PASSPHRASE not in (text or ""):
         return None
     if not is_admin_user(user_id):
-        print(f"[Admin] 권한 없는 사용자가 암구호를 사용했습니다: {user_id}")
+        print(f"[Admin] 권한 없는 사용자가 암구호를 사용했습니다: …{str(user_id)[-4:]}")
         return None
     if admin_active(user_id):
         ADMIN_SESSIONS.pop(user_id, None)
@@ -2837,7 +2838,10 @@ async def run_assistant(user_id, text, private=True):
     blocked = guard_input(text)
     if blocked:
         clear_history(user_id)
-        print(f"[Guard] 차단 user={user_id}: {(text or '')[:120]!r}")
+        # 글 내용은 로그에 남기지 않는다. 로그 파일은 지우는 때가 없어서,
+        # 대화를 저장하지 않는다는 처리방침과 달리 남의 말이 계속 쌓였다.
+        kind = "역할·규칙" if blocked == GUARD_REPLY_ROLE else "말투·형식"
+        print(f"[Guard] 차단 ({kind}) user=…{str(user_id)[-4:]}")
         return blocked, None, False
 
     result = await _run_assistant_inner(user_id, text)

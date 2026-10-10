@@ -1621,7 +1621,9 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             if not item:
                 self._json_out(500, {"ok": False, "error": "접수하지 못했습니다."})
                 return
-            print(f"[제보] 웹에서 접수 #{item['id']} ({item['kind']}) — {who_label}")
+            # IP·기기 정보는 제보 기록에만 둔다. 로그 파일(server.log)은 지우는 때가 없어서,
+            # 여기 적으면 처리방침에 적은 보관 기간(최근 300건)을 넘어 계속 남는다.
+            print(f"[제보] 웹에서 접수 #{item['id']} ({item['kind']})")
             self._json_out(200, {"ok": True, "id": item['id']})
             return
 
@@ -1781,6 +1783,8 @@ REPORT_MIN_GAP = 30          # 초
 REPORT_MAX_LEN = 1000
 _REPORT_LAST = {}            # 보낸 곳 -> 마지막 시각
 _REPORT_LOCK = threading.Lock()
+_REPORT_SWEPT = 0.0          # 마지막으로 오래된 것을 치운 시각
+REPORT_KEEP_SEC = 3600       # IP 를 메모리에 두는 시간 (처리방침에 적은 값)
 
 
 # =========================================================
@@ -1829,6 +1833,7 @@ AI_BODY_MAX = 200_000          # 요청 본문 크기 상한 (바이트)
 AI_OUT_TOKENS_MAX = 1200       # 답변 길이 상한
 _AI_HITS = {}                  # 보낸 곳 -> [시각, ...]
 _AI_LOCK = threading.Lock()
+_AI_SWEPT = 0.0
 
 
 def ai_allowed(who):
@@ -1844,7 +1849,11 @@ def ai_allowed(who):
             return False
         hits.append(now)
         _AI_HITS[who] = hits
-        if len(_AI_HITS) > 500:        # 무한정 쌓이지 않게
+        # 하루 넘게 안 쓴 곳은 치운다. 500곳이 넘을 때만 치우면 그 전에는
+        # 재시작할 때까지 IP 가 메모리에 남는다. 10분에 한 번이면 충분하다.
+        global _AI_SWEPT
+        if len(_AI_HITS) > 500 or now - _AI_SWEPT > 600:
+            _AI_SWEPT = now
             for k in [k for k, v in _AI_HITS.items()
                       if not v or now - v[-1] > 86400]:
                 _AI_HITS.pop(k, None)
@@ -1871,15 +1880,19 @@ def ai_clamp_tokens(body):
 
 def report_allowed(who):
     """너무 자주 보내는 것을 막는다. 보내도 되면 True."""
+    global _REPORT_SWEPT
     now = time.time()
     with _REPORT_LOCK:
         last = _REPORT_LAST.get(who, 0)
         if now - last < REPORT_MIN_GAP:
             return False
         _REPORT_LAST[who] = now
-        if len(_REPORT_LAST) > 500:      # 무한정 쌓이지 않게
+        # 한 시간 지난 IP 는 치운다. 예전에는 500곳이 넘을 때만 치워서,
+        # 제보가 적은 동안에는 '1시간 뒤 정리' 라는 처리방침과 달리 재시작 전까지 남았다.
+        if len(_REPORT_LAST) > 500 or now - _REPORT_SWEPT > 600:
+            _REPORT_SWEPT = now
             for k in [k for k, v in _REPORT_LAST.items()
-                      if now - v > 3600]:
+                      if now - v > REPORT_KEEP_SEC]:
                 _REPORT_LAST.pop(k, None)
     return True
 
