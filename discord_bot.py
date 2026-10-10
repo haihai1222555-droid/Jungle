@@ -1670,7 +1670,8 @@ def search_web(question):
         "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1500},
     }).encode("utf-8")
     quota_hit = False
-    for model in ("gemini-3.5-flash", "gemini-3.5-flash-lite"):
+    # 3.5 Flash 는 종료되어(2026-10) 구글이 3.6 Flash 로 돌려 보내고 있었다. 이름을 직접 부른다.
+    for model in ("gemini-3.6-flash", "gemini-3.5-flash-lite"):
         for key in GEMINI_API_KEYS:
             try:
                 req = urllib.request.Request(
@@ -1886,6 +1887,7 @@ GEMINI_MODELS = [
     "gemini-3.1-flash-lite",   # 2.55~3.35초 — 위가 한도에 걸렸을 때
 ]
 # gemini-3.5-flash 는 뺐다. 같은 조건에서 11.3~11.8초가 나온다.
+# (3.5 Flash 는 2026-10 에 종료되어 3.6 Flash 로 바뀌었다. 3.6 은 아직 재 보지 않았다.)
 # 예산(아래 GEMINI_BUDGET) 안에 들어올 수가 없어서, 차례가 와도
 # 시간만 버리고 Groq 으로 넘어가게 만들었다.
 

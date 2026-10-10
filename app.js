@@ -2744,7 +2744,7 @@ const GROQ_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-
 const GEMINI_MODELS = [
   'gemini-3.5-flash-lite',   // 실측 2.34초, 정답 5/5 — 가장 빠르다
   'gemini-3.1-flash-lite',   // 실측 3.92초, 정답 5/5 — 한도가 따로다
-  'gemini-3.5-flash',        // 실측 3.57초 — 또 다른 한도
+  'gemini-3.6-flash',        // 또 다른 한도. 3.5 Flash 가 종료되어(2026-10) 구글이 이리로 돌려 보내던 모델이다. 속도는 아직 안 쟀다
 ];
 
 // 안내 지식은 브라우저에 두지 않는다.
