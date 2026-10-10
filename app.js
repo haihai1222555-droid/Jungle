@@ -40,6 +40,15 @@ const TOWERS = [
 // 페이지를 열 때마다 지어낸 상태가 잠깐 보인다.
 // 이 사람이 지난번에 실제로 받아둔 값이 있으면 그것을 쓰고, 없으면 비워 둔다.
 // 비어 있으면 '정보 없음' 으로 그려지므로 거짓 상태를 보여주지 않는다.
+//
+// 아래 두 값은 반드시 _lastGood 보다 위에 있어야 한다. const 는 적힌 줄에
+// 닿기 전에 읽으면 오류가 나는데, 예전에는 이 둘이 한참 아래에 있어서
+// loadLastGoodSnapshot 이 늘 오류로 빠져 null 을 돌려줬다. 저장본을 한 번도 못 썼다.
+// 마지막으로 성공한 실데이터 보관용 (내장 스냅샷보다 항상 최신)
+const LAST_GOOD_KEY = 'jungle_last_good_snapshot';
+// 이보다 오래된 저장본은 쓰지 않는다. 원본은 몇 분에 한 번 움직이는데, 장애가 몇 시간 이어지면
+// 몇 시간 전 값을 신호등·추천이 '실시간 N대 이용 가능' 으로 말했다. 모르면 모른다고 한다.
+const LAST_GOOD_MAX_AGE_MS = 15 * 60 * 1000;
 const _lastGood = (() => {
   try { return loadLastGoodSnapshot(); } catch (e) { return null; }
 })();
@@ -383,8 +392,6 @@ function renderUnitAlarmButton(towerId, unitType, deviceName, remainMinutes, run
   return `<button class="btn-unit-alarm" data-alarm-toggle data-tower="${towerId}" data-unit="${unitType}" data-name="${deviceName}" data-mins="${remainMinutes}" title="세탁/건조 완료 즉시 스마트 알림">${label}</button>`;
 }
 
-// 마지막으로 성공한 실데이터 보관용 (내장 스냅샷보다 항상 최신)
-const LAST_GOOD_KEY = 'jungle_last_good_snapshot';
 const API_TIMEOUT_MS = 8000;
 let isLoadingDashboard = false;
 
@@ -441,10 +448,6 @@ function saveLastGoodSnapshot(status, stats) {
   } catch (e) {}
 }
 
-// 이보다 오래된 저장본은 쓰지 않는다. 원본은 몇 분에 한 번 움직이는데, 장애가 몇 시간 이어지면
-// 몇 시간 전 값을 신호등·추천이 '실시간 N대 이용 가능' 으로 말했다. 모르면 모른다고 한다.
-const LAST_GOOD_MAX_AGE_MS = 15 * 60 * 1000;
-
 function loadLastGoodSnapshot() {
   try {
     const parsed = JSON.parse(localStorage.getItem(LAST_GOOD_KEY) || 'null');
@@ -460,15 +463,21 @@ function loadLastGoodSnapshot() {
 // 매주 월요일에 지난 주 관측으로 갱신된다.
 // 관측이 모자라면 null 로 두고 아래의 추정값을 그대로 쓴다.
 let congestionProfile = null;
+// 혼잡도는 시간 단위로 쌓이는 값이라 20초마다 다시 받을 이유가 없다.
+// 예전에는 화면 갱신마다(20초) 받아서, 사람 수만큼 서버가 매번 다시 계산했다.
+const CONGESTION_REFRESH_MS = 5 * 60 * 1000;
+let congestionLoadedAt = 0;
 
 async function loadCongestionProfile() {
+  if (Date.now() - congestionLoadedAt < CONGESTION_REFRESH_MS) return;
   try {
     const res = await fetchWithTimeout(API_CONGESTION);
     if (!res.ok) return;
     const data = await res.json();
     congestionProfile = (data && data.ready && Array.isArray(data.slots) && data.slots.length) ? data : null;
+    congestionLoadedAt = Date.now();
   } catch (e) {
-    // 실패해도 추정값으로 계속 돌아간다
+    // 실패해도 추정값으로 계속 돌아간다 (다음 갱신 때 다시 받아 본다)
   }
 }
 
@@ -482,7 +491,9 @@ async function loadDashboardData() {
   try {
     const [statusRes, statsRes] = await Promise.all([
       fetchWithTimeout(API_STATUS),
-      fetchWithTimeout(API_STATS),
+      // 통계는 곁가지다. 늦어서 끊기면(시간 초과) 예전에는 Promise.all 전체가
+      // 실패해, 방금 받은 기기 상태까지 버리고 '연결 끊김' 을 띄웠다.
+      fetchWithTimeout(API_STATS).catch(() => null),
       // 실패해도 화면을 막지 않는다
       loadCongestionProfile(),
       // 기기 관리 기록(마지막 통살균 등). 이것도 실패해도 화면은 그대로 뜬다.
@@ -495,7 +506,7 @@ async function loadDashboardData() {
     // 7일 통계는 곁가지다. 그것만 실패했다고 방금 받은 기기 상태를 버리고 '연결 끊김' 을
     // 띄우면, 지금 비어 있는 기기를 두고 옛 저장본을 보여 준다. 통계는 지난 것을 그대로 쓴다.
     let nextStats = globalStatsData;
-    if (statsRes.ok) {
+    if (statsRes && statsRes.ok) {
       try { nextStats = await statsRes.json(); } catch (e) {}
     }
 
@@ -715,12 +726,27 @@ function showToast(icon, message, type = 'info') {
   }, 3500);
 }
 
+// 소리를 낼 오디오 장치. 하나만 만들어 계속 쓴다.
+// 예전에는 소리마다 새로 만들고 닫지 않았다. 브라우저는 동시에 열 수 있는 수를
+// 제한해서, 알림이 쌓이면 새로 못 만들어 소리가 안 났고 그동안 자원도 붙잡고 있었다.
+let _audioCtx = null;
+
+function getAudioContext() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!_audioCtx || _audioCtx.state === 'closed') _audioCtx = new AudioCtx();
+  // 탭이 뒤에 있다 오면 멈춰 있을 수 있다. 깨워 둔다 (실패해도 그냥 소리만 안 난다).
+  if (_audioCtx.state === 'suspended' && _audioCtx.resume) {
+    _audioCtx.resume().catch(() => {});
+  }
+  return _audioCtx;
+}
+
 // 오디오 차임벨 합성기 (Web Audio API - 무설치 초경량 차임 사운드)
 function playChimeSound() {
   try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    const ctx = getAudioContext();
+    if (!ctx) return;
     const now = ctx.currentTime;
 
     // 1st note (E5, 659.25Hz)
@@ -754,9 +780,8 @@ function playChimeSound() {
 // 긴급 에러 경보음 합성기 (Web Audio API - 2회 경고 비프음)
 function playAlarmErrorSound() {
   try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    const ctx = getAudioContext();
+    if (!ctx) return;
     const now = ctx.currentTime;
 
     const osc1 = ctx.createOscillator();
@@ -910,9 +935,13 @@ async function removePushAlarmFromServer(key) {
   try {
     // 어느 기기의 등록을 지울지 알려준다.
     // 안 보내면 같은 세탁기에 걸린 다른 기기(폰/컴퓨터)의 알림까지 함께 지워진다.
+    // 페이지를 막 열어 서비스워커 등록이 아직이면 swRegistration 이 비어 있다.
+    // 그때 endpoint 없이 보내면 서버는 이 세탁기에 걸린 '모든 기기' 의 등록을 지운다.
+    // 그래서 등록이 끝나기를 잠깐 기다린다.
     let endpoint = null;
     try {
-      const sub = swRegistration && await swRegistration.pushManager.getSubscription();
+      const reg = await waitForServiceWorker(3000);
+      const sub = reg && reg.pushManager && await reg.pushManager.getSubscription();
       endpoint = sub ? sub.endpoint : null;
     } catch (e) {}
 
@@ -2073,7 +2102,10 @@ function createCompactCardElement(tower) {
   else if (wRun && dRun) { pill = '전체 가동 중'; pillCls = 'cp-both'; edge = ' is-active-both'; }
   else if (wRun) { pill = '세탁 중'; pillCls = 'cp-wash'; edge = ' is-active-wash'; }
   else if (dRun) { pill = '건조 중'; pillCls = 'cp-dry'; edge = ' is-active-dry'; }
-  else { pill = '사용 가능'; pillCls = 'cp-free'; }
+  // 둘 다 돌지는 않는데 비어 있지도 않을 수 있다(완료 후 수거 대기·일시정지·시작 전).
+  // 예전에는 그때도 '사용 가능' 이라고 적어, 둘 다 빨래가 든 기기로 헛걸음시켰다.
+  else if (w.cls === 'cu-free' || d.cls === 'cu-free') { pill = '사용 가능'; pillCls = 'cp-free'; }
+  else { pill = '사용 중'; pillCls = 'cp-free'; }
 
   // 가동 중인 칸에만 종을 붙인다. 이미 걸어둔 칸은 켜진 모양으로 둔다.
   // 상세창까지 들어가지 않고 여기서 바로 걸 수 있어야 한다.
@@ -3754,7 +3786,9 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     const dm = document.getElementById('detailModal');
     if (dm && dm.classList.contains('open')) {
-      dm.classList.remove('open');
+      // 닫기 단추와 같은 길로 닫는다. 창만 숨기면 '지금 보고 있는 기기' 가 남아,
+      // 숨은 창의 알림 버튼을 계속 다시 그렸다.
+      closeModal();
     }
     const hm = document.getElementById('helpModal');
     if (hm && hm.classList.contains('open')) {
@@ -3764,8 +3798,19 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ☀️ / 🌙 다크 모드 & 라이트 모드 테마 스위처
+// 브라우저 저장소가 막혀 있으면(쿠키·사이트 데이터 차단 등) 읽고 쓰기가 오류를 던진다.
+// 테마는 맨 처음 초기화에서 부르므로, 여기서 터지면 그 뒤의 데이터 불러오기와
+// 화면 그리기가 통째로 멈춰 빈 화면이 된다. 못 쓰면 저장만 건너뛴다.
+function readTheme() {
+  try { return localStorage.getItem('jungle_theme'); } catch (e) { return null; }
+}
+
+function writeTheme(theme) {
+  try { localStorage.setItem('jungle_theme', theme); } catch (e) {}
+}
+
 function initTheme() {
-  const savedTheme = localStorage.getItem('jungle_theme') || 'dark';
+  const savedTheme = readTheme() || 'dark';
   applyTheme(savedTheme);
 
   const btnToggle = document.getElementById('btnThemeToggle');
@@ -3786,12 +3831,12 @@ function applyTheme(theme) {
     document.body.classList.add('light-theme');
     if (iconEl) iconEl.textContent = '☀️';
     if (labelEl) labelEl.textContent = '라이트';
-    localStorage.setItem('jungle_theme', 'light');
+    writeTheme('light');
   } else {
     document.body.classList.remove('light-theme');
     if (iconEl) iconEl.textContent = '🌙';
     if (labelEl) labelEl.textContent = '다크';
-    localStorage.setItem('jungle_theme', 'dark');
+    writeTheme('dark');
   }
 }
 
@@ -3934,14 +3979,19 @@ function setReportKind(kind) {
   if (reportText) reportText.placeholder = REPORT_PLACEHOLDER[reportKind];
 }
 
+// 보내는 중인지. 버튼은 잠가 두지만 Ctrl+Enter 는 버튼을 거치지 않아서,
+// 빠르게 두 번 누르면 같은 제보가 두 번 나갔다.
+let reportSending = false;
+
 async function sendReport() {
-  if (!reportText || !reportSend) return;
+  if (!reportText || !reportSend || reportSending) return;
   const text = reportText.value.trim();
   if (text.length < 5) {
     showToast('✏️', '조금 더 자세히 적어주세요. (5자 이상)', 'warning');
     reportText.focus();
     return;
   }
+  reportSending = true;
   reportSend.disabled = true;
   reportSend.textContent = '보내는 중…';
   try {
@@ -3962,8 +4012,10 @@ async function sendReport() {
   } catch (e) {
     showToast('⚠️', '연결에 실패했어요. 잠시 후 다시 시도해 주세요.', 'error');
   } finally {
-    reportSend.disabled = false;
+    reportSending = false;
     reportSend.textContent = '보내기';
+    // 무조건 풀면 보낸 뒤 빈 칸인데도 보내기가 눌렸다. 글자 수로 다시 정한다.
+    updateReportLen();
   }
 }
 

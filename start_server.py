@@ -74,6 +74,13 @@ if HAS_WEBPUSH:
         v.save_public_key(VAPID_PUB_PATH)
     else:
         v = Vapid.from_file(VAPID_PRIV_PATH)
+    # 개인키는 나만 읽게 한다. 만들 때 기본 권한(644)이면 서버의 다른 계정도
+    # 읽을 수 있다. 아래 check_secret_file_perms 가 매번 경고하던 것이 이것이다.
+    if os.name == "posix":
+        try:
+            os.chmod(VAPID_PRIV_PATH, 0o600)
+        except OSError as e:
+            print(f"[Warn] VAPID 개인키 권한을 바꾸지 못했습니다: {e}")
     
     raw_pub = v.public_key.public_bytes(
         encoding=serialization.Encoding.X962,
@@ -1036,9 +1043,12 @@ def _forwardable_headers(items):
     Transfer-Encoding·Content-Length·Content-Encoding 은 우리가 다시
     붙이는 값과 안 맞을 수 있고, 원본이 붙인 CORS 머리말은 우리 것과
     겹치면 브라우저가 둘 다 무시해 화면이 빈다.
+    Server·Date 는 우리 서버가 이미 붙인다. 넘기면 같은 머리말이 두 번 나가고,
+    Connection 은 이 연결 한 구간에만 쓰는 것이라 넘기면 안 된다.
     """
     return [(k, v) for k, v in items
-            if k.lower() not in ('transfer-encoding', 'content-length', 'content-encoding')
+            if k.lower() not in ('transfer-encoding', 'content-length', 'content-encoding',
+                                 'server', 'date', 'connection', 'keep-alive')
             and not k.lower().startswith('access-control-')]
 
 
