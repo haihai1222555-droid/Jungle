@@ -194,7 +194,42 @@ def alarm_cycle_delta(alarm, unit_data, tower_id, unit_type, care_counts):
     return 2 if delta < 0 else delta
 
 # 구독 파일에 대한 읽기/쓰기를 직렬화한다 (워커 스레드와 요청 스레드가 동시에 접근)
-SUBS_LOCK = threading.Lock()
+# 다시 잡을 수 있는 잠금이다. 요청 쪽은 '읽고 고치고 쓰기' 전체를 이 잠금 안에서
+# 하고, 그 안에서 load/save 가 또 잡는다.
+SUBS_LOCK = threading.RLock()
+
+
+def _sub_id(x):
+    """구독 하나를 가리키는 값. 같은 기기를 다시 걸면 createdAt 이 바뀐다."""
+    return ((x.get('alarm') or {}).get('key'),
+            (x.get('subscription') or {}).get('endpoint'),
+            x.get('createdAt'))
+
+
+def merge_worker_subs(before, after, current):
+    """워커가 한 바퀴 돈 결과를 지금 파일에 있는 것과 합친다.
+
+    워커는 바퀴 처음에 목록을 읽고, 푸시를 보내느라 몇 초를 쓴 뒤 통째로
+    저장한다. 그 사이에 들어온 등록·해제·'가져갔어요' 를 그대로 덮으면
+    새로 건 알림이 사라지거나, 해제한 알림이 되살아난다.
+
+        before  워커가 바퀴 처음에 읽은 것
+        after   워커가 남기기로 한 것 (알림 상태를 고친 채)
+        current 저장하기 직전에 다시 읽은 것
+    """
+    seen = {_sub_id(x) for x in before}
+    now = {_sub_id(x): x for x in current}
+    out = []
+    for x in after:
+        cur = now.get(_sub_id(x))
+        if cur is None:
+            continue                  # 도는 사이에 해제됐다
+        if (cur.get('alarm') or {}).get('pickedUp'):
+            x.setdefault('alarm', {})['pickedUp'] = True
+        out.append(x)
+    # 도는 사이에 새로 걸린 것
+    out.extend(x for x in current if _sub_id(x) not in seen)
+    return out
 
 def load_subscriptions():
     with SUBS_LOCK:
@@ -364,9 +399,10 @@ def record_congestion_sample(status_data):
         hour_slot["s"] += total
         hour_slot["b"] += busy
 
-        # 14일 지난 날짜는 정리
+        # 14일 지난 날짜는 정리. 오늘 포함 14일을 남긴다.
+        # 예전에는 15일을 남겨서 개수가 늘 14를 넘었고, 5초마다 정리를 다시 돌았다.
         if len(daily) > 14:
-            cutoff = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+            cutoff = (now - timedelta(days=13)).strftime("%Y-%m-%d")
             CONGESTION["daily"] = {k: v for k, v in daily.items() if k >= cutoff}
 
     if time.time() - _CONGESTION_SAVED_AT >= CONGESTION_SAVE_SEC:
@@ -677,6 +713,7 @@ def background_push_worker():
             now_ms = time.time() * 1000
             changed = False
             active_subs = []
+            purged = set()          # 이번 바퀴에 못 쓴다고 버린 endpoint
             # 건조기 사이클 번호. 기기가 누적을 안 알려줘서 우리가 센 값이다.
             try:
                 care_counts = dryer_care.counts()
@@ -692,6 +729,7 @@ def background_push_worker():
                 # 이미 못 쓴다고 판명된 구독은 여기서 버린다
                 if sub_info.get('endpoint') in DEAD_ENDPOINTS:
                     print(f"[Alarm] 못 쓰는 구독 정리: {alarm.get('deviceName', '?')}")
+                    purged.add(sub_info.get('endpoint'))
                     changed = True
                     continue
 
@@ -938,8 +976,15 @@ def background_push_worker():
 
                 active_subs.append(item)
 
+            # 버린 것은 표시도 지운다. 남겨 두면 같은 브라우저가 다시 등록해도
+            # (endpoint 가 그대로일 때가 있다) 다음 바퀴에 곧바로 버려지고,
+            # 표시가 상한까지 차면 새로 죽은 구독을 더는 걸러내지 못한다.
+            DEAD_ENDPOINTS.difference_update(purged)
+
             if changed:
-                save_subscriptions(active_subs)
+                with SUBS_LOCK:
+                    save_subscriptions(merge_worker_subs(
+                        subs, active_subs, load_subscriptions()))
         except Exception as e:
             print(f"[Worker Error] {e}")
 
@@ -1588,17 +1633,20 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 sub_info = data.get('subscription')
                 alarm_info = data.get('alarm')
                 if sub_info and alarm_info:
-                    subs = load_subscriptions()
                     key = alarm_info.get('key')
                     endpoint = sub_info.get('endpoint')
-                    # 중복 판정은 (구독 기기 + 세탁기) 조합으로 한다.
-                    # 세탁기 키만 보면, 같은 세탁기를 폰과 컴퓨터에서 각각 등록했을 때
-                    # 나중에 등록한 기기가 먼저 등록한 기기의 구독을 지워버린다.
-                    subs = [x for x in subs
-                            if not ((x.get('alarm') or {}).get('key') == key
-                                    and (x.get('subscription') or {}).get('endpoint') == endpoint)]
-                    subs.append({'subscription': sub_info, 'alarm': alarm_info, 'createdAt': time.time()})
-                    save_subscriptions(subs)
+                    # 다시 등록했다 = 이 브라우저는 살아 있다. 못 쓴다는 표시를 푼다.
+                    DEAD_ENDPOINTS.discard(endpoint)
+                    with SUBS_LOCK:
+                        subs = load_subscriptions()
+                        # 중복 판정은 (구독 기기 + 세탁기) 조합으로 한다.
+                        # 세탁기 키만 보면, 같은 세탁기를 폰과 컴퓨터에서 각각 등록했을 때
+                        # 나중에 등록한 기기가 먼저 등록한 기기의 구독을 지워버린다.
+                        subs = [x for x in subs
+                                if not ((x.get('alarm') or {}).get('key') == key
+                                        and (x.get('subscription') or {}).get('endpoint') == endpoint)]
+                        subs.append({'subscription': sub_info, 'alarm': alarm_info, 'createdAt': time.time()})
+                        save_subscriptions(subs)
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.end_headers()
@@ -1620,14 +1668,16 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 endpoint = data.get('endpoint')
                 marked = 0
                 if key and endpoint:
-                    subs = load_subscriptions()
-                    for x in subs:
-                        if ((x.get('alarm') or {}).get('key') == key
-                                and (x.get('subscription') or {}).get('endpoint') == endpoint):
-                            x['alarm']['pickedUp'] = True
-                            marked += 1
+                    with SUBS_LOCK:
+                        subs = load_subscriptions()
+                        for x in subs:
+                            if ((x.get('alarm') or {}).get('key') == key
+                                    and (x.get('subscription') or {}).get('endpoint') == endpoint):
+                                x['alarm']['pickedUp'] = True
+                                marked += 1
+                        if marked:
+                            save_subscriptions(subs)
                     if marked:
-                        save_subscriptions(subs)
                         print(f"[Alarm] 수거 확인 접수: {key}")
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -1685,15 +1735,16 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 key = data.get('key')
                 endpoint = data.get('endpoint')
                 if key:
-                    subs = load_subscriptions()
-                    if endpoint:
-                        # 해제를 요청한 그 기기의 등록만 지운다
-                        subs = [x for x in subs
-                                if not ((x.get('alarm') or {}).get('key') == key
-                                        and (x.get('subscription') or {}).get('endpoint') == endpoint)]
-                    else:
-                        subs = [x for x in subs if (x.get('alarm') or {}).get('key') != key]
-                    save_subscriptions(subs)
+                    with SUBS_LOCK:
+                        subs = load_subscriptions()
+                        if endpoint:
+                            # 해제를 요청한 그 기기의 등록만 지운다
+                            subs = [x for x in subs
+                                    if not ((x.get('alarm') or {}).get('key') == key
+                                            and (x.get('subscription') or {}).get('endpoint') == endpoint)]
+                        else:
+                            subs = [x for x in subs if (x.get('alarm') or {}).get('key') != key]
+                        save_subscriptions(subs)
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.end_headers()

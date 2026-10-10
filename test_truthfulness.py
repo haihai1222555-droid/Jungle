@@ -802,6 +802,125 @@ def test_gemini_tries_next_key():
         bot._DEAD_KEYS.clear()
 
 
+# =========================================================
+# 17. 워커가 도는 사이에 들어온 등록·해제를 덮어쓰지 않는다
+# =========================================================
+def test_worker_keeps_concurrent_changes():
+    """워커는 목록을 읽고, 푸시를 보내느라 몇 초 쓰고, 통째로 저장한다.
+
+    그 사이에 새로 건 알림이 사라지거나, 해제한 알림이 되살아나거나,
+    '가져갔어요' 가 지워지면 안 된다. 파일처럼 읽을 때마다 새 사본을 준다.
+    """
+    import json
+    import types
+
+    class _Stop(BaseException):
+        pass
+
+    t0 = 1_800_000_000.0
+
+    def unit(state, m=0):
+        return {"runState": {"currentState": state},
+                "timer": {"remainHour": 0, "remainMinute": m}}
+
+    def status(dryer3):
+        s = {f"워시타워_{i}": {"washer": unit("POWER_OFF"), "dryer": unit("POWER_OFF")}
+             for i in range(1, 10)}
+        s["워시타워_3"]["dryer"] = dryer3
+        return s
+
+    def sub(key, ep, created):
+        tid, ut = key.split("_")
+        return {"subscription": {"endpoint": ep},
+                "alarm": {"key": key, "towerId": int(tid), "unitType": ut,
+                          "deviceName": key, "targetMs": (t0 + 600) * 1000,
+                          "notified5Min": False, "notified0Min": False},
+                "createdAt": created}
+
+    names = ("time", "refresh_source_age", "load_subscriptions", "save_subscriptions",
+             "send_push_notification", "CACHED_STATUS")
+    saved = {k: getattr(srv, k) for k in names}
+    saved_urlopen, saved_caf = srv.urllib.request.urlopen, srv.cafeteria.refresh
+    saved_counts, saved_recent = srv.dryer_care.counts, device_log.recent_error
+    saved_dead = set(srv.DEAD_ENDPOINTS)
+
+    def run(store, steps, on_push=None):
+        idx = {"i": -1}
+        clock = {"t": t0}
+
+        def sleep(_):
+            idx["i"] += 1
+            if idx["i"] >= len(steps):
+                raise _Stop()
+            clock["t"] = t0 + steps[idx["i"]][0]
+            srv.CACHED_STATUS = status(steps[idx["i"]][1])
+
+        def push(sub_info, payload):
+            if on_push:
+                on_push()
+            return True
+
+        real = saved["time"]
+        srv.time = types.SimpleNamespace(time=lambda: clock["t"], sleep=sleep,
+                                         monotonic=real.monotonic, strftime=real.strftime,
+                                         localtime=real.localtime)
+        srv.urllib.request.urlopen = lambda *a, **k: (_ for _ in ()).throw(OSError("offline"))
+        srv.refresh_source_age = lambda: None
+        srv.cafeteria.refresh = lambda: None
+        srv.dryer_care.counts = lambda: {}
+        # 파일처럼: 읽을 때마다 새 사본
+        srv.load_subscriptions = lambda: json.loads(json.dumps(store["l"]))
+        srv.save_subscriptions = lambda lst: store.__setitem__("l", json.loads(json.dumps(lst)))
+        srv.send_push_notification = push
+        device_log.recent_error = lambda *a, **k: None
+        try:
+            srv.background_push_worker()
+        except _Stop:
+            pass
+
+    try:
+        a = sub("3_dryer", "https://example.invalid/a", t0)
+        b = sub("5_washer", "https://example.invalid/b", t0)
+        c = sub("7_washer", "https://example.invalid/c", t0 + 30)
+        store = {"l": [a, b]}
+
+        def meanwhile():
+            # 3번 건조기 완료 푸시를 보내는 동안 요청 쪽에서 생긴 일
+            lst = store["l"]
+            lst[:] = [x for x in lst if x["alarm"]["key"] != "5_washer"]   # 해제
+            for x in lst:
+                if x["alarm"]["key"] == "3_dryer":
+                    x["alarm"]["pickedUp"] = True                           # 가져갔어요
+            lst.append(c)                                                   # 새 등록
+
+        run(store, [(0, unit("END"))], on_push=meanwhile)
+        keys = sorted(x["alarm"]["key"] for x in store["l"])
+        check("도는 사이 새로 건 알림이 남음", "7_washer" in keys, True)
+        check("도는 사이 해제한 알림이 되살아나지 않음", "5_washer" in keys, False)
+        mine = [x for x in store["l"] if x["alarm"]["key"] == "3_dryer"]
+        check("완료 처리한 알림은 남음", len(mine), 1)
+        check("도는 사이 누른 가져갔어요가 남음",
+              bool(mine and mine[0]["alarm"].get("pickedUp")), True)
+        check("완료 표시도 저장됨",
+              bool(mine and mine[0]["alarm"].get("notified0Min")), True)
+
+        # 못 쓴다고 버린 구독은 표시도 지운다. 같은 브라우저가 다시 걸 수 있어야 한다.
+        dead_ep = "https://example.invalid/dead"
+        srv.DEAD_ENDPOINTS.add(dead_ep)
+        store = {"l": [sub("3_dryer", dead_ep, t0)]}
+        run(store, [(0, unit("RUNNING", 30))])
+        check("못 쓰는 구독은 정리됨", store["l"], [])
+        check("정리한 뒤 표시를 지움", dead_ep in srv.DEAD_ENDPOINTS, False)
+    finally:
+        for k, v in saved.items():
+            setattr(srv, k, v)
+        srv.urllib.request.urlopen, srv.cafeteria.refresh = saved_urlopen, saved_caf
+        srv.dryer_care.counts = saved_counts
+        device_log.recent_error = saved_recent
+        srv.DEAD_ENDPOINTS.clear()
+        srv.DEAD_ENDPOINTS.update(saved_dead)
+
+
 def test_parse_device_info():
     import security
     p = security.parse_device_info
@@ -831,7 +950,8 @@ def main():
              test_server_alarm_flow, test_dryer_care,
              test_congestion_dow, test_congestion_weekly_no_invention,
              test_alarm_stays_on_my_cycle, test_health_reports_stale_source,
-             test_gemini_tries_next_key, test_parse_device_info]
+             test_gemini_tries_next_key, test_parse_device_info,
+             test_worker_keeps_concurrent_changes]
     for t in tests:
         try:
             t()
