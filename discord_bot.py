@@ -6,6 +6,7 @@ import unicodedata
 import json
 import asyncio
 import concurrent.futures
+import functools
 import time
 import random
 import threading
@@ -20,6 +21,7 @@ from discord.ext import commands, tasks
 from PIL import Image, ImageDraw, ImageFont
 import washtower
 import device_log
+import dryer_care
 import cafeteria
 import security
 
@@ -209,7 +211,10 @@ STALE_PICKUP_SEC = int(os.environ.get("STALE_PICKUP_SEC") or 15 * 60)
 # =========================================================
 # 폰트 로더 헬퍼
 # =========================================================
+@functools.lru_cache(maxsize=32)
 def get_font(size, bold=False):
+    # 같은 크기는 한 번만 읽는다. 글꼴 파일이 2MB 라, 배치도 한 장을 그릴 때마다
+    # 열 번 넘게 새로 읽고 있었다. 읽은 글꼴은 그리기만 하므로 함께 써도 된다.
     bundled = os.path.join(BASE_DIR, "NanumGothic-Bold.ttf" if bold else "NanumGothic-Regular.ttf")
     if os.path.exists(bundled):
         try:
@@ -564,7 +569,27 @@ bot = commands.Bot(command_prefix="!", intents=intents, tree_cls=GuildGateTree)
 # =========================================================
 # 현실 세탁실 초고화질 카드 뷰 이미지 렌더러 (Web UI 100% 동일)
 # =========================================================
+# 배치도의 오류 칸에 쓰는 짧은 말. 칸이 좁아 길게 못 쓴다. (웹 상세의 short 와 같은 뜻)
+BOARD_ERROR_SHORT = {
+    "EMPTY_WATER_ALERT_ERROR": "배수관 점검 필요",
+    "FILTER_CLEAN_ERROR": "먼지 필터 청소 필요",
+    "DRAIN_ERROR": "배수 펌프 점검 필요",
+    "UNBALANCE_ERROR": "세탁물 뭉침 (UE)",
+    "DOOR_OPEN_ERROR": "도어 덜 닫힘 (dE)",
+}
+
+# 글꼴을 한 번 읽어 함께 쓰므로(get_font) 그리기는 한 번에 하나씩 한다.
+# 같은 글꼴 객체를 두 스레드가 동시에 쓰면 안전하다는 보장이 없다.
+# 그리기는 어차피 CPU 일이라 차례로 해도 늦어지지 않는다.
+_RENDER_LOCK = threading.Lock()
+
+
 def render_floorplan_image(status_data):
+    with _RENDER_LOCK:
+        return _render_floorplan_image(status_data)
+
+
+def _render_floorplan_image(status_data):
     """웹의 '현실 배치 뷰' 카드를 그대로 옮겨 그린다.
 
     나눔고딕에는 이모지 글리프가 없어 🔔 🌀 같은 문자는 빈 칸으로 나온다.
@@ -638,6 +663,14 @@ def render_floorplan_image(status_data):
         elif state in ("WRINKLE_CARE", "COMPLETE", "END"):
             accent = (56, 189, 248)
             state_txt = "구김 방지 중" if state == "WRINKLE_CARE" else "완료 · 수거 가능"
+        elif state == "PAUSE":
+            # 멈춘 기기는 남은 시간이 그대로 와서, 시간만 보면 '작동 중' 으로 그려졌다.
+            accent = (234, 179, 8)
+            state_txt = "일시정지"
+        elif state == "RESERVED":
+            # 예약의 남은 시간은 '시작까지' 다. 도는 것처럼 그리면 안 된다.
+            accent = (203, 213, 225)
+            state_txt = "예약 대기 중"
         elif minutes > 0:
             accent = (245, 158, 11) if is_dryer else (59, 130, 246)
             state_txt = "작동 중"
@@ -676,6 +709,9 @@ def render_floorplan_image(status_data):
                 lbl = "정보 없음"
             elif state == "INITIAL":
                 lbl = "시작 전"
+            elif state in ("WRINKLE_CARE", "COMPLETE", "END"):
+                # 끝났지만 빨래가 들어 있다. '대기 중' 이라 적으면 빈 기기로 읽힌다.
+                lbl = "수거 대기"
             else:
                 lbl = "대기 중"
             draw.text((x + cw - tw(lbl, f_state) - 20, uy + 4), lbl,
@@ -687,10 +723,14 @@ def render_floorplan_image(status_data):
         # 3행: 에러 안내 / 코스 뱃지 + 5분전 알림 뱃지
         by = uy + 62
         if err:
+            # 오류 코드에 맞는 한 마디를 쓴다. 예전에는 어떤 오류든 '배수관 점검' 이라
+            # 적어서, 도어가 덜 닫힌 기기에도 배수관을 보러 가게 했다.
+            code = unit.get("error")
+            short = BOARD_ERROR_SHORT.get(code if isinstance(code, str) else "", "점검 필요")
             pill(x + 20, by, x + cw - 20, by + 30, fill=(69, 16, 16), outline=(185, 28, 28))
-            draw.text((x + 34, by + 5), ("건조기" if is_dryer else "세탁기") + " 배수관 점검 필요",
+            draw.text((x + 34, by + 5), ("건조기 " if is_dryer else "세탁기 ") + short,
                       fill=(254, 202, 202), font=f_badge)
-        elif minutes > 0:
+        elif minutes > 0 and state not in ("PAUSE", "RESERVED"):
             # ⚠️ 기기가 준 값이 아니다. 코스는 원본 API 에 오지 않는다.
             # 가장 흔한 코스를 기본값으로 적어 둔다.
             badge = "표준 건조" if is_dryer else "표준 세탁"
@@ -714,20 +754,27 @@ def render_floorplan_image(status_data):
         d_init = d_state == "INITIAL"
         w_init = w_state == "INITIAL"
 
+        # 남은 시간만 보고 '가동 중' 이라 하지 않는다. 일시정지는 시간이 얼어 있고,
+        # 예약은 시작까지의 시간이다. (웹 카드도 돌고 있는 것만 가동 중으로 친다)
+        d_run = d_min > 0 and d_state not in ("PAUSE", "RESERVED")
+        w_run = w_min > 0 and w_state not in ("PAUSE", "RESERVED")
+        # 돌지는 않지만 빨래가 들어 있는 상태
+        occupied = ("INITIAL", "PAUSE", "RESERVED", "WRINKLE_CARE", "COMPLETE", "END")
+
         if no_data:
             border, label, bg = (148, 163, 184), "정보 없음", (30, 41, 59)
         elif d_err or w_err:
             border, label, bg = (239, 68, 68), "점검 필요", (69, 16, 16)
-        elif d_init or w_init:
-            # 코스를 골라둔 기기가 있으면 비어 있는 칸이 아니다.
+        elif d_run and w_run:
+            border, label, bg = (16, 185, 129), "전체 가동 중", (6, 78, 59)
+        elif d_run:
+            border, label, bg = (245, 158, 11), "건조 가동 중", (69, 45, 8)
+        elif w_run:
+            border, label, bg = (59, 130, 246), "세탁 가동 중", (23, 46, 105)
+        elif d_init or w_init or d_state in occupied or w_state in occupied:
+            # 코스를 골라뒀거나 멈췄거나 끝나고 안 꺼낸 기기가 있으면 비어 있는 칸이 아니다.
             # 다만 돌고 있는 것도 아니므로 '가동 중' 이라고 하지 않는다.
             border, label, bg = (203, 213, 225), "사용 중", (30, 41, 59)
-        elif d_min > 0 and w_min > 0:
-            border, label, bg = (16, 185, 129), "전체 가동 중", (6, 78, 59)
-        elif d_min > 0:
-            border, label, bg = (245, 158, 11), "건조 가동 중", (69, 45, 8)
-        elif w_min > 0:
-            border, label, bg = (59, 130, 246), "세탁 가동 중", (23, 46, 105)
         else:
             border, label, bg = (51, 65, 85), "전체 대기 중", (30, 41, 59)
 
@@ -824,6 +871,47 @@ def toggle_alarm_state(user_id, tower_id, unit_type, remain_min, device_name):
     return True
 
 
+def cycle_now(status_data, tower_id, unit_type):
+    """그 기기가 지금 몇 번째 사이클인지. 모르면 None.
+
+    세탁기는 기기가 주는 누적 횟수를, 건조기는 dryer_care 가 가동->완료를
+    보고 센 횟수를 쓴다(건조기는 기기가 누적을 안 알려준다). 웹 푸시와 같은 기준이다.
+    """
+    if unit_type == "washer":
+        tower = next((t for t in TOWERS if t["id"] == tower_id), None)
+        if not tower:
+            return None
+        v = ((((status_data or {}).get(tower["name"]) or {}).get("washer") or {})
+             .get("cycle") or {}).get("cycleCount")
+    else:
+        try:
+            v = (dryer_care.counts().get(f"{tower_id}호기") or {}).get("count")
+        except Exception:
+            v = None
+    return v if isinstance(v, int) else None
+
+
+def alarm_cycle_delta(item, status_data):
+    """등록할 때의 사이클에서 몇 번이나 지났는지.
+
+        0     아직 내가 등록한 그 사이클이다
+        1     내 사이클은 끝났다
+        2 이상 그 뒤로도 더 돌았다. 지금 도는 것은 남의 빨래다
+        None  알 수 없다
+
+    기기는 몇 분에 한 번만 상태를 준다. 내 빨래가 끝나고 다음 사람이 곧바로
+    돌리면 '끝남' 을 못 보고 지나가, 알림이 남의 빨래에 붙은 채 남았다.
+    웹 푸시는 이 셈으로 막고 있었는데 봇에는 없었다.
+    통살균으로 횟수가 되돌아가면 내 사이클은 한참 전에 끝난 것이라 2 로 본다.
+    """
+    at = item.get("cycleAtRegister")
+    now = cycle_now(status_data, item.get("towerId"), item.get("unitType"))
+    if not isinstance(at, int) or now is None:
+        return None
+    d = now - at
+    return 2 if d < 0 else d
+
+
 def parse_option_value(val):
     """드롭다운 value 형식: towerId_unitType_remainMin_deviceName"""
     parts = val.split("_")
@@ -876,7 +964,9 @@ def get_running_options(status_data):
         d_err = is_error_stopped(d)
 
         # 상단 건조기 검증 (에러/대기 제외, 진짜 가동 중인 기기만)
-        if not d_err and is_unit_running(d_state, d_min):
+        # 예약(RESERVED)은 빼둔다. 남은 시간이 '시작까지' 라 5분 전 알림이 맞지 않는다.
+        # (웹도 예약 기기에는 알림 버튼을 안 띄운다)
+        if not d_err and d_state != "RESERVED" and is_unit_running(d_state, d_min):
             time_str = format_timer((d.get("timer") or {}).get("remainHour", 0), (d.get("timer") or {}).get("remainMinute", 0))
             running_options.append(discord.SelectOption(
                 label=f"[{t['zoneName'][:2]}] {t['label']} 건조기 ({time_str} 남음)",
@@ -886,7 +976,7 @@ def get_running_options(status_data):
             ))
 
         # 하단 세탁기 검증
-        if not w_err and is_unit_running(w_state, w_min):
+        if not w_err and w_state != "RESERVED" and is_unit_running(w_state, w_min):
             time_str = format_timer((w.get("timer") or {}).get("remainHour", 0), (w.get("timer") or {}).get("remainMinute", 0))
             running_options.append(discord.SelectOption(
                 label=f"[{t['zoneName'][:2]}] {t['label']} 세탁기 ({time_str} 남음)",
@@ -2455,7 +2545,7 @@ def build_assistant_prompt(text, status_data, mine, kb_limit=None, admin=False):
         "세탁 방법을 물어보면 [세탁 상식]을 근거로 답하고, action 은 chat 으로 둬라.\n"
         "reply 에는 사용자에게 보여줄 한국어 답변을 담아라. 필요하면 여러 줄로 써도 된다.\n"
         "이전 대화가 있으면 그 맥락을 이어서 이해해라. "
-        "예를 들어 사용자가 앞서 3번 건조기를 말했고 이번에 '그거 해제해줘' 라고 하면 3번 건조기를 뜻한다."
+        "예를 들어 사용자가 앞서 3번 건조기를 말했고 이번에 '그거 해제해줘' 라고 하면 3번 건조기를 뜻한다.\n\n"
         + ("[정글 생활 안내]\n" + kb_text + "\n\n" if kb_text else "")
         + "[지금 시각]\n" + _now_line() + "\n\n"
         "[지금 기기 상태]\n" + "\n".join(lines) + "\n\n"
@@ -3921,6 +4011,10 @@ def _presence_soonest(status_data):
             state = unit_state(u)
             if state in (None, "POWER_OFF", "INITIAL", "WRINKLE_CARE"):
                 continue
+            # 멈춘 기기의 시간은 얼어 있고, 예약의 남은 시간은 '시작까지' 다.
+            # 둘 다 'N분 뒤 완료' 가 아니다.
+            if state in ("PAUSE", "RESERVED") or is_error_stopped(u):
+                continue
             t = u.get("timer") or {}
             mins = _mins(t)
             if mins > 0 and (best is None or mins < best[0]):
@@ -4065,6 +4159,46 @@ async def check_laundry_alarms():
             item.pop("notifiedNoData", None)
             changed = True
 
+        # 등록한 사이클 번호를 처음 본 값으로 적어 둔다. 등록 뒤 첫 바퀴(10초 안)라
+        # 그 사이클 그대로다. 이 기능 이전에 걸린 알림도 여기서 번호를 얻는다.
+        if "cycleAtRegister" not in item and not item.get("notified0Min"):
+            item["cycleAtRegister"] = cycle_now(status_data, item["towerId"], item["unitType"])
+            changed = True
+        cycle_delta = alarm_cycle_delta(item, status_data)
+
+        # 내 사이클에서 두 번 이상 지났다. 지금 도는 것은 남의 빨래다.
+        if cycle_delta is not None and cycle_delta >= 2:
+            print(f"[Alarm] 지난 사이클 정리: {item.get('deviceName', '?')} "
+                  f"(등록 뒤 {cycle_delta}번 돌았음)")
+            to_remove.append(item)
+            continue
+
+        # 내 사이클은 끝났는데 완료를 못 알렸고, 기기는 이미 다음 사람 것으로
+        # 돌거나 멈춰 있다. 끝나는 순간을 못 보고 지나간 것이다.
+        # 끝난 것은 분명하므로 알리되, 언제 끝났는지는 모른다고 적는다.
+        # (지금 '끝남' 으로 보이면 아래 평소 완료 알림이 그대로 처리한다)
+        if (cycle_delta is not None and cycle_delta >= 1
+                and not item.get("notified0Min")
+                and (run_state in STARTED_STATES
+                     or device_log.is_stopped(run_state, unit_data.get("error")))):
+            item["notified0Min"] = True
+            item["completedAt"] = now_ts
+            changed = True
+            print(f"[Alarm] 뒤늦게 완료 확인: {item.get('deviceName', '?')}")
+            user = await resolve_user(item["userId"])
+            if user:
+                try:
+                    await user.send(
+                        f"🏁 **[세탁 완료] {item['deviceName']}** 가동이 끝났습니다!\n"
+                        f"👉 기기가 {source_interval_min()}분에 한 번만 알려줘서 끝난 시각은 "
+                        f"정확히 알 수 없습니다. 빨래를 수거해 주세요! 🫧",
+                        view=None if item.get("pickedUp") else PickedUpView(
+                            item["userId"], item["towerId"], item["unitType"])
+                    )
+                except Exception as e:
+                    print(f"[DM Send Error] {e}")
+            continue
+
 
         # 🚨 1) 기기가 멈추면 알린다. 오류든 일시정지든.
         #
@@ -4112,7 +4246,11 @@ async def check_laundry_alarms():
         # 🔔 2) 5분 이하 남았을 때 5분 전 알림
         # 멈춰 있는 동안은 시계가 얼어붙는다. 그걸 보고 "5분 뒤 완료" 라고
         # 하면 거짓말이다. 다시 돌기 시작한 뒤에 세어도 늦지 않다.
-        if not is_stopped and remain_min <= 5 and remain_min > 0 and not item.get("notified5Min"):
+        # 예약(RESERVED)의 남은 시간은 '시작까지' 다. 그때 "5분 뒤 완료" 를 보내면
+        # 시작 5분 전에 완료 알림이 간다. 내 사이클이 아닐 때도 보내지 않는다.
+        if (not is_stopped and run_state != "RESERVED"
+                and (cycle_delta is None or cycle_delta == 0)
+                and remain_min <= 5 and remain_min > 0 and not item.get("notified5Min")):
             item["notified5Min"] = True
             changed = True
             user = await resolve_user(item["userId"])

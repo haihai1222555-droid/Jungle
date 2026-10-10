@@ -921,6 +921,111 @@ def test_worker_keeps_concurrent_changes():
         srv.DEAD_ENDPOINTS.update(saved_dead)
 
 
+# =========================================================
+# 18. 봇 DM 알림도 내가 등록한 그 사이클의 것이다
+# =========================================================
+def test_bot_alarm_stays_on_my_cycle():
+    """웹 푸시(15번)와 같은 것을 디스코드 봇 감시 루프에서 본다.
+
+    기기는 몇 분에 한 번만 상태를 준다. 내 빨래가 끝나고 다음 사람이 곧바로
+    돌리면 '끝남' 을 못 보고 지나간다. 봇은 그때 알림을 남의 빨래에 붙인 채
+    두어, 남의 빨래로 '5분 전' · '완료' DM 을 보냈다.
+    예약 기기의 남은 시간은 '시작까지' 인데 '5분 뒤 완료' 를 보내기도 했다.
+    """
+    import asyncio
+    import dryer_care
+
+    def unit(state, m=0, cyc=None):
+        u = {"runState": {"currentState": state},
+             "timer": {"remainHour": 0, "remainMinute": m}}
+        if cyc is not None:
+            u["cycle"] = {"cycleCount": cyc}
+        return u
+
+    def status(u, unit_type):
+        s = {f"워시타워_{i}": {"washer": unit("POWER_OFF"), "dryer": unit("POWER_OFF")}
+             for i in range(1, 10)}
+        s["워시타워_3"][unit_type] = u
+        return s
+
+    class FakeUser:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, content=None, **kw):
+            self.sent.append(content or "")
+
+    names = ("fetch_live_status", "resolve_user", "api_blocked", "save_alarms",
+             "active_alarms")
+    saved = {k: getattr(bot, k) for k in names}
+    saved_counts, saved_recent = dryer_care.counts, device_log.recent_error
+
+    def run(steps, unit_type="dryer"):
+        """steps: (상태, 남은분, 사이클번호). 돌려주는 값: (받은 DM, 남은 알림)"""
+        user = FakeUser()
+        care = {"c": 0}
+        cur = {"s": None}
+        alarms = [{"key": "1_3_%s" % unit_type, "userId": 1, "towerId": 3,
+                   "unitType": unit_type, "deviceName": "No.3 기기",
+                   "targetMs": 0, "notified5Min": False, "notified0Min": False,
+                   "createdAt": bot.datetime.now().timestamp()}]
+        bot.active_alarms[:] = alarms
+        bot.fetch_live_status = lambda: cur["s"]
+
+        async def resolve(_):
+            return user
+        bot.resolve_user = resolve
+        bot.api_blocked = lambda: False
+        bot.save_alarms = lambda: None
+        dryer_care.counts = lambda: {"3호기": {"count": care["c"]}}
+        device_log.recent_error = lambda *a, **k: None
+
+        async def go():
+            for stt, m, cyc in steps:
+                care["c"] = cyc
+                cur["s"] = status(unit(stt, m, cyc if unit_type == "washer" else None),
+                                  unit_type)
+                await bot.check_laundry_alarms.coro()
+        asyncio.run(go())
+        return user.sent, list(bot.active_alarms)
+
+    def has(sent, word):
+        return any(word in s for s in sent)
+
+    try:
+        bot.active_alarms = []
+        # 끝나는 순간을 못 보고 남의 빨래가 돌기 시작했다
+        sent, left = run([("RUNNING", 30, 4), ("RUNNING", 80, 5), ("RUNNING", 4, 5)])
+        check("봇: 놓친 완료는 뒤늦게 알린다", has(sent, "세탁 완료"), True)
+        check("봇: 남의 빨래 5분 전은 안 보낸다", has(sent, "5분 전"), False)
+        check("봇: 남의 빨래가 돌면 알림을 뗀다", left, [])
+
+        # 한참 지났으면 아무 말 없이 뗀다
+        sent, left = run([("RUNNING", 30, 4), ("RUNNING", 50, 6)])
+        check("봇: 두 번 넘게 지난 알림은 조용히 뗀다", (sent, left), ([], []))
+
+        # 아직 내 사이클이면 예전처럼 5분 전이 간다
+        sent, _ = run([("RUNNING", 30, 4), ("RUNNING", 4, 4)])
+        check("봇: 내 사이클이면 5분 전이 간다", has(sent, "5분 전"), True)
+
+        # 끝나는 것을 제때 봤으면 평소 완료 알림이 간다
+        sent, _ = run([("RUNNING", 30, 4), ("END", 0, 5)])
+        check("봇: 제때 본 완료는 평소 알림", has(sent, "가동이 모두 끝났습니다"), True)
+
+        # 세탁기는 기기가 주는 누적 횟수로 같은 판단을 한다
+        sent, left = run([("RUNNING", 30, 11), ("RUNNING", 4, 13)], unit_type="washer")
+        check("봇: 세탁기도 남의 사이클엔 안 보낸다", (has(sent, "5분 전"), left), (False, []))
+
+        # 예약의 남은 시간은 시작까지다
+        sent, _ = run([("RESERVED", 30, 4), ("RESERVED", 4, 4)])
+        check("봇: 예약 시작 5분 전에 '5분 뒤 완료' 를 안 보낸다", has(sent, "5분 전"), False)
+    finally:
+        for k, v in saved.items():
+            setattr(bot, k, v)
+        dryer_care.counts = saved_counts
+        device_log.recent_error = saved_recent
+
+
 def test_parse_device_info():
     import security
     p = security.parse_device_info
@@ -951,7 +1056,7 @@ def main():
              test_congestion_dow, test_congestion_weekly_no_invention,
              test_alarm_stays_on_my_cycle, test_health_reports_stale_source,
              test_gemini_tries_next_key, test_parse_device_info,
-             test_worker_keeps_concurrent_changes]
+             test_worker_keeps_concurrent_changes, test_bot_alarm_stays_on_my_cycle]
     for t in tests:
         try:
             t()
