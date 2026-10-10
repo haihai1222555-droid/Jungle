@@ -20,6 +20,13 @@ REQUIRED = [
     "discloud.config",
     "discord_bot.py",
     "state_store.py",
+    # discord_bot.py 가 import 하는 모듈. 하나라도 빠지면 봇이 켜지자마자 멈춘다.
+    # (예전 목록에는 이 줄들이 없어서, 만든 zip 으로는 봇이 뜨지 않았다)
+    "washtower.py",
+    "device_log.py",
+    "dryer_care.py",
+    "cafeteria.py",
+    "security.py",
     "jungle_kb.py",
     "requirements-bot.txt",
     "NanumGothic-Bold.ttf",

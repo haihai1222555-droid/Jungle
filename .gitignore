@@ -61,3 +61,7 @@ cafeteria_*.cache
 menu_subs.json
 # 이미 알린 글 번호
 cafeteria_seen.json
+
+# 봇 배포용 zip (build_bot_zip.py 가 만든다). 안에 jungle_kb.py·assets 사진,
+# 있으면 .env 까지 담긴다. 공개 저장소에 올라가면 위에서 막은 것이 그대로 새 나간다.
+jungle_bot_discloud.zip
