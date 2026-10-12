@@ -802,6 +802,230 @@ def test_gemini_tries_next_key():
         bot._DEAD_KEYS.clear()
 
 
+# =========================================================
+# 17. 워커가 도는 사이에 들어온 등록·해제를 덮어쓰지 않는다
+# =========================================================
+def test_worker_keeps_concurrent_changes():
+    """워커는 목록을 읽고, 푸시를 보내느라 몇 초 쓰고, 통째로 저장한다.
+
+    그 사이에 새로 건 알림이 사라지거나, 해제한 알림이 되살아나거나,
+    '가져갔어요' 가 지워지면 안 된다. 파일처럼 읽을 때마다 새 사본을 준다.
+    """
+    import json
+    import types
+
+    class _Stop(BaseException):
+        pass
+
+    t0 = 1_800_000_000.0
+
+    def unit(state, m=0):
+        return {"runState": {"currentState": state},
+                "timer": {"remainHour": 0, "remainMinute": m}}
+
+    def status(dryer3):
+        s = {f"워시타워_{i}": {"washer": unit("POWER_OFF"), "dryer": unit("POWER_OFF")}
+             for i in range(1, 10)}
+        s["워시타워_3"]["dryer"] = dryer3
+        return s
+
+    def sub(key, ep, created):
+        tid, ut = key.split("_")
+        return {"subscription": {"endpoint": ep},
+                "alarm": {"key": key, "towerId": int(tid), "unitType": ut,
+                          "deviceName": key, "targetMs": (t0 + 600) * 1000,
+                          "notified5Min": False, "notified0Min": False},
+                "createdAt": created}
+
+    names = ("time", "refresh_source_age", "load_subscriptions", "save_subscriptions",
+             "send_push_notification", "CACHED_STATUS")
+    saved = {k: getattr(srv, k) for k in names}
+    saved_urlopen, saved_caf = srv.urllib.request.urlopen, srv.cafeteria.refresh
+    saved_counts, saved_recent = srv.dryer_care.counts, device_log.recent_error
+    saved_dead = set(srv.DEAD_ENDPOINTS)
+
+    def run(store, steps, on_push=None):
+        idx = {"i": -1}
+        clock = {"t": t0}
+
+        def sleep(_):
+            idx["i"] += 1
+            if idx["i"] >= len(steps):
+                raise _Stop()
+            clock["t"] = t0 + steps[idx["i"]][0]
+            srv.CACHED_STATUS = status(steps[idx["i"]][1])
+
+        def push(sub_info, payload):
+            if on_push:
+                on_push()
+            return True
+
+        real = saved["time"]
+        srv.time = types.SimpleNamespace(time=lambda: clock["t"], sleep=sleep,
+                                         monotonic=real.monotonic, strftime=real.strftime,
+                                         localtime=real.localtime)
+        srv.urllib.request.urlopen = lambda *a, **k: (_ for _ in ()).throw(OSError("offline"))
+        srv.refresh_source_age = lambda: None
+        srv.cafeteria.refresh = lambda: None
+        srv.dryer_care.counts = lambda: {}
+        # 파일처럼: 읽을 때마다 새 사본
+        srv.load_subscriptions = lambda: json.loads(json.dumps(store["l"]))
+        srv.save_subscriptions = lambda lst: store.__setitem__("l", json.loads(json.dumps(lst)))
+        srv.send_push_notification = push
+        device_log.recent_error = lambda *a, **k: None
+        try:
+            srv.background_push_worker()
+        except _Stop:
+            pass
+
+    try:
+        a = sub("3_dryer", "https://example.invalid/a", t0)
+        b = sub("5_washer", "https://example.invalid/b", t0)
+        c = sub("7_washer", "https://example.invalid/c", t0 + 30)
+        store = {"l": [a, b]}
+
+        def meanwhile():
+            # 3번 건조기 완료 푸시를 보내는 동안 요청 쪽에서 생긴 일
+            lst = store["l"]
+            lst[:] = [x for x in lst if x["alarm"]["key"] != "5_washer"]   # 해제
+            for x in lst:
+                if x["alarm"]["key"] == "3_dryer":
+                    x["alarm"]["pickedUp"] = True                           # 가져갔어요
+            lst.append(c)                                                   # 새 등록
+
+        run(store, [(0, unit("END"))], on_push=meanwhile)
+        keys = sorted(x["alarm"]["key"] for x in store["l"])
+        check("도는 사이 새로 건 알림이 남음", "7_washer" in keys, True)
+        check("도는 사이 해제한 알림이 되살아나지 않음", "5_washer" in keys, False)
+        mine = [x for x in store["l"] if x["alarm"]["key"] == "3_dryer"]
+        check("완료 처리한 알림은 남음", len(mine), 1)
+        check("도는 사이 누른 가져갔어요가 남음",
+              bool(mine and mine[0]["alarm"].get("pickedUp")), True)
+        check("완료 표시도 저장됨",
+              bool(mine and mine[0]["alarm"].get("notified0Min")), True)
+
+        # 못 쓴다고 버린 구독은 표시도 지운다. 같은 브라우저가 다시 걸 수 있어야 한다.
+        dead_ep = "https://example.invalid/dead"
+        srv.DEAD_ENDPOINTS.add(dead_ep)
+        store = {"l": [sub("3_dryer", dead_ep, t0)]}
+        run(store, [(0, unit("RUNNING", 30))])
+        check("못 쓰는 구독은 정리됨", store["l"], [])
+        check("정리한 뒤 표시를 지움", dead_ep in srv.DEAD_ENDPOINTS, False)
+    finally:
+        for k, v in saved.items():
+            setattr(srv, k, v)
+        srv.urllib.request.urlopen, srv.cafeteria.refresh = saved_urlopen, saved_caf
+        srv.dryer_care.counts = saved_counts
+        device_log.recent_error = saved_recent
+        srv.DEAD_ENDPOINTS.clear()
+        srv.DEAD_ENDPOINTS.update(saved_dead)
+
+
+# =========================================================
+# 18. 봇 DM 알림도 내가 등록한 그 사이클의 것이다
+# =========================================================
+def test_bot_alarm_stays_on_my_cycle():
+    """웹 푸시(15번)와 같은 것을 디스코드 봇 감시 루프에서 본다.
+
+    기기는 몇 분에 한 번만 상태를 준다. 내 빨래가 끝나고 다음 사람이 곧바로
+    돌리면 '끝남' 을 못 보고 지나간다. 봇은 그때 알림을 남의 빨래에 붙인 채
+    두어, 남의 빨래로 '5분 전' · '완료' DM 을 보냈다.
+    예약 기기의 남은 시간은 '시작까지' 인데 '5분 뒤 완료' 를 보내기도 했다.
+    """
+    import asyncio
+    import dryer_care
+
+    def unit(state, m=0, cyc=None):
+        u = {"runState": {"currentState": state},
+             "timer": {"remainHour": 0, "remainMinute": m}}
+        if cyc is not None:
+            u["cycle"] = {"cycleCount": cyc}
+        return u
+
+    def status(u, unit_type):
+        s = {f"워시타워_{i}": {"washer": unit("POWER_OFF"), "dryer": unit("POWER_OFF")}
+             for i in range(1, 10)}
+        s["워시타워_3"][unit_type] = u
+        return s
+
+    class FakeUser:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, content=None, **kw):
+            self.sent.append(content or "")
+
+    names = ("fetch_live_status", "resolve_user", "api_blocked", "save_alarms",
+             "active_alarms")
+    saved = {k: getattr(bot, k) for k in names}
+    saved_counts, saved_recent = dryer_care.counts, device_log.recent_error
+
+    def run(steps, unit_type="dryer"):
+        """steps: (상태, 남은분, 사이클번호). 돌려주는 값: (받은 DM, 남은 알림)"""
+        user = FakeUser()
+        care = {"c": 0}
+        cur = {"s": None}
+        alarms = [{"key": "1_3_%s" % unit_type, "userId": 1, "towerId": 3,
+                   "unitType": unit_type, "deviceName": "No.3 기기",
+                   "targetMs": 0, "notified5Min": False, "notified0Min": False,
+                   "createdAt": bot.datetime.now().timestamp()}]
+        bot.active_alarms[:] = alarms
+        bot.fetch_live_status = lambda: cur["s"]
+
+        async def resolve(_):
+            return user
+        bot.resolve_user = resolve
+        bot.api_blocked = lambda: False
+        bot.save_alarms = lambda: None
+        dryer_care.counts = lambda: {"3호기": {"count": care["c"]}}
+        device_log.recent_error = lambda *a, **k: None
+
+        async def go():
+            for stt, m, cyc in steps:
+                care["c"] = cyc
+                cur["s"] = status(unit(stt, m, cyc if unit_type == "washer" else None),
+                                  unit_type)
+                await bot.check_laundry_alarms.coro()
+        asyncio.run(go())
+        return user.sent, list(bot.active_alarms)
+
+    def has(sent, word):
+        return any(word in s for s in sent)
+
+    try:
+        bot.active_alarms = []
+        # 끝나는 순간을 못 보고 남의 빨래가 돌기 시작했다
+        sent, left = run([("RUNNING", 30, 4), ("RUNNING", 80, 5), ("RUNNING", 4, 5)])
+        check("봇: 놓친 완료는 뒤늦게 알린다", has(sent, "세탁 완료"), True)
+        check("봇: 남의 빨래 5분 전은 안 보낸다", has(sent, "5분 전"), False)
+        check("봇: 남의 빨래가 돌면 알림을 뗀다", left, [])
+
+        # 한참 지났으면 아무 말 없이 뗀다
+        sent, left = run([("RUNNING", 30, 4), ("RUNNING", 50, 6)])
+        check("봇: 두 번 넘게 지난 알림은 조용히 뗀다", (sent, left), ([], []))
+
+        # 아직 내 사이클이면 예전처럼 5분 전이 간다
+        sent, _ = run([("RUNNING", 30, 4), ("RUNNING", 4, 4)])
+        check("봇: 내 사이클이면 5분 전이 간다", has(sent, "5분 전"), True)
+
+        # 끝나는 것을 제때 봤으면 평소 완료 알림이 간다
+        sent, _ = run([("RUNNING", 30, 4), ("END", 0, 5)])
+        check("봇: 제때 본 완료는 평소 알림", has(sent, "가동이 모두 끝났습니다"), True)
+
+        # 세탁기는 기기가 주는 누적 횟수로 같은 판단을 한다
+        sent, left = run([("RUNNING", 30, 11), ("RUNNING", 4, 13)], unit_type="washer")
+        check("봇: 세탁기도 남의 사이클엔 안 보낸다", (has(sent, "5분 전"), left), (False, []))
+
+        # 예약의 남은 시간은 시작까지다
+        sent, _ = run([("RESERVED", 30, 4), ("RESERVED", 4, 4)])
+        check("봇: 예약 시작 5분 전에 '5분 뒤 완료' 를 안 보낸다", has(sent, "5분 전"), False)
+    finally:
+        for k, v in saved.items():
+            setattr(bot, k, v)
+        dryer_care.counts = saved_counts
+        device_log.recent_error = saved_recent
+
+
 def test_parse_device_info():
     import security
     p = security.parse_device_info
@@ -831,7 +1055,8 @@ def main():
              test_server_alarm_flow, test_dryer_care,
              test_congestion_dow, test_congestion_weekly_no_invention,
              test_alarm_stays_on_my_cycle, test_health_reports_stale_source,
-             test_gemini_tries_next_key, test_parse_device_info]
+             test_gemini_tries_next_key, test_parse_device_info,
+             test_worker_keeps_concurrent_changes, test_bot_alarm_stays_on_my_cycle]
     for t in tests:
         try:
             t()

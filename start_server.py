@@ -74,6 +74,13 @@ if HAS_WEBPUSH:
         v.save_public_key(VAPID_PUB_PATH)
     else:
         v = Vapid.from_file(VAPID_PRIV_PATH)
+    # 개인키는 나만 읽게 한다. 만들 때 기본 권한(644)이면 서버의 다른 계정도
+    # 읽을 수 있다. 아래 check_secret_file_perms 가 매번 경고하던 것이 이것이다.
+    if os.name == "posix":
+        try:
+            os.chmod(VAPID_PRIV_PATH, 0o600)
+        except OSError as e:
+            print(f"[Warn] VAPID 개인키 권한을 바꾸지 못했습니다: {e}")
     
     raw_pub = v.public_key.public_bytes(
         encoding=serialization.Encoding.X962,
@@ -194,7 +201,42 @@ def alarm_cycle_delta(alarm, unit_data, tower_id, unit_type, care_counts):
     return 2 if delta < 0 else delta
 
 # 구독 파일에 대한 읽기/쓰기를 직렬화한다 (워커 스레드와 요청 스레드가 동시에 접근)
-SUBS_LOCK = threading.Lock()
+# 다시 잡을 수 있는 잠금이다. 요청 쪽은 '읽고 고치고 쓰기' 전체를 이 잠금 안에서
+# 하고, 그 안에서 load/save 가 또 잡는다.
+SUBS_LOCK = threading.RLock()
+
+
+def _sub_id(x):
+    """구독 하나를 가리키는 값. 같은 기기를 다시 걸면 createdAt 이 바뀐다."""
+    return ((x.get('alarm') or {}).get('key'),
+            (x.get('subscription') or {}).get('endpoint'),
+            x.get('createdAt'))
+
+
+def merge_worker_subs(before, after, current):
+    """워커가 한 바퀴 돈 결과를 지금 파일에 있는 것과 합친다.
+
+    워커는 바퀴 처음에 목록을 읽고, 푸시를 보내느라 몇 초를 쓴 뒤 통째로
+    저장한다. 그 사이에 들어온 등록·해제·'가져갔어요' 를 그대로 덮으면
+    새로 건 알림이 사라지거나, 해제한 알림이 되살아난다.
+
+        before  워커가 바퀴 처음에 읽은 것
+        after   워커가 남기기로 한 것 (알림 상태를 고친 채)
+        current 저장하기 직전에 다시 읽은 것
+    """
+    seen = {_sub_id(x) for x in before}
+    now = {_sub_id(x): x for x in current}
+    out = []
+    for x in after:
+        cur = now.get(_sub_id(x))
+        if cur is None:
+            continue                  # 도는 사이에 해제됐다
+        if (cur.get('alarm') or {}).get('pickedUp'):
+            x.setdefault('alarm', {})['pickedUp'] = True
+        out.append(x)
+    # 도는 사이에 새로 걸린 것
+    out.extend(x for x in current if _sub_id(x) not in seen)
+    return out
 
 def load_subscriptions():
     with SUBS_LOCK:
@@ -364,9 +406,10 @@ def record_congestion_sample(status_data):
         hour_slot["s"] += total
         hour_slot["b"] += busy
 
-        # 14일 지난 날짜는 정리
+        # 14일 지난 날짜는 정리. 오늘 포함 14일을 남긴다.
+        # 예전에는 15일을 남겨서 개수가 늘 14를 넘었고, 5초마다 정리를 다시 돌았다.
         if len(daily) > 14:
-            cutoff = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+            cutoff = (now - timedelta(days=13)).strftime("%Y-%m-%d")
             CONGESTION["daily"] = {k: v for k, v in daily.items() if k >= cutoff}
 
     if time.time() - _CONGESTION_SAVED_AT >= CONGESTION_SAVE_SEC:
@@ -677,6 +720,7 @@ def background_push_worker():
             now_ms = time.time() * 1000
             changed = False
             active_subs = []
+            purged = set()          # 이번 바퀴에 못 쓴다고 버린 endpoint
             # 건조기 사이클 번호. 기기가 누적을 안 알려줘서 우리가 센 값이다.
             try:
                 care_counts = dryer_care.counts()
@@ -692,6 +736,7 @@ def background_push_worker():
                 # 이미 못 쓴다고 판명된 구독은 여기서 버린다
                 if sub_info.get('endpoint') in DEAD_ENDPOINTS:
                     print(f"[Alarm] 못 쓰는 구독 정리: {alarm.get('deviceName', '?')}")
+                    purged.add(sub_info.get('endpoint'))
                     changed = True
                     continue
 
@@ -938,8 +983,15 @@ def background_push_worker():
 
                 active_subs.append(item)
 
+            # 버린 것은 표시도 지운다. 남겨 두면 같은 브라우저가 다시 등록해도
+            # (endpoint 가 그대로일 때가 있다) 다음 바퀴에 곧바로 버려지고,
+            # 표시가 상한까지 차면 새로 죽은 구독을 더는 걸러내지 못한다.
+            DEAD_ENDPOINTS.difference_update(purged)
+
             if changed:
-                save_subscriptions(active_subs)
+                with SUBS_LOCK:
+                    save_subscriptions(merge_worker_subs(
+                        subs, active_subs, load_subscriptions()))
         except Exception as e:
             print(f"[Worker Error] {e}")
 
@@ -991,9 +1043,12 @@ def _forwardable_headers(items):
     Transfer-Encoding·Content-Length·Content-Encoding 은 우리가 다시
     붙이는 값과 안 맞을 수 있고, 원본이 붙인 CORS 머리말은 우리 것과
     겹치면 브라우저가 둘 다 무시해 화면이 빈다.
+    Server·Date 는 우리 서버가 이미 붙인다. 넘기면 같은 머리말이 두 번 나가고,
+    Connection 은 이 연결 한 구간에만 쓰는 것이라 넘기면 안 된다.
     """
     return [(k, v) for k, v in items
-            if k.lower() not in ('transfer-encoding', 'content-length', 'content-encoding')
+            if k.lower() not in ('transfer-encoding', 'content-length', 'content-encoding',
+                                 'server', 'date', 'connection', 'keep-alive')
             and not k.lower().startswith('access-control-')]
 
 
@@ -1566,7 +1621,9 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             if not item:
                 self._json_out(500, {"ok": False, "error": "접수하지 못했습니다."})
                 return
-            print(f"[제보] 웹에서 접수 #{item['id']} ({item['kind']}) — {who_label}")
+            # IP·기기 정보는 제보 기록에만 둔다. 로그 파일(server.log)은 지우는 때가 없어서,
+            # 여기 적으면 처리방침에 적은 보관 기간(최근 300건)을 넘어 계속 남는다.
+            print(f"[제보] 웹에서 접수 #{item['id']} ({item['kind']})")
             self._json_out(200, {"ok": True, "id": item['id']})
             return
 
@@ -1588,17 +1645,20 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 sub_info = data.get('subscription')
                 alarm_info = data.get('alarm')
                 if sub_info and alarm_info:
-                    subs = load_subscriptions()
                     key = alarm_info.get('key')
                     endpoint = sub_info.get('endpoint')
-                    # 중복 판정은 (구독 기기 + 세탁기) 조합으로 한다.
-                    # 세탁기 키만 보면, 같은 세탁기를 폰과 컴퓨터에서 각각 등록했을 때
-                    # 나중에 등록한 기기가 먼저 등록한 기기의 구독을 지워버린다.
-                    subs = [x for x in subs
-                            if not ((x.get('alarm') or {}).get('key') == key
-                                    and (x.get('subscription') or {}).get('endpoint') == endpoint)]
-                    subs.append({'subscription': sub_info, 'alarm': alarm_info, 'createdAt': time.time()})
-                    save_subscriptions(subs)
+                    # 다시 등록했다 = 이 브라우저는 살아 있다. 못 쓴다는 표시를 푼다.
+                    DEAD_ENDPOINTS.discard(endpoint)
+                    with SUBS_LOCK:
+                        subs = load_subscriptions()
+                        # 중복 판정은 (구독 기기 + 세탁기) 조합으로 한다.
+                        # 세탁기 키만 보면, 같은 세탁기를 폰과 컴퓨터에서 각각 등록했을 때
+                        # 나중에 등록한 기기가 먼저 등록한 기기의 구독을 지워버린다.
+                        subs = [x for x in subs
+                                if not ((x.get('alarm') or {}).get('key') == key
+                                        and (x.get('subscription') or {}).get('endpoint') == endpoint)]
+                        subs.append({'subscription': sub_info, 'alarm': alarm_info, 'createdAt': time.time()})
+                        save_subscriptions(subs)
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.end_headers()
@@ -1620,14 +1680,16 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 endpoint = data.get('endpoint')
                 marked = 0
                 if key and endpoint:
-                    subs = load_subscriptions()
-                    for x in subs:
-                        if ((x.get('alarm') or {}).get('key') == key
-                                and (x.get('subscription') or {}).get('endpoint') == endpoint):
-                            x['alarm']['pickedUp'] = True
-                            marked += 1
+                    with SUBS_LOCK:
+                        subs = load_subscriptions()
+                        for x in subs:
+                            if ((x.get('alarm') or {}).get('key') == key
+                                    and (x.get('subscription') or {}).get('endpoint') == endpoint):
+                                x['alarm']['pickedUp'] = True
+                                marked += 1
+                        if marked:
+                            save_subscriptions(subs)
                     if marked:
-                        save_subscriptions(subs)
                         print(f"[Alarm] 수거 확인 접수: {key}")
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -1685,15 +1747,16 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
                 key = data.get('key')
                 endpoint = data.get('endpoint')
                 if key:
-                    subs = load_subscriptions()
-                    if endpoint:
-                        # 해제를 요청한 그 기기의 등록만 지운다
-                        subs = [x for x in subs
-                                if not ((x.get('alarm') or {}).get('key') == key
-                                        and (x.get('subscription') or {}).get('endpoint') == endpoint)]
-                    else:
-                        subs = [x for x in subs if (x.get('alarm') or {}).get('key') != key]
-                    save_subscriptions(subs)
+                    with SUBS_LOCK:
+                        subs = load_subscriptions()
+                        if endpoint:
+                            # 해제를 요청한 그 기기의 등록만 지운다
+                            subs = [x for x in subs
+                                    if not ((x.get('alarm') or {}).get('key') == key
+                                            and (x.get('subscription') or {}).get('endpoint') == endpoint)]
+                        else:
+                            subs = [x for x in subs if (x.get('alarm') or {}).get('key') != key]
+                        save_subscriptions(subs)
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.end_headers()
@@ -1720,6 +1783,8 @@ REPORT_MIN_GAP = 30          # 초
 REPORT_MAX_LEN = 1000
 _REPORT_LAST = {}            # 보낸 곳 -> 마지막 시각
 _REPORT_LOCK = threading.Lock()
+_REPORT_SWEPT = 0.0          # 마지막으로 오래된 것을 치운 시각
+REPORT_KEEP_SEC = 3600       # IP 를 메모리에 두는 시간 (처리방침에 적은 값)
 
 
 # =========================================================
@@ -1768,6 +1833,7 @@ AI_BODY_MAX = 200_000          # 요청 본문 크기 상한 (바이트)
 AI_OUT_TOKENS_MAX = 1200       # 답변 길이 상한
 _AI_HITS = {}                  # 보낸 곳 -> [시각, ...]
 _AI_LOCK = threading.Lock()
+_AI_SWEPT = 0.0
 
 
 def ai_allowed(who):
@@ -1783,7 +1849,11 @@ def ai_allowed(who):
             return False
         hits.append(now)
         _AI_HITS[who] = hits
-        if len(_AI_HITS) > 500:        # 무한정 쌓이지 않게
+        # 하루 넘게 안 쓴 곳은 치운다. 500곳이 넘을 때만 치우면 그 전에는
+        # 재시작할 때까지 IP 가 메모리에 남는다. 10분에 한 번이면 충분하다.
+        global _AI_SWEPT
+        if len(_AI_HITS) > 500 or now - _AI_SWEPT > 600:
+            _AI_SWEPT = now
             for k in [k for k, v in _AI_HITS.items()
                       if not v or now - v[-1] > 86400]:
                 _AI_HITS.pop(k, None)
@@ -1810,15 +1880,19 @@ def ai_clamp_tokens(body):
 
 def report_allowed(who):
     """너무 자주 보내는 것을 막는다. 보내도 되면 True."""
+    global _REPORT_SWEPT
     now = time.time()
     with _REPORT_LOCK:
         last = _REPORT_LAST.get(who, 0)
         if now - last < REPORT_MIN_GAP:
             return False
         _REPORT_LAST[who] = now
-        if len(_REPORT_LAST) > 500:      # 무한정 쌓이지 않게
+        # 한 시간 지난 IP 는 치운다. 예전에는 500곳이 넘을 때만 치워서,
+        # 제보가 적은 동안에는 '1시간 뒤 정리' 라는 처리방침과 달리 재시작 전까지 남았다.
+        if len(_REPORT_LAST) > 500 or now - _REPORT_SWEPT > 600:
+            _REPORT_SWEPT = now
             for k in [k for k, v in _REPORT_LAST.items()
-                      if now - v > 3600]:
+                      if now - v > REPORT_KEEP_SEC]:
                 _REPORT_LAST.pop(k, None)
     return True
 

@@ -36,6 +36,8 @@ discord_alarms.json
 reports.json
 # 기기 오류/일시정지 이력 (일주일치, 서버에만 둔다)
 device_events.json
+# 건조기 가동 횟수·통살균 기록 (서버가 세는 값, 서버에만 둔다)
+dryer_care.json
 
 # =========================================================
 # 기관 내부 자료 — 절대 커밋하지 않는다
@@ -59,3 +61,7 @@ cafeteria_*.cache
 menu_subs.json
 # 이미 알린 글 번호
 cafeteria_seen.json
+
+# 봇 배포용 zip (build_bot_zip.py 가 만든다). 안에 jungle_kb.py·assets 사진,
+# 있으면 .env 까지 담긴다. 공개 저장소에 올라가면 위에서 막은 것이 그대로 새 나간다.
+jungle_bot_discloud.zip
