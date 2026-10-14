@@ -2425,26 +2425,54 @@ function staleWaitingList(waiting, nowSec, afterMin) {
   return out.sort((a, b) => b.mins - a.mins);
 }
 
+// 건조기 통살균 케어가 필요한 기기. 카드의 건조기 케어 줄과 같은 기준(getLgCareStatus)을 쓴다.
+// 기록을 아직 못 받았으면(빈 값) 아무것도 올리지 않는다. 모르는 것을 필요하다고 하지 않는다.
+function staleDryerCareList(dryerCounts, towers) {
+  const out = [];
+  (towers || []).forEach(t => {
+    const v = (dryerCounts || {})[String(t.id) + '호기'];
+    const count = v && typeof v.count === 'number' ? v.count : null;
+    if (count !== null && getLgCareStatus(count).status === 'danger') {
+      out.push({ label: t.label, count });
+    }
+  });
+  return out.sort((a, b) => b.count - a.count);
+}
+
 // 5. 방치 세탁물 & 실시간 기기 에러 / 청소 알리미
 function renderStaleTracker() {
   const staleList = document.getElementById('staleList');
-  const items = [];
+  // 급한 것이 위에 오도록 따로 모아 마지막에 이어 붙인다 (오류 -> 방치 -> 통살균).
+  const errItems = [], waitItems = [], careItems = [];
 
   // 1) LG 통살균 권장 초과 기기 감지
   TOWERS.forEach(t => {
     const data = globalStatusData[t.name] || {};
     const cycle = data.washer?.cycle?.cycleCount || 0;
     if (cycle >= 30) {
-      items.push(`
+      careItems.push(`
         <div class="stale-item" style="background:rgba(245,158,11,0.12);border-color:rgba(245,158,11,0.4);">
           <div>
-            <span class="stale-tower" style="color:#f59e0b">🧹 ${t.label} (누적 ${cycle}회)</span>
+            <span class="stale-tower" style="color:#f59e0b">🧹 ${t.label} 세탁기 (누적 ${cycle}회)</span>
             <span style="color:#fcd34d;font-weight:600;">: LG 권장 통살균 청소 필요</span>
           </div>
           <span class="stale-time" style="color:#f59e0b">케어 필요</span>
         </div>
       `);
     }
+  });
+
+  // 1-2) 건조기 통살균. 기기가 누적을 안 알려줘서 서버가 센 값이다.
+  staleDryerCareList(careData.dryer, TOWERS).forEach(d => {
+    careItems.push(`
+        <div class="stale-item" style="background:rgba(245,158,11,0.12);border-color:rgba(245,158,11,0.4);">
+          <div>
+            <span class="stale-tower" style="color:#f59e0b">🧹 ${d.label} 건조기 (누적 ${d.count}회)</span>
+            <span style="color:#fcd34d;font-weight:600;">: 통살균 청소 필요</span>
+          </div>
+          <span class="stale-time" style="color:#f59e0b">케어 필요</span>
+        </div>
+      `);
   });
 
   // 2) 에러 기기 감지 (세탁기/건조기를 각각 정확한 이름으로 표기)
@@ -2460,7 +2488,7 @@ function renderStaleTracker() {
     [['dryer', '건조기', dErr], ['washer', '세탁기', wErr]].forEach(([, unitLabel, err]) => {
       if (!err) return;
       const diag = getErrorDiagnostic(err);
-      items.push(`
+      errItems.push(`
         <div class="stale-item" style="background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.35);">
           <div>
             <span class="stale-tower" style="color:#ef4444">${diag.icon} ${t.label} ${unitLabel}</span>
@@ -2475,7 +2503,7 @@ function renderStaleTracker() {
   // 3) 끝났는데 안 꺼낸 채 오래된 기기 (방치)
   staleWaitingList(careData.waiting, Date.now() / 1000, careData.waitingAfterMin)
     .forEach(w => {
-      items.push(`
+      waitItems.push(`
         <div class="stale-item" style="background:rgba(59,130,246,0.12);border-color:rgba(59,130,246,0.4);">
           <div>
             <span class="stale-tower" style="color:#60a5fa">⏳ ${w.label} ${w.name}</span>
@@ -2485,6 +2513,8 @@ function renderStaleTracker() {
         </div>
       `);
     });
+
+  const items = errItems.concat(waitItems, careItems);
 
   // 기기 데이터가 하나도 안 오면 '문제 없음' 이 아니라 '알 수 없음' 이다.
   const noDataAtAll = TOWERS.every(t => !towerHasData(t.name));

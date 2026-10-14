@@ -17,7 +17,7 @@ function grab(name) {
   throw new Error(name + ' 끝을 못 찾음');
 }
 
-eval(grab('staleWaitingList'));
+eval(grab('getLgCareStatus') + grab('staleWaitingList') + grab('staleDryerCareList'));
 
 let bad = 0;
 function check(what, got, want) {
@@ -45,6 +45,19 @@ check('기준 분은 서버가 정한다',
 check('기록이 비어 있으면 아무것도 안 만든다', staleWaitingList({}, now, 15), []);
 check('서버 기록이 없으면(undefined) 터지지 않는다', staleWaitingList(undefined, now, 15), []);
 check('숫자가 아닌 값은 무시', staleWaitingList({ '1호기': { dryer: 'x' } }, now, 15), []);
+
+// ── 건조기 통살균 ─────────────────────────────────────────────────
+// 건조기가 전부 74~85회인데 위젯에는 세탁기 하나뿐이었다. 건조기는 안 봤다.
+const T = [1, 2, 3, 4].map(i => ({ id: i, label: i + '호기' }));
+check('30회 이상만 올린다',
+  staleDryerCareList({ '1호기': { count: 78 }, '2호기': { count: 12 }, '3호기': { count: 30 }, '4호기': { count: 29 } }, T)
+    .map(x => x.label + x.count), ['1호기78', '3호기30']);
+check('횟수 많은 것이 위로',
+  staleDryerCareList({ '1호기': { count: 40 }, '2호기': { count: 85 } }, T).map(x => x.label), ['2호기', '1호기']);
+check('기록을 못 받았으면(빈 값) 아무것도 안 올린다', staleDryerCareList({}, T), []);
+check('undefined 여도 터지지 않는다', staleDryerCareList(undefined, T), []);
+check('횟수가 숫자가 아니면 무시', staleDryerCareList({ '1호기': { count: '78' } }, T), []);
+check('0회는 올리지 않는다', staleDryerCareList({ '1호기': { count: 0 } }, T), []);
 
 console.log(bad ? bad + '곳 틀렸다' : '모두 통과했습니다.');
 process.exit(bad ? 1 : 0);
