@@ -1047,6 +1047,68 @@ def test_parse_device_info():
           "iPhone · 카카오톡")
 
 
+# =========================================================
+# 방치(끝났는데 안 꺼낸 것)를 서버가 센다
+# =========================================================
+def test_waiting_pickup():
+    """위젯 이름에는 '방치' 가 있는데 방치를 찾는 코드가 없었다.
+
+    원본에는 끝난 시각이 없어서, 처음 끝난 것으로 본 시각을 서버가 적어 둔다.
+    길게 말하는 것이 가장 나쁘다. 값이 끊겼다가 돌아왔을 때 그 사이에 다른
+    사람이 쓴 것을 같은 방치로 이어 붙이면 없는 방치를 만들어 낸다.
+    """
+    import waiting
+    waiting.reset_for_test()
+    saved = waiting.state_store.state_save
+    waiting.state_store.state_save = lambda *a, **k: None
+    try:
+        t = 1_800_000_000.0
+        check("끝나기 전엔 기록 없음", waiting.observe("3호기", "dryer", "RUNNING", t), False)
+        check("끝나면 시각을 적는다", waiting.observe("3호기", "dryer", "END", t + 60), True)
+        check("적힌 시각", waiting.snapshot()["3호기"]["dryer"], t + 60)
+
+        # 5초마다 봐도 처음 시각은 그대로
+        waiting.observe("3호기", "dryer", "END", t + 65)
+        waiting.observe("3호기", "dryer", "END", t + 70)
+        check("계속 끝난 채면 처음 시각 유지", waiting.snapshot()["3호기"]["dryer"], t + 60)
+
+        # 구김 방지도 옷이 그대로 있는 상태다
+        check("구김 방지도 방치로 본다",
+              waiting.observe("5호기", "dryer", "WRINKLE_CARE", t) , True)
+
+        # 꺼내 갔다
+        check("꺼내면 지운다", waiting.observe("3호기", "dryer", "POWER_OFF", t + 600), True)
+        check("지운 뒤 목록", "3호기" in waiting.snapshot(), False)
+
+        # 남이 새로 돌렸다
+        waiting.observe("5호기", "dryer", "RUNNING", t + 900)
+        check("다시 돌면 지운다", "5호기" in waiting.snapshot(), False)
+
+        # 값이 오래 끊겼다가 돌아왔다. 그 사이 다른 사람이 쓴 것일 수 있다.
+        waiting.reset_for_test()
+        waiting.observe("7호기", "washer", "END", t)
+        waiting.observe("7호기", "washer", "END", t + 5)
+        waiting.observe("7호기", "washer", "END", t + 5 + waiting.GAP_RESET_SEC + 30)
+        check("오래 못 봤으면 처음부터 다시 센다",
+              waiting.snapshot()["7호기"]["washer"], t + 5 + waiting.GAP_RESET_SEC + 30)
+
+        # 서버를 다시 켜도 이어서 센다 (마지막으로 본 시각이 가까우면)
+        waiting.reset_for_test()
+        waiting._DATA = {"2호기/dryer": {"since": t, "seen": t + 120}}
+        waiting.observe("2호기", "dryer", "END", t + 150)
+        check("다시 켜도 이어서 센다", waiting.snapshot()["2호기"]["dryer"], t)
+
+        # 다시 켜기 전 마지막으로 본 때가 한참 전이면 이어 붙이지 않는다
+        waiting.reset_for_test()
+        waiting._DATA = {"2호기/dryer": {"since": t, "seen": t + 120}}
+        waiting.observe("2호기", "dryer", "END", t + 120 + waiting.GAP_RESET_SEC + 60)
+        check("공백이 길면 이어 붙이지 않는다",
+              waiting.snapshot()["2호기"]["dryer"], t + 120 + waiting.GAP_RESET_SEC + 60)
+    finally:
+        waiting.state_store.state_save = saved
+        waiting.reset_for_test()
+
+
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
              test_unknown_states, test_device_log,
@@ -1056,7 +1118,8 @@ def main():
              test_congestion_dow, test_congestion_weekly_no_invention,
              test_alarm_stays_on_my_cycle, test_health_reports_stale_source,
              test_gemini_tries_next_key, test_parse_device_info,
-             test_worker_keeps_concurrent_changes, test_bot_alarm_stays_on_my_cycle]
+             test_worker_keeps_concurrent_changes, test_bot_alarm_stays_on_my_cycle,
+             test_waiting_pickup]
     for t in tests:
         try:
             t()

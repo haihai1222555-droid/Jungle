@@ -38,6 +38,7 @@ reports.json
 device_events.json
 # 건조기 가동 횟수·통살균 기록 (서버가 세는 값, 서버에만 둔다)
 dryer_care.json
+waiting_pickup.json
 
 # =========================================================
 # 기관 내부 자료 — 절대 커밋하지 않는다

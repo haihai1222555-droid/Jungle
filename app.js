@@ -1982,7 +1982,7 @@ function dowNote(a) {
 }
 
 // 기기 관리 기록. /api/care 로 받아 둔다. 없으면 아무것도 안 그린다.
-let careData = { dryer: {}, washer: {} };
+let careData = { dryer: {}, washer: {}, waiting: {}, waitingAfterMin: 15, loaded: false };
 
 async function loadCareData() {
   try {
@@ -1990,7 +1990,12 @@ async function loadCareData() {
     if (!r.ok) return;
     const d = await r.json();
     if (d && typeof d === 'object') {
-      careData = { dryer: d.dryer || {}, washer: d.washer || {} };
+      careData = {
+        dryer: d.dryer || {}, washer: d.washer || {},
+        waiting: d.waiting || {},
+        waitingAfterMin: Number(d.waitingAfterMin) > 0 ? Number(d.waitingAfterMin) : 15,
+        loaded: true
+      };
     }
   } catch (e) {}
 }
@@ -2402,6 +2407,24 @@ function renderSmartSummary() {
   }
 }
 
+// 끝났는데 안 꺼낸 채 오래된 기기. 서버가 '처음 끝난 것으로 본 시각' 을 적어 두고,
+// 원본이 5분에 한 번만 알려주므로 실제로는 그보다 최대 5분 앞서 끝났다.
+// 그래서 '몇 분째' 가 아니라 '몇 분 이상' 이라고 쓴다.
+// 서버 기록을 못 받았으면 빈 목록이다. 이때는 '방치 없음' 이라고 말하지 않는다.
+function staleWaitingList(waiting, nowSec, afterMin) {
+  const out = [];
+  Object.keys(waiting || {}).forEach(label => {
+    const per = waiting[label] || {};
+    [['washer', '세탁기'], ['dryer', '건조기']].forEach(([type, name]) => {
+      const since = per[type];
+      if (typeof since !== 'number') return;
+      const mins = Math.floor((nowSec - since) / 60);
+      if (mins >= afterMin) out.push({ label, name, mins });
+    });
+  });
+  return out.sort((a, b) => b.mins - a.mins);
+}
+
 // 5. 방치 세탁물 & 실시간 기기 에러 / 청소 알리미
 function renderStaleTracker() {
   const staleList = document.getElementById('staleList');
@@ -2449,12 +2472,28 @@ function renderStaleTracker() {
     });
   });
 
+  // 3) 끝났는데 안 꺼낸 채 오래된 기기 (방치)
+  staleWaitingList(careData.waiting, Date.now() / 1000, careData.waitingAfterMin)
+    .forEach(w => {
+      items.push(`
+        <div class="stale-item" style="background:rgba(59,130,246,0.12);border-color:rgba(59,130,246,0.4);">
+          <div>
+            <span class="stale-tower" style="color:#60a5fa">⏳ ${w.label} ${w.name}</span>
+            <span style="color:#93c5fd;font-weight:600;">: 끝난 뒤 ${w.mins}분 이상 그대로예요 (수거 대기)</span>
+          </div>
+          <span class="stale-time" style="color:#60a5fa">방치 중</span>
+        </div>
+      `);
+    });
+
   // 기기 데이터가 하나도 안 오면 '문제 없음' 이 아니라 '알 수 없음' 이다.
   const noDataAtAll = TOWERS.every(t => !towerHasData(t.name));
   if (noDataAtAll) {
     staleList.innerHTML = `<div class="stale-empty">🛠️ 기기 데이터가 오지 않아 점검 필요 여부를 알 수 없습니다.</div>`;
   } else if (items.length === 0) {
-    staleList.innerHTML = `<div class="stale-empty">현재 점검 필요 기기 및 장기 방치물이 없습니다 👍</div>`;
+    staleList.innerHTML = careData.loaded
+      ? `<div class="stale-empty">현재 점검 필요 기기 및 장기 방치물이 없습니다 👍</div>`
+      : `<div class="stale-empty">현재 점검 필요 기기가 없습니다 👍</div>`;
   } else {
     staleList.innerHTML = items.join('');
   }

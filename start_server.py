@@ -12,6 +12,7 @@ import state_store
 import washtower
 import device_log
 import dryer_care
+import waiting
 import security
 import cafeteria
 import time
@@ -1216,6 +1217,9 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             self._json_out(200, {
                 "dryer": dryer_care.counts(),
                 "washer": dryer_care.washers(),
+                # 끝났는데 안 꺼낸 기기. 처음 끝난 것으로 본 시각과, 방치로 치는 분.
+                "waiting": waiting.snapshot(),
+                "waitingAfterMin": max(1, int(STALE_PICKUP_SEC // 60)),
             })
             return
 
@@ -1992,6 +1996,7 @@ def record_device_events(status):
         return
     made = []
     counted = False
+    waiting_changed = False
     for i in range(1, 10):
         tower = status.get("워시타워_%d" % i)
         label = "%d호기" % i
@@ -2003,6 +2008,10 @@ def record_device_events(status):
             # (세탁기는 cycle.cycleCount 로 오므로 셀 필요가 없다)
             if unit_type == "dryer" and dryer_care.observe(label, unit, state):
                 counted = True
+            # 끝났는데 안 꺼낸 것이 얼마나 오래인지. 값이 안 오는 중(UNKNOWN)에는
+            # 아무것도 모르는 것이므로 '떠났다' 로 읽지 않고 건너뛴다.
+            if state != "UNKNOWN" and waiting.observe(label, unit_type, state):
+                waiting_changed = True
             # 세탁기는 기기가 세어 준다. 우리는 그 값이 되돌아가는 때
             # (= 통살균한 때) 만 본다.
             if unit_type == "washer" and dryer_care.observe_washer(label, unit):
@@ -2011,6 +2020,8 @@ def record_device_events(status):
                       % label)
     if counted:
         dryer_care.save()
+    if waiting_changed:
+        waiting.save()
     if made:
         device_log.append(made)
         for m in made:
