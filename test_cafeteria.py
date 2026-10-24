@@ -152,6 +152,25 @@ def test_photo_pick():
     return fails
 
 
+def test_year_end_order():
+    """제목에는 연도가 없다. (월, 일)로만 정렬하면 1월에 12월 글이 앞선다."""
+    out = []
+    mk = lambda i, title, at: {"id": i, "title": title, "updated_at": at, "pinned": False}
+    raw = {"items": [
+        mk("a", "12월 31일(목) 중식 메뉴", 1_798_700_000_000),   # 전년도 12월
+        mk("b", "1월 2일(토) 중식 메뉴", 1_798_900_000_000),     # 새해, 더 나중
+    ]}
+    got = [d["id"] for d in cf.parse(raw)["daily"]]
+    if got != ["b", "a"]:
+        out.append("1월 글이 12월 글보다 앞서야 한다: %r" % got)
+    # 게시 시각이 없으면 예전처럼 (월, 일)로 가른다
+    raw2 = {"items": [mk("x", "9월 7일(월) 석식 메뉴", 0), mk("y", "9월 8일(화) 중식 메뉴", 0)]}
+    got2 = [d["id"] for d in cf.parse(raw2)["daily"]]
+    if got2 != ["y", "x"]:
+        out.append("시각이 없으면 월·일 순이어야 한다: %r" % got2)
+    return out
+
+
 def main():
     bad = []
     for title, pinned, want in CASES:
@@ -162,6 +181,8 @@ def main():
     for msg in test_no_flood():
         bad.append((msg, "-", "-", "-"))
     for msg in test_photo_pick():
+        bad.append((msg, "-", "-", "-"))
+    for msg in test_year_end_order():
         bad.append((msg, "-", "-", "-"))
 
     print("급식 공지 가려내기 %d가지 + 알림 쏟아짐 방지 + 사진 고르기" % len(CASES))

@@ -172,7 +172,12 @@ def parse(raw):
                     "link": (it.get("permalink") or "").replace("http://", "https://"),
                 }
 
-    daily.sort(key=lambda d: (d["month"], d["day"]), reverse=True)
+    # 게시 시각이 먼저다. 제목에는 연도가 없어서 (월, 일)만으로 정렬하면 1월에
+    # 전년도 12월 글이 새해 1월 글보다 앞선다. 시각이 없으면 (월, 일)로 가른다.
+    def _recent(d):
+        at = d.get("at")
+        return (at if isinstance(at, (int, float)) else 0, d["month"], d["day"])
+    daily.sort(key=_recent, reverse=True)
     return {"weekly": weekly, "daily": daily, "fetchedAt": time.time()}
 
 

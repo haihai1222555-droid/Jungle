@@ -1313,6 +1313,14 @@ setInterval(() => {
       changed = true;
     }
 
+    // 오류가 풀리고 다시 돌면 다음 오류를 또 알릴 수 있게 푼다.
+    // 일시정지는 이렇게 하는데 오류만 빠져 있어서, 한 알림 도중 오류가 두 번
+    // 나면 두 번째에는 화면 토스트가 울리지 않았다. 서버·봇은 이미 그렇게 한다.
+    if (!isError && item.notifiedError) {
+      item.notifiedError = false;
+      changed = true;
+    }
+
     if (isError && !item.notifiedError) {
       item.notifiedError = true;
       changed = true;
@@ -3568,16 +3576,16 @@ function fallbackLocalNlp(q, isNoKey = false) {
   else if (isModeQuery) {
     if (/수건|타월/.test(q)) {
       answer = `🧺 <b>[수건/타월 뽀송하게 세탁하는 황금 팁]</b><br>` +
-               `• <b>추천 코스:</b> <code>타월 코스</code> 또는 <code>표준 코스 + 헹굼 3회</code><br>` +
+               `• <b>추천 코스:</b> <code>타올</code> 코스<br>` +
                `• ⚠️ <b>주의:</b> 섬유유연제는 수건의 흡수력을 떨어뜨리고 냄새의 원인이 되므로 <b>절대 넣지 마세요!</b><br>` +
                `• <b>건조:</b> 상단 건조기 <code>표준 건조</code>로 돌리면 호텔 수건처럼 보송보송해집니다.`;
-      speakText = `수건은 섬유유연제를 넣지 마시고 타월 코스로 세탁 후 표준 건조를 돌리시는 것을 추천합니다.`;
+      speakText = `수건은 섬유유연제를 넣지 마시고 타올 코스로 세탁 후 표준 건조를 돌리시는 것을 추천합니다.`;
     } else if (/운동복|기능성|니트/.test(q)) {
       answer = `🏃 <b>[운동복/기능성 의류 세탁 팁]</b><br>` +
-               `• <b>추천 코스:</b> <code>울/섬세 코스</code> (찬물 세탁)<br>` +
-               `• 땀 냄새가 밴 운동복은 미온수에 식초 몇 방울이나 스포츠 전용 세제를 쓰시면 좋습니다.<br>` +
-               `• 고온 건조 시 옷감이 줄어들 수 있으니 건조기는 <code>저온 건조</code>를 추천합니다!`;
-      speakText = `운동복과 니트는 울 섬세 코스로 찬물 세탁하시고 저온 건조를 추천합니다.`;
+               `• <b>추천 코스:</b> <code>울·섬세</code> 코스<br>` +
+               `• 땀 냄새가 밴 운동복은 스포츠 전용 세제를 쓰시면 좋습니다.<br>` +
+               `• 건조기도 <code>울·섬세</code> 코스를 쓰세요. 니트는 널어 말리는 편이 낫습니다.`;
+      speakText = `운동복과 니트는 울 섬세 코스로 세탁하시고 건조기도 울 섬세 코스를 추천합니다.`;
     } else if (/이불|담요/.test(q)) {
       answer = `🛏️ <b>[이불/담요 세탁 팁]</b><br>` +
                `• <b>추천 코스:</b> <code>이불 코스</code><br>` +
@@ -3704,8 +3712,7 @@ function fallbackLocalNlp(q, isNoKey = false) {
              `• <b>공용(6~7):</b> 세탁기 ${towerListText(bc)}<br>` +
              `• <b>여성 구역(8~9):</b> 세탁기 ${towerListText(bw)}<br>` +
              `• <b>빨래 팁:</b> 일상복은 <code>표준 + 터보샷</code> 코스가 가장 빠르고 깨끗합니다!` +
-             noDataNote() + `<br>` +
-             (isNoKey ? `<small style="color:var(--text-dim)">💡 상단 <b>[⚙️ AI 설정]</b>에서 무료 Gemini API 키를 넣으시면 더욱 자유롭고 똑똑한 대화가 가능합니다.</small>` : '');
+             noDataNote() + `<br>`;
     speakText = (bm.length || bc.length || bw.length)
       ? `지금 비어 있는 세탁기는 ${[...bm, ...bc, ...bw].map(t => t.label).join(', ')} 입니다.`
       : `지금은 비어 있는 세탁기가 없습니다.`;

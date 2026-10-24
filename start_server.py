@@ -1645,6 +1645,10 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
 
         if req_path == '/api/subscribe-push':
             try:
+                # 본문이 비면 형식이 틀린 요청이다. 예전에는 파싱이 터져 500 이 나갔다.
+                if not post_data:
+                    self._json_out(400, {"error": "요청 본문이 비어 있습니다."})
+                    return
                 data = json.loads(post_data.decode('utf-8'))
                 sub_info = data.get('subscription')
                 alarm_info = data.get('alarm')
@@ -1747,6 +1751,10 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
 
         if req_path == '/api/unsubscribe-push':
             try:
+                # 본문이 비면 형식이 틀린 요청이다. 예전에는 파싱이 터져 500 이 나갔다.
+                if not post_data:
+                    self._json_out(400, {"error": "요청 본문이 비어 있습니다."})
+                    return
                 data = json.loads(post_data.decode('utf-8'))
                 key = data.get('key')
                 endpoint = data.get('endpoint')
