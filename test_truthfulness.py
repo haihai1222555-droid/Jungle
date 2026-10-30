@@ -1109,6 +1109,108 @@ def test_waiting_pickup():
         waiting.reset_for_test()
 
 
+# =========================================================
+# 식단 글을 채널과 DM 에 올린다
+# =========================================================
+def test_menu_push_channels():
+    """새 식단 글이 서버 채널과 DM 으로 나가는지.
+
+    채널을 DM 보다 먼저 올리고, 지워진 채널은 스스로 풀고, 디스코드가 요청을 막은
+    동안에는 새 글을 꺼내지 않는다(꺼내면 '이미 봤다' 로 표시되어 영영 안 나간다).
+    """
+    import asyncio as _aio
+    import types
+
+    sent = []
+
+    class _Dest:
+        def __init__(self, name, exc=None):
+            self.name, self.exc = name, exc
+        async def send(self, embed=None):
+            if self.exc:
+                raise self.exc
+            sent.append(self.name)
+
+    discord = bot.discord
+    notfound = discord.NotFound(types.SimpleNamespace(status=404, reason="gone"), "gone")
+    forbidden = discord.Forbidden(types.SimpleNamespace(status=403, reason="no"), "no")
+    post = {"kind": "daily", "item": {"title": "10월 30일(금) 중식 메뉴", "text": "밥, 국",
+                                      "image": "https://img1.kakaocdn.net/a.jpg", "at": 0}}
+
+    keep = {k: getattr(bot, k) for k in (
+        "load_menu_subs", "load_menu_channels", "save_menu_channels", "_menu_channel",
+        "resolve_user", "api_blocked")}
+    keep_new, keep_sleep = bot.cafeteria.new_posts, bot.asyncio.sleep
+
+    async def no_sleep(*a, **k):
+        return None
+
+    def run(fresh, subs, channels, dests, blocked=False):
+        sent.clear()
+        pulled = {"n": 0}
+
+        def new_posts():
+            pulled["n"] += 1
+            return fresh
+
+        async def menu_channel(cid):
+            return dests[cid]
+
+        async def resolve(uid):
+            return _Dest("dm:" + str(uid))
+
+        bot.cafeteria.new_posts = new_posts
+        bot.load_menu_subs = lambda: subs
+        bot.load_menu_channels = lambda: channels
+        bot.save_menu_channels = lambda: None
+        bot._menu_channel = menu_channel
+        bot.resolve_user = resolve
+        bot.api_blocked = lambda: blocked
+        bot.asyncio.sleep = no_sleep
+        _aio.run(bot.push_menu_alarms())
+        return list(sent), pulled["n"]
+
+    try:
+        # 채널 하나 + DM 둘: 채널이 먼저 나간다
+        got, _ = run([post], {"1", "2"}, {"100"}, {"100": _Dest("ch:100")})
+        check("채널이 DM 보다 먼저", got[0], "ch:100")
+        check("DM 도 둘 다 나간다", sorted(g for g in got if g.startswith("dm:")), ["dm:1", "dm:2"])
+
+        # 채널만 있어도 나간다 (예전에는 신청자가 없으면 거기서 끝났다)
+        got, _ = run([post], set(), {"100"}, {"100": _Dest("ch:100")})
+        check("신청자가 없어도 채널에는 올린다", got, ["ch:100"])
+
+        # 둘 다 없으면 아무것도 안 나간다
+        got, _ = run([post], set(), set(), {})
+        check("받을 곳이 없으면 안 보낸다", got, [])
+
+        # 지워진 채널은 등록을 풀고, 나머지는 계속 나간다
+        chans = {"100", "200"}
+        got, _ = run([post], {"1"}, chans,
+                     {"100": _Dest("ch:100", notfound), "200": _Dest("ch:200")})
+        check("지워진 채널은 등록이 풀린다", chans, {"200"})
+        check("지워진 채널이 있어도 나머지는 나간다", sorted(got), ["ch:200", "dm:1"])
+
+        # 권한이 없는 채널은 등록을 그대로 둔다 (권한을 다시 주면 된다)
+        chans = {"300"}
+        got, _ = run([post], {"1"}, chans, {"300": _Dest("ch:300", forbidden)})
+        check("권한 없는 채널은 등록을 남긴다", chans, {"300"})
+        check("채널이 실패해도 DM 은 나간다", got, ["dm:1"])
+
+        # 디스코드가 요청을 막은 동안에는 새 글을 꺼내지도 않는다
+        got, pulled = run([post], {"1"}, {"100"}, {"100": _Dest("ch:100")}, blocked=True)
+        check("막힌 동안 안 보낸다", got, [])
+        check("막힌 동안 새 글을 꺼내지 않는다(표시가 남지 않게)", pulled, 0)
+
+        # 한 번에 너무 많이 잡히면 쏟지 않는다
+        got, _ = run([post] * (bot.cafeteria.MAX_BURST + 1), {"1"}, {"100"}, {"100": _Dest("ch:100")})
+        check("한꺼번에 몰리면 안 쏟는다", got, [])
+    finally:
+        for k, v in keep.items():
+            setattr(bot, k, v)
+        bot.cafeteria.new_posts, bot.asyncio.sleep = keep_new, keep_sleep
+
+
 def main():
     tests = [test_missing_values, test_null_tower, test_not_finished,
              test_unknown_states, test_device_log,
@@ -1119,7 +1221,7 @@ def main():
              test_alarm_stays_on_my_cycle, test_health_reports_stale_source,
              test_gemini_tries_next_key, test_parse_device_info,
              test_worker_keeps_concurrent_changes, test_bot_alarm_stays_on_my_cycle,
-             test_waiting_pickup]
+             test_waiting_pickup, test_menu_push_channels]
     for t in tests:
         try:
             t()

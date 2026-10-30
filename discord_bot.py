@@ -367,6 +367,32 @@ def save_menu_subs():
     state_save("menu_subs", sorted(MENU_SUBS))
 
 
+# 식단 글을 올려 둘 서버 채널. DM 신청과 별개다.
+MENU_CHANNELS = set()
+_MENU_CHANNELS_LOADED = False
+
+
+def load_menu_channels():
+    global MENU_CHANNELS, _MENU_CHANNELS_LOADED
+    if not _MENU_CHANNELS_LOADED:
+        v = state_load("menu_channels", [])
+        MENU_CHANNELS = {str(x) for x in v} if isinstance(v, list) else set()
+        _MENU_CHANNELS_LOADED = True
+    return MENU_CHANNELS
+
+
+def save_menu_channels():
+    state_save("menu_channels", sorted(MENU_CHANNELS))
+
+
+async def _menu_channel(cid):
+    """식단을 올릴 채널을 찾는다. 못 찾으면 None, 지워졌으면 NotFound 를 던진다."""
+    ch = bot.get_channel(int(cid))
+    if ch is not None:
+        return ch
+    return await bot.fetch_channel(int(cid))
+
+
 def menu_embed(kind, item):
     """알림으로 보낼 내용."""
     if kind == "weekly":
@@ -396,7 +422,12 @@ async def push_menu_alarms():
     급식으로 확실히 가른 것만 보낸다. 같은 채널에 Grab&Go 공지가 섞여 있어서,
     잘못 가르면 "점심 메뉴 나왔어요" 하고 굿즈 판매 공지를 보내게 된다.
     """
+    # 디스코드가 요청을 막은 동안에는 새 글을 꺼내지 않는다. 꺼내면 '이미 봤다' 로
+    # 표시되어 막힘이 풀려도 영영 안 나간다. 그대로 두면 풀린 뒤에 나간다.
+    if api_blocked():
+        return
     subs = load_menu_subs()
+    channels = load_menu_channels()
     fresh = await asyncio.to_thread(cafeteria.new_posts)
     if not fresh:
         return
@@ -406,15 +437,40 @@ async def push_menu_alarms():
         print(f"[식단알림] 한 번에 {len(fresh)}개가 새 글로 잡혔습니다. "
               "무언가 잘못된 것 같아 보내지 않았습니다.")
         return
-    if not subs:
+    if not subs and not channels:
         # 신청자가 없어도 '이미 봤다' 는 표시는 남는다(new_posts 안에서).
         # 나중에 신청한 사람에게 지난 메뉴가 몰려가지 않게 하려는 것이다.
-        print(f"[식단알림] 새 글 {len(fresh)}개 — 신청자가 없어 보내지 않았습니다.")
+        print(f"[식단알림] 새 글 {len(fresh)}개 — 신청자와 채널이 없어 보내지 않았습니다.")
         return
 
     for f in fresh:
         emb = menu_embed(f["kind"], f["item"])
         emb.set_footer(text="식단 알림 · /식단알림 으로 끌 수 있어요")
+
+        # 채널을 먼저 올린다. 요청 하나로 끝나서 가장 빨리 나간다.
+        posted = 0
+        for cid in list(channels):
+            try:
+                ch = await _menu_channel(cid)
+                await ch.send(embed=emb)
+                posted += 1
+            except discord.NotFound:
+                # 채널이 지워졌다. 다시 두드려도 같으므로 등록을 푼다.
+                channels.discard(cid)
+                await asyncio.to_thread(save_menu_channels)
+                print(f"[식단알림] 채널(…{str(cid)[-4:]})이 없어져 등록을 풀었습니다.")
+            except Exception as e:
+                # 권한이 없는 경우가 흔하다. 등록은 그대로 둔다(권한을 다시 주면 된다).
+                print(f"[식단알림] 채널 전송 실패(…{str(cid)[-4:]}): {e}")
+        if channels:
+            print(f"[식단알림] {f['kind']} 를 채널 {posted}곳에 올렸습니다.")
+
+        # 글이 올라온 뒤 얼마 만에 나갔는지. 남은 지연이 우리 쪽인지 카카오 쪽인지
+        # 가리려고 남긴다. 편집이면 편집한 때부터 센다.
+        at = (f["item"].get("at") or f["item"].get("updatedAt") or 0) / 1000
+        if at:
+            print(f"[식단알림] 글이 올라온 지 {max(0, int((time.time() - at) / 60))}분 만에 보냅니다.")
+
         sent = 0
         for uid in list(subs):
             try:
@@ -3581,6 +3637,51 @@ async def cmd_menu_alarm(interaction: discord.Interaction):
         ephemeral=True)
 
 
+@bot.tree.command(
+    name="식단채널",
+    description="메뉴가 올라오면 이 채널에 올립니다. (다시 누르면 해제 · 채널 관리 권한 필요)")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_channels=True)
+async def cmd_menu_channel(interaction: discord.Interaction):
+    # 봇이 채널에 글을 자동으로 올리게 하는 일이라 권한을 본다.
+    # default_permissions 는 서버 관리자가 바꿀 수 있어서 여기서도 직접 확인한다.
+    perms = interaction.permissions
+    if not (perms.manage_channels or perms.administrator):
+        await interaction.response.send_message(
+            "채널 관리 권한이 있는 분만 설정할 수 있어요.", ephemeral=True)
+        return
+
+    channels = await asyncio.to_thread(load_menu_channels)
+    cid = str(interaction.channel_id)
+    if cid in channels:
+        channels.discard(cid)
+        await asyncio.to_thread(save_menu_channels)
+        await interaction.response.send_message(
+            "\U0001f515 이 채널에 식단을 올리는 것을 껐어요. 다시 켜려면 `/식단채널` 을 한 번 더 누르세요.")
+        return
+
+    # 켜 놓고 나중에 조용히 실패하지 않도록, 지금 올릴 수 있는지 본다.
+    me = interaction.guild.me if interaction.guild else None
+    ch = interaction.channel
+    if me is not None and ch is not None:
+        mine = ch.permissions_for(me)
+        missing = [name for name, ok in (("메시지 보내기", mine.send_messages),
+                                         ("링크 첨부(임베드)", mine.embed_links)) if not ok]
+        if missing:
+            await interaction.response.send_message(
+                "이 채널에서 봇에게 **%s** 권한이 없어 식단을 올릴 수 없어요.\n"
+                "-# 권한을 준 뒤 다시 `/식단채널` 을 눌러 주세요." % ", ".join(missing),
+                ephemeral=True)
+            return
+
+    channels.add(cid)
+    await asyncio.to_thread(save_menu_channels)
+    await interaction.response.send_message(
+        "\U0001f371 이제 **식단이 올라오면 이 채널에 올릴게요.**\n"
+        "-# 점심·저녁 메뉴와 식판 사진, 주간 식단표가 올라와요. (보통 점심 11시쯤, 저녁 17시쯤)\n"
+        "-# 그랩앤고 같은 다른 공지는 올리지 않아요. 끄려면 `/식단채널` 을 다시 누르세요.")
+
+
 @bot.tree.command(name="식단", description="이번 주 식단표와 오늘 메뉴를 봅니다.")
 async def cmd_menu(interaction: discord.Interaction):
     data = await asyncio.to_thread(cafeteria.state)
@@ -4055,12 +4156,13 @@ def _presence_alarms():
     return f"알림 {len(active_alarms)}개 지켜보는 중..."
 
 
-@tasks.loop(minutes=5)
+@tasks.loop(seconds=30)
 async def watch_menu():
     """새 급식 글이 올라왔는지 본다.
 
-    가져오는 일 자체는 웹 서버가 10분마다 한다. 여기서는 그 결과만 본다.
-    5분마다 보므로 늦어도 그 사이에는 나간다.
+    가져오는 일 자체는 웹 서버가 2분마다 한다. 여기서는 그 결과만 본다.
+    메모리에 있는 것만 보는 일이라 30초마다 봐도 가볍다. (예전에는 5분이었고,
+    가져오는 쪽 10분과 겹쳐 최악 15분 늦었다.)
     """
     try:
         await push_menu_alarms()

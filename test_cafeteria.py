@@ -171,6 +171,66 @@ def test_year_end_order():
     return out
 
 
+def test_retry_after_failure():
+    """가져오기에 실패하면 다음 시도가 곧 와야 한다.
+
+    예전에는 시도한 시각을 먼저 적어서, 한 번 실패하면 REFRESH_SEC(10분) 를 통째로
+    기다렸다. 로그에 'timed out' 이 실제로 있었다.
+    """
+    import types
+    out = []
+    clock = {"t": 1000.0}
+    calls = {"n": 0, "fail": True}
+
+    def fake_fetch():
+        calls["n"] += 1
+        if calls["fail"]:
+            raise OSError("timed out")
+        return {"items": []}
+
+    keep = (cf._fetch_raw, cf.time, cf._CACHE, cf._LAST_TRY,
+            cf.state_store.state_save, cf.state_store.state_load)
+    try:
+        cf._fetch_raw = fake_fetch
+        cf.time = types.SimpleNamespace(time=lambda: clock["t"], sleep=lambda s: None)
+        cf.state_store.state_save = lambda *a, **k: None
+        cf.state_store.state_load = lambda *a, **k: None
+        cf._CACHE = {"weekly": None, "daily": [], "fetchedAt": 0}
+        cf._LAST_TRY = 0.0
+
+        cf.refresh()
+        if calls["n"] != 1:
+            out.append("처음엔 한 번 가져와야 한다: %d" % calls["n"])
+        clock["t"] = 1000.0 + cf.RETRY_SEC - 5
+        cf.refresh()
+        if calls["n"] != 1:
+            out.append("실패 뒤 %d초 전에는 또 가져오면 안 된다: %d" % (cf.RETRY_SEC - 5, calls["n"]))
+        clock["t"] = 1000.0 + cf.RETRY_SEC + 1
+        cf.refresh()
+        if calls["n"] != 2:
+            out.append("실패 뒤 %d초가 지나면 다시 가져와야 한다: %d" % (cf.RETRY_SEC + 1, calls["n"]))
+
+        # 성공하면 평소 주기(REFRESH_SEC)로 돌아온다
+        calls["fail"] = False
+        clock["t"] = 5000.0
+        cf.refresh()
+        n_ok = calls["n"]
+        clock["t"] = 5000.0 + cf.REFRESH_SEC - 5
+        cf.refresh()
+        if calls["n"] != n_ok:
+            out.append("성공한 뒤에는 주기 전에 또 가져오면 안 된다")
+        clock["t"] = 5000.0 + cf.REFRESH_SEC + 1
+        cf.refresh()
+        if calls["n"] != n_ok + 1:
+            out.append("주기가 지나면 가져와야 한다")
+        if not (cf.REFRESH_SEC <= 300 and cf.RETRY_SEC < cf.REFRESH_SEC):
+            out.append("주기가 너무 길다: %d / %d" % (cf.REFRESH_SEC, cf.RETRY_SEC))
+    finally:
+        (cf._fetch_raw, cf.time, cf._CACHE, cf._LAST_TRY,
+         cf.state_store.state_save, cf.state_store.state_load) = keep
+    return out
+
+
 def main():
     bad = []
     for title, pinned, want in CASES:
@@ -183,6 +243,8 @@ def main():
     for msg in test_photo_pick():
         bad.append((msg, "-", "-", "-"))
     for msg in test_year_end_order():
+        bad.append((msg, "-", "-", "-"))
+    for msg in test_retry_after_failure():
         bad.append((msg, "-", "-", "-"))
 
     print("급식 공지 가려내기 %d가지 + 알림 쏟아짐 방지 + 사진 고르기" % len(CASES))
