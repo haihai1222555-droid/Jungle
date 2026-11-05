@@ -49,14 +49,49 @@ try:
 except ValueError:
     TUB_CLEAN_MINUTES = 185
 
+# 이보다 긴 가동은 통살균으로 보지 않는다(분). 관측된 통살균은 188~248분이다.
+# 3호기가 배수 호스 문제로 493~533분까지 늘어난 적이 있는데, 그런 것은 어떤 코스로도
+# 설명이 안 된다.
+try:
+    TUB_CLEAN_MAX_MINUTES = int(os.environ.get("DRYER_TUB_CLEAN_MAX_MINUTES") or 300)
+except ValueError:
+    TUB_CLEAN_MAX_MINUTES = 300
+
+
+def _parse_towers(raw):
+    """'3' 또는 '3,7' 같은 글에서 호기 번호만 뽑는다."""
+    out = set()
+    for tok in str(raw or "").replace(" ", "").split(","):
+        digits = "".join(ch for ch in tok if ch.isdigit())
+        if digits:
+            out.add(int(digits))
+    return out
+
+
+# 자동 통살균 인식을 끄는 호기. 호스가 고장 나 시간이 믿을 수 없는 기기에 쓴다.
+# 횟수는 계속 센다. 서버 .env 에 DRYER_AUTO_CLEAN_OFF=3 처럼 적는다.
+AUTO_CLEAN_OFF = _parse_towers(os.environ.get("DRYER_AUTO_CLEAN_OFF"))
+
 # 돌고 있는 것으로 보는 상태
 RUNNING_STATES = ("RUNNING", "DRYING", "COOLING", "WASHING", "RINSING", "SPINNING")
 # 끝난 것으로 보는 상태. 구김 방지는 건조가 끝난 뒤의 뒷정리라 끝으로 본다.
 DONE_STATES = ("END", "COMPLETE", "POWER_OFF", "INITIAL", "WRINKLE_CARE")
 
+# 가동 도중에 거치면 그 가동의 시간을 믿을 수 없는 상태.
+HARD_BREAK_STATES = ("ERROR",)
+# 돌던 가동이 이만큼 계속 '돌지도 끝나지도 않은' 상태면 그 가동은 잊는다.
+# 그 사이에 다른 사람이 다시 돌렸을 수 있다.
+BREAK_EXPIRE_SEC = 6 * 3600
+_PATH_MAX = 14
+
 _LOCK = threading.Lock()
 _DATA = None
-_PREV = {}          # 타워 -> 직전에 본 모습
+_PREV = {}          # 타워 -> 직전에 본 모습과 돌던 가동의 기억
+
+
+def _tower_no(label):
+    digits = "".join(ch for ch in str(label) if ch.isdigit())
+    return int(digits) if digits else None
 
 
 def _load():
@@ -94,6 +129,13 @@ def _total_minutes(unit):
     return h * 60 + m
 
 
+def _note(path, state):
+    if not path or path[-1] != state:
+        path.append(state)
+        if len(path) > _PATH_MAX:
+            del path[1:2]
+
+
 def observe(tower_label, unit, state, now=None):
     """건조기 하나를 보고, 한 번 다 돌았으면 센다.
 
@@ -102,41 +144,90 @@ def observe(tower_label, unit, state, now=None):
         "run"     한 번 돌았다 (횟수 +1)
         "clean"   통살균으로 보인다 (횟수를 0 으로 되돌렸다)
 
+    '돌던 가동' 을 기억한다. 예전에는 끝나는 순간 바로 직전 관측이 '돌고 있음'
+    일 때만 세어서, 중간에 값이 끊기거나 일시정지·오류·감지 중을 한 번이라도
+    거치면 그 가동이 통째로 사라졌다(통살균 반영도 함께 안 됐다).
+
     저장은 부르는 쪽에서 한 번에 한다. 5초마다 아홉 대를 보므로
     기기마다 저장하면 같은 일을 아홉 번 하게 된다.
     """
     now = now or time.time()
-    prev = _PREV.get(tower_label)
+    prev = _PREV.get(tower_label) or {}
+    total = _total_minutes(unit)
 
     cur = {
         "state": state,
-        "total": _total_minutes(unit),
+        "total": total,
+        "active": bool(prev.get("active")),
+        "lastTotal": prev.get("lastTotal") or 0,
+        "hard": bool(prev.get("hard")),
+        "soft": bool(prev.get("soft")),
+        "path": list(prev.get("path") or []),
+        "breakSince": prev.get("breakSince"),
     }
-    # 돌고 있는 동안의 총 시간을 들고 있는다. 끝나고 나면 0 으로 돌아오기 때문에
-    # 끝난 뒤에 물어보면 늦는다.
-    if state in RUNNING_STATES and cur["total"] > 0:
-        cur["lastTotal"] = cur["total"]
-    elif prev:
-        cur["lastTotal"] = prev.get("lastTotal") or 0
+    finished = None
+
+    if state in RUNNING_STATES:
+        if not cur["active"]:
+            # 새 가동. 지난 가동의 시간이 남아 있으면 안 된다.
+            cur.update(active=True, lastTotal=0, hard=False, soft=False, path=[])
+        cur["breakSince"] = None
+        _note(cur["path"], state)
+        # 돌고 있는 동안의 총 시간을 들고 있는다. 끝나고 나면 0 으로 돌아오기 때문에
+        # 끝난 뒤에 물어보면 늦는다.
+        if total > 0:
+            cur["lastTotal"] = total
+    elif state in DONE_STATES:
+        if cur["active"]:
+            finished = {"minutes": cur["lastTotal"], "hard": cur["hard"],
+                        "soft": cur["soft"], "path": cur["path"] + [state]}
+        cur.update(active=False, lastTotal=0, hard=False, soft=False, path=[], breakSince=None)
     else:
-        cur["lastTotal"] = 0
+        # 돌지도 끝나지도 않은 중간 상태(값 끊김·일시정지·오류·감지 중 …).
+        # 돌던 가동은 그대로 기억한다. 다만 오래 이어지면 잊는다.
+        if cur["active"]:
+            if state in HARD_BREAK_STATES:
+                cur["hard"] = True
+            else:
+                cur["soft"] = True
+            _note(cur["path"], state)
+            if cur["breakSince"] is None:
+                cur["breakSince"] = now
+            elif now - cur["breakSince"] > BREAK_EXPIRE_SEC:
+                print("[관리] %s 건조기가 %d시간 넘게 돌지도 끝나지도 않아 돌던 가동을 잊습니다 (%s)"
+                      % (tower_label, BREAK_EXPIRE_SEC // 3600, ">".join(cur["path"])))
+                cur.update(active=False, lastTotal=0, hard=False, soft=False, path=[], breakSince=None)
 
     _PREV[tower_label] = cur
 
-    if prev is None:
-        return None         # 서버가 막 떴다. 직전을 모르니 세지 않는다.
-    if prev["state"] not in RUNNING_STATES:
-        return None
-    if state not in DONE_STATES:
+    if finished is None:
         return None
 
-    minutes = prev.get("lastTotal") or 0
-    cleaned = minutes >= TUB_CLEAN_MINUTES
+    minutes = finished["minutes"]
+    path_text = ">".join(finished["path"])[:80]
+    interrupted = finished["hard"] or finished["soft"]
+
+    # 통살균으로 볼 수 있는지. 아닐 때는 이유를 남긴다.
+    why_not = None
+    if minutes < TUB_CLEAN_MINUTES:
+        pass
+    elif minutes > TUB_CLEAN_MAX_MINUTES:
+        why_not = "%d분을 넘어 어떤 코스로도 설명이 안 됨" % TUB_CLEAN_MAX_MINUTES
+    elif finished["hard"]:
+        why_not = "도중에 오류를 거쳐 시간을 믿을 수 없음"
+    elif _tower_no(tower_label) in AUTO_CLEAN_OFF:
+        why_not = "이 호기는 자동 통살균 인식이 꺼져 있음"
+    cleaned = minutes >= TUB_CLEAN_MINUTES and why_not is None
 
     with _LOCK:
         u = _unit(tower_label)
         u["lastAt"] = round(now, 3)
-        u["runs"].append({"at": round(now, 3), "total": minutes})
+        entry = {"at": round(now, 3), "total": minutes}
+        if interrupted:
+            entry["path"] = path_text          # 나중에 원인을 볼 수 있게 순서를 남긴다
+        if why_not:
+            entry["noClean"] = True
+        u["runs"].append(entry)
         u["runs"] = u["runs"][-MAX_RUNS:]
         if cleaned:
             # 세탁기가 스스로 하는 것과 같은 일을 우리가 한다.
@@ -148,6 +239,9 @@ def observe(tower_label, unit, state, now=None):
             if not u.get("since"):
                 u["since"] = round(now, 3)
 
+    if interrupted:
+        print("[관리] %s 건조기 가동 도중 상태가 바뀌었습니다: %s (%d분)"
+              % (tower_label, path_text, minutes))
     if cleaned:
         # 짐작으로 되돌린 것이므로 로그에 분 수를 남긴다. 나중에 이 문턱이
         # 맞았는지 확인할 수 있어야 한다.
@@ -155,6 +249,9 @@ def observe(tower_label, unit, state, now=None):
               "(%d분 넘음 -> 통살균으로 보고 횟수를 0 으로 되돌립니다)"
               % (tower_label, minutes, TUB_CLEAN_MINUTES))
         return "clean"
+    if why_not:
+        print("[관리] %s 건조기 %d분짜리 가동은 통살균으로 보지 않습니다 (%s). 횟수만 셉니다."
+              % (tower_label, minutes, why_not))
     return "run"
 
 
