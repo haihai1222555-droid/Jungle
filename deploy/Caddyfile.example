@@ -1,0 +1,19 @@
+# /etc/caddy/Caddyfile 본보기.
+#
+# 도메인 하나에 블록 하나다. 인증서는 Caddy 가 Let's Encrypt 에서 알아서 받고 갱신한다.
+# 도메인이 이 서버를 가리키고 있어야 한다.
+#
+# 설정을 바꾼 뒤에는 restart 가 아니라 reload 를 쓴다. 끊김 없이 반영된다.
+#   sudo systemctl reload caddy
+
+example.duckdns.org {
+	encode gzip zstd
+	reverse_proxy 127.0.0.1:8000
+}
+
+# 같은 서버에 다른 프로세스를 올릴 때는 블록을 하나 더 둔다.
+# 그 프로세스는 127.0.0.1 에만 열게 한다. 바깥은 Caddy(443) 하나로 받는다.
+#
+# relay.example.duckdns.org {
+# 	reverse_proxy 127.0.0.1:8765
+# }

@@ -1,0 +1,18 @@
+[Unit]
+Description=Jungle Laundry - 웹 대시보드 + 디스코드 봇
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/jungle-laundry
+EnvironmentFile=/home/ubuntu/jungle-laundry/.env
+ExecStart=/home/ubuntu/jungle-laundry/.venv/bin/python /home/ubuntu/jungle-laundry/start_server.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/ubuntu/jungle-laundry/server.log
+StandardError=append:/home/ubuntu/jungle-laundry/server.log
+
+[Install]
+WantedBy=multi-user.target
