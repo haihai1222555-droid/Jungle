@@ -189,6 +189,11 @@ sudo systemctl reload caddy      # 끊김 없이 반영된다. restart 는 쓰�
 
 인증서는 Caddy 가 알아서 받고 갱신한다. 도메인이 이 서버를 가리키고 있어야 한다.
 
+**죽으면 다시 뜨게 하기.** 기본 Caddy 서비스는 `Restart=no` 라서, 한 번 죽으면 사람이 켤 때까지
+사이트가 닫혀 있다. `deploy/caddy-restart.conf` 를 `/etc/systemd/system/caddy.service.d/restart.conf`
+로 복사하고 `sudo systemctl daemon-reload` 한다. 죽은 뒤 5초 만에 다시 뜬다.
+(파이썬 쪽 `jungle-wash` 는 서비스 파일에 이미 `Restart=always` 가 있다.)
+
 **도메인(DuckDNS).** 서버에는 DuckDNS 주소를 자동으로 갱신하는 것이 없다. 공인 IP 가 바뀌면
 (인스턴스를 새로 만들면 바뀐다) duckdns.org 에서 직접 갱신한다. DuckDNS 는 하위 이름도
 같은 IP 로 풀어 준다 (`아무이름.example.duckdns.org`).
