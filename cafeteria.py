@@ -161,6 +161,8 @@ def parse(raw):
                 "text": _text_of(it),
                 "image": img,
                 "at": when,
+                # 처음 올린 시각. 'at' 은 글을 고치면 바뀐다.
+                "postedAt": it.get("published_at") or it.get("created_at") or 0,
                 "link": (it.get("permalink") or "").replace("http://", "https://"),
             })
             continue
@@ -236,12 +238,48 @@ def fmt_when(ms):
     return datetime.fromtimestamp(ms / 1000, KST).strftime("%m월 %d일 %H:%M")
 
 
+# 제목의 "(수)" 같은 요일 표시.
+_TITLE_WEEKDAY = re.compile(r"\(\s*([월화수목금토일])(?:요일)?\s*\)")
+
+
+def date_looks_wrong(item):
+    """제목의 날짜를 잘못 적은 글인지.
+
+    실제로 있었다. 11월 25일(수) 저녁에 "11월 26일 (수) 석식 메뉴" 가 올라왔다.
+    그대로 믿으면 다음 날 오늘의 저녁 사진으로 하루 지난 것이 나간다.
+
+    둘 다 맞아야 틀렸다고 본다.
+      - 제목의 날짜와 요일이 서로 안 맞는다.
+      - 올린 날이 제목의 날짜와 다르다. (같으면 요일 쪽을 잘못 적은 것이다)
+    제목에 요일이 없거나 올린 시각을 모르면 제목을 믿는다.
+    """
+    m = _TITLE_WEEKDAY.search(item.get("title") or "")
+    posted = item.get("postedAt") or item.get("at")
+    if not m or not isinstance(posted, (int, float)) or posted <= 0:
+        return False
+    up = datetime.fromtimestamp(posted / 1000, KST).date()
+    month, day = item["month"], item["day"]
+    # 제목에는 연도가 없다. 연말연시에는 올린 해의 앞뒤일 수 있다.
+    year = up.year + (1 if month == 1 and up.month == 12 else
+                      -1 if month == 12 and up.month == 1 else 0)
+    try:
+        titled = datetime(year, month, day).date()
+    except ValueError:
+        return False          # 없는 날짜는 어차피 어느 날과도 안 맞는다
+    return "월화수목금토일"[titled.weekday()] != m.group(1) and titled != up
+
+
 def today_menus(when=None):
-    """오늘 올라온 끼니들. 없으면 빈 목록."""
+    """오늘 올라온 끼니들. 없으면 빈 목록.
+
+    날짜를 잘못 적은 글은 어느 날의 것으로도 치지 않는다.
+    새 글 알림은 이 목록을 안 거치므로 그대로 나간다.
+    """
     data = state() or {}
     now = when or _now_kst()
     return [d for d in (data.get("daily") or [])
-            if d["month"] == now.month and d["day"] == now.day]
+            if d["month"] == now.month and d["day"] == now.day
+            and not date_looks_wrong(d)]
 
 
 def weekly():

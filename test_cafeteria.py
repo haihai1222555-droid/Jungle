@@ -231,8 +231,55 @@ def test_retry_after_failure():
     return out
 
 
+def test_wrong_title_date():
+    """날짜를 잘못 적은 글이 다음 날의 메뉴로 나가면 안 된다.
+
+    11월 25일(수) 저녁에 "11월 26일 (수) 석식 메뉴" 가 실제로 올라왔다.
+    """
+    from datetime import datetime
+    out = []
+
+    def post(i, title, y, mo, d, h=17):
+        ms = int(datetime(y, mo, d, h, tzinfo=cf.KST).timestamp() * 1000)
+        return {"id": i, "title": title, "published_at": ms, "pinned": False,
+                "media": [{"type": "image", "url": "https://x/%s.jpg" % i}]}
+
+    def shown(items, mo, d, y=2026):
+        saved = cf.state
+        try:
+            data = cf.parse({"items": items})
+            cf.state = lambda: data
+            return sorted(x["id"] for x in cf.today_menus(datetime(y, mo, d, 18, tzinfo=cf.KST)))
+        finally:
+            cf.state = saved
+
+    typo = post("typo", "11월 26일 (수) 석식 메뉴", 2026, 11, 25)
+    real = post("real", "11월 26일 (목) 석식 메뉴", 2026, 11, 26)
+    cases = [
+        ("오타 글은 다음 날 메뉴가 아니다", shown([typo], 11, 26), []),
+        ("진짜 글만 남는다", shown([real, typo], 11, 26), ["real"]),
+        ("요일만 틀리고 당일에 올렸으면 보여준다",
+         shown([post("a", "11월 26일 (수) 석식 메뉴", 2026, 11, 26)], 11, 26), ["a"]),
+        ("미리 올린 글은 보여준다",
+         shown([post("b", "11월 26일 (목) 중식 메뉴", 2026, 11, 25)], 11, 26), ["b"]),
+        ("요일이 없으면 제목을 믿는다",
+         shown([post("c", "11월 26일 중식 메뉴", 2026, 11, 25)], 11, 26), ["c"]),
+        ("연말에 미리 올린 새해 글",
+         shown([post("d", "1월 2일(토) 중식 메뉴", 2026, 12, 31)], 1, 2, 2027), ["d"]),
+    ]
+    for name, got, want in cases:
+        if got != want:
+            out.append("%s: %r (%r 여야 함)" % (name, got, want))
+    # 새 글 알림은 그대로 나가야 한다
+    if [x["id"] for x in cf.parse({"items": [typo]})["daily"]] != ["typo"]:
+        out.append("알림용 목록에서는 빠지면 안 된다")
+    return out
+
+
 def main():
     bad = []
+    for msg in test_wrong_title_date():
+        bad.append((msg, "-", "-", "-"))
     for title, pinned, want in CASES:
         got = cf.classify(title, pinned)
         if got != want:
