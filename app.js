@@ -1058,7 +1058,10 @@ const NODATA_GRACE_MS = 3 * 60 * 1000;
 // 건조기가 몇 번째 사이클인지. 기기가 안 알려줘서 서버가 센 값을 쓴다.
 function careDryerCount(towerId) {
   const v = careData.dryer[String(towerId) + '호기'];
-  return v && typeof v.count === 'number' ? v.count : undefined;
+  if (!v) return undefined;
+  // seq 는 통살균 초기화로 줄지 않는 번호다. 알림이 내 사이클을 셀 때 쓴다.
+  if (typeof v.seq === 'number') return v.seq;
+  return typeof v.count === 'number' ? v.count : undefined;
 }
 
 // 등록할 때의 사이클에서 몇 번이나 지났는지.
@@ -2034,7 +2037,7 @@ function fmtCareDay(ts) {
 //
 // 세탁기와 같은 잣대(getLgCareStatus)로 같은 모양을 만든다. 통살균을 하면
 // 횟수가 0 으로 되돌아가는 것도 같다 — 세탁기는 기기가 되돌리고, 건조기는
-// 185분 넘는 코스를 통살균으로 보고 서버가 되돌린다.
+// 통살균한 사람이 상세 창에서 눌러 되돌린다.
 //
 // 다른 것은 숫자의 출처 하나다. 세탁기 숫자는 기기가 준 누적값이고
 // 건조기 숫자는 우리가 상태 변화를 보고 센 값이다. 기기 총 누적이 아니다.
@@ -2053,6 +2056,116 @@ function renderDryerCareRow(label) {
       <div class="care-progress-track">
         <div class="care-progress-fill ${care.badgeClass}" style="width: ${care.percent}%"></div>
       </div>`;
+}
+
+// ── 건조기 통살균 초기화 (상세 창) ───────────────────────────
+// 잘못 누르지 않게 두 번 묻는다. 누른 뒤 10분 안에는 되돌릴 수 있다.
+let dryerResetStep = 'idle';          // 'idle' | 'confirm' | 'busy'
+const dryerResetUndo = {};            // 호기 번호 -> { token, until }
+const DRYER_CONFIRM_DELAY_MS = 800;   // 두 번 톡톡 눌러 바로 넘어가는 것을 막는다
+
+function renderDryerResetBox(towerId, label) {
+  const dry = careData.dryer[careKeyOf(label)] || {};
+  const count = typeof dry.count === 'number' ? dry.count : 0;
+  const day = fmtCareDay(dry.cleanedAt);
+  const care = getLgCareStatus(count);
+  const undo = dryerResetUndo[towerId];
+  const canUndo = !!undo && Date.now() < undo.until;
+  const busy = dryerResetStep === 'busy';
+
+  let actions;
+  if (!careData.loaded) {
+    actions = '<p class="modal-care-desc">관리 기록을 불러오지 못했어요. 잠시 후 다시 열어 주세요.</p>';
+  } else if (dryerResetStep !== 'idle') {
+    actions = `
+      <div class="dryer-reset-ask" role="alert">
+        <b>${label} 건조기</b>의 횟수를 <b>${count}회 → 0회</b>로 초기화할까요?<br>
+        <b>통살균 코스가 끝난 뒤에만</b> 눌러 주세요.
+      </div>
+      <div class="dryer-reset-actions">
+        <button type="button" class="btn-modal-close-bottom" data-dryer-act="cancel" ${busy ? 'disabled' : ''}>취소</button>
+        <button type="button" class="btn-modal-close-bottom dryer-reset-yes" data-dryer-act="yes" disabled>${busy ? '처리 중…' : '네, 초기화할게요'}</button>
+      </div>`;
+  } else if (canUndo) {
+    actions = `
+      <p class="modal-care-subtip">초기화했어요. 잘못 눌렀다면 10분 안에 되돌릴 수 있어요.</p>
+      <div class="dryer-reset-actions">
+        <button type="button" class="btn-modal-close-bottom" data-dryer-act="undo">되돌리기</button>
+      </div>`;
+  } else {
+    actions = `
+      <div class="dryer-reset-actions">
+        <button type="button" class="btn-modal-close-bottom" data-dryer-act="ask">통살균 했어요 (횟수 초기화)</button>
+      </div>`;
+  }
+
+  return `
+      <div class="modal-section-header">
+        <strong class="modal-care-title">건조기 통살균 케어</strong>
+        <span class="care-badge ${care.badgeClass}">${care.icon} ${care.label}</span>
+      </div>
+      <p class="modal-care-desc">통살균 이후 ${count}회 가동${day ? ` · 마지막 통살균 ${day}` : ''}</p>
+      ${actions}`;
+}
+
+function paintDryerResetBox() {
+  const box = document.getElementById('modalDryerReset');
+  if (!box || !currentModalTower) return;
+  box.innerHTML = renderDryerResetBox(currentModalTower.id, currentModalTower.label);
+  const yes = box.querySelector('[data-dryer-act="yes"]');
+  if (yes && dryerResetStep === 'confirm') {
+    setTimeout(() => { yes.disabled = false; }, DRYER_CONFIRM_DELAY_MS);
+  }
+}
+
+async function sendDryerCare(path, body) {
+  let r;
+  try {
+    r = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } catch (e) {
+    throw new Error('연결에 실패했어요. 잠시 후 다시 시도해 주세요.');
+  }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data.ok) throw new Error(data.error || '처리하지 못했어요. 잠시 후 다시 시도해 주세요.');
+  return data;
+}
+
+async function onDryerResetClick(e) {
+  const btn = e.target.closest('[data-dryer-act]');
+  if (!btn || btn.disabled || !currentModalTower) return;
+  const act = btn.dataset.dryerAct;
+  const { id, label } = currentModalTower;
+
+  if (act === 'ask' || act === 'cancel') {
+    dryerResetStep = act === 'ask' ? 'confirm' : 'idle';
+    paintDryerResetBox();
+    return;
+  }
+  try {
+    if (act === 'yes') {
+      dryerResetStep = 'busy';
+      paintDryerResetBox();
+      const d = await sendDryerCare('/api/care/dryer-reset', { tower: id });
+      dryerResetUndo[id] = { token: d.token, until: Date.now() + d.undoSec * 1000 };
+      showToast('🧼', `<b>[${label} 건조기]</b> 통살균 횟수를 초기화했어요.`, 'success');
+    } else if (act === 'undo') {
+      btn.disabled = true;
+      const undo = dryerResetUndo[id] || {};
+      await sendDryerCare('/api/care/dryer-undo', { tower: id, token: undo.token });
+      delete dryerResetUndo[id];
+      showToast('↩️', `<b>[${label} 건조기]</b> 초기화를 되돌렸어요.`, 'neutral');
+    }
+  } catch (err) {
+    showToast('⚠️', err.message, 'warning');
+  }
+  await loadCareData();
+  dryerResetStep = 'idle';
+  renderAllViews();
+  paintDryerResetBox();
 }
 
 // 휴대폰인지. 폭으로만 판단한다 (기기 종류를 캐면 틀리기 쉽다).
@@ -2673,6 +2786,9 @@ function openTowerModal(tower, data, wFluc, dFluc) {
       </div>
     </div>
 
+    <!-- 🧼 건조기 통살균: 기기가 횟수를 안 알려줘서 사람이 초기화한다 -->
+    <div class="modal-section-card modal-care-card" id="modalDryerReset"></div>
+
     <!-- LG 워시타워 맞춤 에러 1분 해결 가이드 -->
     ${diag ? `
       <div class="modal-section-card modal-error-card">
@@ -2694,6 +2810,8 @@ function openTowerModal(tower, data, wFluc, dFluc) {
     ` : ''}
   `;
 
+  dryerResetStep = 'idle';
+  paintDryerResetBox();
   modal.classList.add('open');
 }
 
@@ -3839,6 +3957,9 @@ if (btnVoiceMic) {
     };
   }
 }
+
+const modalBody = document.getElementById('mBodyContent');
+if (modalBody) modalBody.addEventListener('click', onDryerResetClick);
 
 const modalCloseBtn = document.getElementById('modalClose');
 const btnModalCloseBottom = document.getElementById('btnModalCloseBottom');

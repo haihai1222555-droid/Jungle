@@ -444,26 +444,71 @@ def test_dryer_care():
     ds = [d["total"] for d in dryer_care.durations("5호기")]
     check("코스 길이를 남겼나", ds, [32, 178, 180])
 
-    # 188분(실제 관측된 스팀통살균) 등 문턱을 넘는 코스는 통살균으로 보고, 세탁기처럼 0 으로 되돌린다.
-    over = dryer_care.TUB_CLEAN_MINUTES
-    check("통살균 문턱 185분", over, 185)
+    # 길이로 통살균을 알아맞히지 않는다. 아무리 길어도 한 번으로 센다.
     run("DRYING", 188)
-    check("긴 코스는 통살균으로", run("END"), "clean")
-    check("통살균이면 0 으로", dryer_care.counts()["5호기"]["count"], 0)
-    check("한 날짜를 남겼나(자동)",
-          bool(dryer_care.counts()["5호기"]["cleanedAt"]), True)
-
-    # 통살균을 했다고 사람이 알려줘도 0 으로 되돌린다.
-    # (짐작이 빗나가 서버가 못 알아봤을 때 쓴다)
-    dryer_care._DATA = {"units": {"5호기": {"count": 12, "runs": []}}}
-    dryer_care.save = lambda: None          # 저장은 건너뛴다
-    dryer_care.mark_cleaned("5호기")
-    check("통살균 뒤 0 으로", dryer_care.counts()["5호기"]["count"], 0)
-    check("한 날짜를 남겼나",
-          bool(dryer_care.counts()["5호기"]["cleanedAt"]), True)
+    check("긴 코스도 그냥 한 번", run("END"), "run")
+    check("스스로 0 이 되지 않는다", dryer_care.counts()["5호기"]["count"], 4)
+    check("스스로 날짜를 적지 않는다", dryer_care.counts()["5호기"]["cleanedAt"] if "cleanedAt" in dryer_care.counts()["5호기"] else None, None)
 
     dryer_care._DATA = None
     dryer_care._PREV.clear()
+
+
+# =========================================================
+# 7-2. 통살균은 사람이 누른다. 잘못 누르면 되돌릴 수 있다
+# =========================================================
+def test_dryer_manual_reset():
+    import dryer_care as dc
+    import start_server as S
+
+    keep = (dc.state_store.state_save, dc._DATA)
+    dc.state_store.state_save = lambda *a, **k: None
+    try:
+        dc._DATA = {"units": {"5호기": {"count": 32, "runs": [], "since": 100.0,
+                                        "cleanedAt": 200.0}}}
+        dc._PREV.clear()
+        t = 1_800_000_000.0
+        one = lambda: dc.counts()["5호기"]
+
+        check("처음엔 번호가 횟수와 같다(걸린 알림이 그대로)", one()["seq"], 32)
+        r = dc.manual_reset("5호기", t)
+        check("초기화된다", (r["ok"], r["prevCount"], one()["count"]), (True, 32, 0))
+        check("마지막 통살균 날짜를 남긴다", one()["cleanedAt"], round(t, 3))
+        check("알림용 번호는 줄지 않는다", one()["seq"], 32)
+        check("되돌리기 열쇠를 밖에 내보내지 않는다",
+              "undo" in one() or r["token"] in str(dc.counts()), False)
+
+        again = dc.manual_reset("5호기", t + 60)
+        check("바로 또 누르면 거절", (again["ok"], again["reason"]), (False, "cooldown"))
+
+        # 초기화 뒤 한 번 돌았다
+        dc.observe("5호기", {"timer": {}}, "RUNNING", t + 100)
+        dc.observe("5호기", {"timer": {}}, "END", t + 200)
+        check("그 뒤 가동은 1회, 번호는 이어진다", (one()["count"], one()["seq"]), (1, 33))
+
+        for bad in (None, "", "x" + r["token"], 123, "한글"):
+            check("틀린 열쇠(%r)는 거절" % (bad,), dc.undo_reset("5호기", bad, t + 300)["ok"], False)
+        u = dc.undo_reset("5호기", r["token"], t + 300)
+        check("되돌리면 그 사이 돈 것까지 더한다", (u["ok"], one()["count"], one()["seq"]), (True, 33, 33))
+        check("날짜도 되돌린다", one()["cleanedAt"], 200.0)
+        check("두 번 되돌리지 못한다", dc.undo_reset("5호기", r["token"], t + 301)["ok"], False)
+
+        r2 = dc.manual_reset("5호기", t + 400)
+        check("되돌렸으면 다시 누를 수 있다", r2["ok"], True)
+        check("시간이 지나면 못 되돌린다",
+              dc.undo_reset("5호기", r2["token"], t + 400 + dc.UNDO_SEC + 1)["ok"], False)
+        check("대기 시간이 지나면 다시 누를 수 있다",
+              dc.manual_reset("5호기", t + 400 + dc.RESET_COOLDOWN_SEC + 1)["ok"], True)
+
+        # 걸어 둔 알림: 도는 중에 누가 초기화해도 내 사이클로 남아야 한다
+        dc._DATA = {"units": {"3호기": {"count": 20, "runs": []}}}
+        alarm = {"dryerCountAtRegister": 20}
+        dc.manual_reset("3호기", t)
+        check("초기화해도 내 사이클",
+              S.alarm_cycle_delta(alarm, {}, 3, "dryer", dc.counts()), 0)
+    finally:
+        dc.state_store.state_save, dc._DATA = keep
+        dc._PREV.clear()
 
 
 # =========================================================
@@ -1215,96 +1260,50 @@ def test_menu_push_channels():
 # 건조기 통살균: 중간에 끊겨도 반영되고, 거짓 초기화는 막는다
 # =========================================================
 def test_dryer_care_interrupted():
-    """끝나기 전에 값이 끊기거나 정지·오류를 거친 가동이 사라지던 것을 막았는지.
-
-    제보가 세 번(10/6, 10/17, 11/5 8호기) 있었다. 예전 observe 는 끝나는 순간
-    바로 직전 관측이 '돌고 있음' 일 때만 셌다. 3호기는 배수 호스 문제로 시간이
-    213~533분까지 부풀어 통살균이 아닌데 횟수가 15번 넘게 0 으로 돌아갔다.
-    약점만 고치면 오류를 거친 가동이 다 세어져 그것이 더 늘어나므로 함께 막는다.
-    """
+    """끝나기 전에 값이 끊기거나 정지·오류를 거친 가동도 한 번으로 세는지."""
     import dryer_care as dc
 
-    keep = (dc.state_store.state_save, dc.state_store.state_load,
-            dc.AUTO_CLEAN_OFF, dc._DATA)
+    keep = (dc.state_store.state_save, dc.state_store.state_load, dc._DATA)
     dc.state_store.state_save = lambda *a, **k: None
     dc.state_store.state_load = lambda *a, **k: {}
 
-    def go(seq, total=200, tower="8호기", start=12, gap=300, totals=None):
-        dc._DATA = {"units": {tower: {"count": start, "runs": []}}}
-        dc._PREV.clear()
-        t = 1_800_000_000.0
-        last = None
-        for i, st in enumerate(seq):
-            tt = totals[i] if totals else total
-            unit = {"timer": {"totalHour": tt // 60, "totalMinute": tt % 60}}
-            r = dc.observe(tower, unit, st, t)
-            if r:
-                last = r
-            t += gap
-        u = dc._DATA["units"][tower]
-        return last, u.get("count"), bool(u.get("cleanedAt")), u.get("runs")
-
-    try:
-        dc.AUTO_CLEAN_OFF = set()
-
-        r, c, cl, _ = go(["RUNNING", "RUNNING", "END"])
-        check("바로 끝난 통살균은 반영", (r, c, cl), ("clean", 0, True))
-
-        # 예전에는 이 넷이 통째로 사라졌다
-        for mid in ("UNKNOWN_RUNNING", "UNKNOWN", "DETECTING", "PAUSE"):
-            r, c, cl, _ = go(["RUNNING", mid, "END"])
-            check("중간에 %s 를 거쳐도 통살균 반영" % mid, (r, c, cl), ("clean", 0, True))
-
-        r, c, cl, runs = go(["RUNNING", "UNKNOWN_RUNNING", "RUNNING", "END"])
-        check("끊겼다 돌아와도 반영", (r, c, cl), ("clean", 0, True))
-        check("중간에 바뀐 순서를 남긴다", "UNKNOWN_RUNNING" in (runs[-1].get("path") or ""), True)
-
-        # 보통 가동도 중간에 끊겼다고 사라지지 않는다 (횟수 +1)
-        r, c, cl, _ = go(["RUNNING", "UNKNOWN", "END"], total=100)
-        check("끊긴 보통 가동도 센다", (r, c, cl), ("run", 13, False))
-
-        # 오류를 거친 가동: 횟수는 세되 통살균으로 보지 않는다
-        r, c, cl, runs = go(["RUNNING", "ERROR", "POWER_OFF"])
-        check("오류를 거친 가동은 초기화하지 않는다", (r, c, cl), ("run", 13, False))
-        check("그 사실을 기록에 남긴다", bool(runs[-1].get("noClean")), True)
-
-        # 300분을 넘으면 어떤 코스로도 설명이 안 된다 (3호기 493·508·533분)
-        for tot in (493, 508, 533):
-            r, c, cl, _ = go(["RUNNING", "RUNNING", "END"], total=tot)
-            check("%d분은 통살균으로 보지 않는다" % tot, (r, c, cl), ("run", 13, False))
-        r, c, cl, _ = go(["RUNNING", "RUNNING", "END"], total=248)
-        check("관측된 통살균(248분)은 여전히 반영", (r, c, cl), ("clean", 0, True))
-
-        # 자동 인식을 끈 호기 (호스를 고칠 때까지 3호기)
-        dc.AUTO_CLEAN_OFF = {3}
-        r, c, cl, _ = go(["RUNNING", "RUNNING", "END"], tower="3호기")
-        check("꺼 둔 호기는 횟수만 센다", (r, c, cl), ("run", 13, False))
-        r, c, cl, _ = go(["RUNNING", "RUNNING", "END"], tower="8호기")
-        check("다른 호기는 그대로 반영", (r, c, cl), ("clean", 0, True))
-        dc.AUTO_CLEAN_OFF = set()
-
-        # 돌던 게 없는데 끝 상태만 보이면 아무것도 안 센다
-        r, c, cl, _ = go(["END", "END", "POWER_OFF"])
-        check("돌던 게 없으면 안 센다", (r, c, cl), (None, 12, False))
-
-        # 지난 가동의 시간이 다음 가동으로 새면 안 된다
+    def go(seq, gap=300):
         dc._DATA = {"units": {"8호기": {"count": 12, "runs": []}}}
         dc._PREV.clear()
         t = 1_800_000_000.0
-        long_unit = {"timer": {"totalHour": 3, "totalMinute": 20}}     # 200분
-        none_unit = {"timer": {"totalHour": 0, "totalMinute": 0}}
-        dc.observe("8호기", long_unit, "RUNNING", t)
-        dc.observe("8호기", none_unit, "END", t + 300)                    # 통살균 반영
-        dc.observe("8호기", none_unit, "RUNNING", t + 600)                # 다음 가동은 시간을 모른다
-        r = dc.observe("8호기", none_unit, "END", t + 900)
-        check("지난 가동의 시간이 새지 않는다", (r, dc._DATA["units"]["8호기"]["count"]), ("run", 1))
+        last = None
+        for st in seq:
+            r = dc.observe("8호기", {"timer": {"totalHour": 2, "totalMinute": 35}}, st, t)
+            last = r or last
+            t += gap
+        u = dc._DATA["units"]["8호기"]
+        return last, u.get("count"), u.get("runs")
 
-        # 오래 돌지도 끝나지도 않으면 잊는다 (그 사이 다른 사람이 쓴 것일 수 있다)
-        r, c, cl, _ = go(["RUNNING", "UNKNOWN", "UNKNOWN", "END"], gap=dc.BREAK_EXPIRE_SEC + 60)
-        check("너무 오래 끊겼으면 돌던 가동을 잊는다", (r, c, cl), (None, 12, False))
+    try:
+        for mid in ("UNKNOWN_RUNNING", "UNKNOWN", "DETECTING", "PAUSE", "ERROR"):
+            r, c, runs = go(["RUNNING", mid, "END"])
+            check("중간에 %s 를 거쳐도 센다" % mid, (r, c), ("run", 13))
+            check("%s 순서를 남긴다" % mid, mid in (runs[-1].get("path") or ""), True)
+
+        r, c, runs = go(["RUNNING", "RUNNING", "END"])
+        check("길이를 남긴다", runs[-1]["total"], 155)
+
+        r, c, _ = go(["END", "END", "POWER_OFF"])
+        check("돌던 게 없으면 안 센다", (r, c), (None, 12))
+
+        r, c, _ = go(["RUNNING", "UNKNOWN", "UNKNOWN", "END"], gap=dc.BREAK_EXPIRE_SEC + 60)
+        check("너무 오래 끊겼으면 돌던 가동을 잊는다", (r, c), (None, 12))
+        # 지난 가동의 시간이 다음 가동으로 새면 안 된다
+        dc._DATA = {"units": {"8호기": {"count": 0, "runs": []}}}
+        dc._PREV.clear()
+        t = 1_800_000_000.0
+        timed = {"timer": {"totalHour": 3, "totalMinute": 20}}
+        for i, (unit, st) in enumerate(((timed, "RUNNING"), ({}, "END"), ({}, "RUNNING"), ({}, "END"))):
+            dc.observe("8호기", unit, st, t + i * 300)
+        got = [x["total"] for x in dc._DATA["units"]["8호기"]["runs"]]
+        check("지난 가동의 시간이 새지 않는다", got, [200, 0])
     finally:
-        (dc.state_store.state_save, dc.state_store.state_load,
-         dc.AUTO_CLEAN_OFF, dc._DATA) = keep
+        dc.state_store.state_save, dc.state_store.state_load, dc._DATA = keep
         dc._PREV.clear()
 
 
@@ -1319,7 +1318,8 @@ def main():
              test_gemini_tries_next_key, test_parse_device_info,
              test_worker_keeps_concurrent_changes, test_bot_alarm_stays_on_my_cycle,
              test_waiting_pickup, test_menu_push_channels,
-             test_dryer_care_interrupted]
+             test_dryer_care_interrupted,
+             test_dryer_manual_reset]
     for t in tests:
         try:
             t()

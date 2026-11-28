@@ -194,7 +194,9 @@ def alarm_cycle_delta(alarm, unit_data, tower_id, unit_type, care_counts):
         now_count = (unit_data.get('cycle') or {}).get('cycleCount')
     else:
         at = alarm.get('dryerCountAtRegister')
-        now_count = (care_counts.get('%s호기' % tower_id) or {}).get('count')
+        unit = care_counts.get('%s호기' % tower_id) or {}
+        # seq 는 통살균 초기화로 줄지 않는 번호다
+        now_count = unit.get('seq', unit.get('count'))
 
     if not isinstance(at, int) or not isinstance(now_count, int):
         return None
@@ -1629,6 +1631,37 @@ class RobustHandler(http.server.SimpleHTTPRequestHandler):
             # 여기 적으면 처리방침에 적은 보관 기간(최근 300건)을 넘어 계속 남는다.
             print(f"[제보] 웹에서 접수 #{item['id']} ({item['kind']})")
             self._json_out(200, {"ok": True, "id": item['id']})
+            return
+
+        # ── 건조기 통살균 초기화 / 되돌리기 ──
+        # 기기가 건조기 횟수를 안 알려줘서 우리가 센다. 통살균한 사람이 직접 누른다.
+        if _p in ('/api/care/dryer-reset', '/api/care/dryer-undo'):
+            data = self._read_json(limit=500)
+            tower = data.get('tower') if isinstance(data, dict) else None
+            if type(tower) is not int or not 1 <= tower <= 9:
+                self._json_out(400, {"ok": False, "error": "형식이 올바르지 않습니다."})
+                return
+            label = "%d호기" % tower
+            # 누가 눌렀는지(IP)는 적지 않는다. 로그 파일은 지우는 때가 없다.
+            if _p == '/api/care/dryer-reset':
+                res = dryer_care.manual_reset(label)
+                if res["ok"]:
+                    print("[관리] %s 건조기 통살균 횟수를 사이트에서 초기화했습니다 (%d회 -> 0)"
+                          % (label, res["prevCount"]))
+                    self._json_out(200, res)
+                else:
+                    hours = res["waitSec"] // 3600
+                    left = "%d시간" % hours if hours else "%d분" % max(1, res["waitSec"] // 60)
+                    res["error"] = "이 건조기는 최근에 초기화했어요. 약 %s 뒤에 다시 누를 수 있어요." % left
+                    self._json_out(429, res)
+                return
+            res = dryer_care.undo_reset(label, data.get('token'))
+            if res["ok"]:
+                print("[관리] %s 건조기 통살균 초기화를 되돌렸습니다 (%d회)" % (label, res["count"]))
+                self._json_out(200, res)
+            else:
+                res["error"] = "되돌릴 수 있는 시간이 지났어요."
+                self._json_out(409, res)
             return
 
         req_path = _p

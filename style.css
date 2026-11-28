@@ -2532,6 +2532,17 @@ body.light-theme .unit-error-chip {
   margin-top: 6px;
 }
 
+/* 건조기 통살균 초기화. 단추 모양은 아래쪽 닫기 단추와 같다. */
+.dryer-reset-actions { display: flex; gap: 8px; margin-top: 10px; }
+.dryer-reset-ask {
+  margin-top: 10px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-main);
+}
+.dryer-reset-yes { border-color: rgba(245, 158, 11, 0.6); color: #f59e0b; }
+.btn-modal-close-bottom:disabled { opacity: 0.5; cursor: default; }
+
 .modal-error-card {
   background: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.35);

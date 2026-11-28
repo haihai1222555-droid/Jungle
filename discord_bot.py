@@ -942,7 +942,9 @@ def cycle_now(status_data, tower_id, unit_type):
              .get("cycle") or {}).get("cycleCount")
     else:
         try:
-            v = (dryer_care.counts().get(f"{tower_id}호기") or {}).get("count")
+            unit = dryer_care.counts().get(f"{tower_id}호기") or {}
+            # seq 는 통살균 초기화로 줄지 않는 번호다
+            v = unit.get("seq", unit.get("count"))
         except Exception:
             v = None
     return v if isinstance(v, int) else None
